@@ -104,18 +104,27 @@ func (m Model) handleConnectDone(msg connectDoneMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce bool, extra string, cr ConnectResult) (tea.Model, tea.Cmd) {
-	status := cr.Status
+	// warn holds messages that are not about how the session ended, so they
+	// stay on the status line even when the retry overlay is shown.
+	warn := ""
 	join := func(s string) {
 		if s == "" {
 			return
 		}
-		if status != "" {
-			status += "; "
+		if warn != "" {
+			warn += "; "
 		}
-		status += s
+		warn += s
 	}
 	join(cr.Warning)
 	join(extra)
+	status := cr.Status
+	if warn != "" {
+		if status != "" {
+			status += "; "
+		}
+		status += warn
+	}
 	switch cr.Class {
 	case rdp.ClassStartError, rdp.ClassShortSession:
 		if keepUseOnce {
@@ -129,9 +138,9 @@ func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce b
 		}
 		held, _ := cred.(secret.Password)
 		hp := held
-		m.retry = retryState{profile: p, held: &hp, useOnce: keepUseOnce, status: status, class: cr.Class}
+		m.retry = retryState{profile: p, held: &hp, useOnce: keepUseOnce, status: cr.Status, class: cr.Class}
 		m.view = viewRetry
-		m.setStatus(status, cr.IsError)
+		m.setStatus(warn, false)
 	default:
 		m.retry = retryState{}
 		m.view = viewList

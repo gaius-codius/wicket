@@ -204,3 +204,105 @@ func TestList_FilterNoMatches(t *testing.T) {
 		}
 	}
 }
+
+// F-02: a detail-heavy selection must not push the footer or frame off a
+// short terminal.
+func TestList_ShortTerminalKeepsFrameAndFooter(t *testing.T) {
+	body := `[general]
+[[profiles]]
+name = "alpha"
+host = "alpha.invalid"
+user = "alice"
+domain = "LAB"
+size = "1920x1080"
+scale = 100
+[[profiles]]
+name = "bravo"
+host = "b"
+user = "u"
+scale = 100
+`
+	for _, h0 := range []int{8, 9, 10, 12, 16} {
+		h := newHarness(t, body, panicStore{})
+		nm, _ := h.m.Update(teaWin(80, h0))
+		h.m = nm.(Model)
+		out := screen(h.m)
+		lines := strings.Split(out, "\n")
+		if len(lines) > h0 {
+			t.Fatalf("height %d: %d lines:\n%s", h0, len(lines), out)
+		}
+		if !strings.Contains(out, "q quit") || !strings.Contains(out, "╰") {
+			t.Fatalf("height %d: footer or bottom border missing:\n%s", h0, out)
+		}
+		if !strings.Contains(out, "alpha") {
+			t.Fatalf("height %d: selection missing:\n%s", h0, out)
+		}
+	}
+}
+
+// F-03: ? is password text while the field has focus, so the footer must not
+// advertise it there.
+func TestModal_FooterMatchesFocus(t *testing.T) {
+	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	_ = withFakeRDP(t)
+	h.m = press(h.m, "enter")
+	if out := screen(h.m); strings.Contains(out, "? help") {
+		t.Fatalf("focused modal should not advertise ? help:\n%s", out)
+	}
+	h.m = press(h.m, "?")
+	if h.m.view != viewModal || h.m.modal.input != "?" {
+		t.Fatal("? should type into the focused password field")
+	}
+	h.m = press(h.m, "tab")
+	if out := screen(h.m); !strings.Contains(out, "? help") {
+		t.Fatalf("unfocused modal should advertise ? help:\n%s", out)
+	}
+	h.m = press(h.m, "?")
+	if h.m.view != viewHelp {
+		t.Fatal("? should open help once the field is unfocused")
+	}
+}
+
+// F-04: an input error clears once that field is edited successfully.
+func TestForm_PasteErrorClearsOnNextEdit(t *testing.T) {
+	h := newHarness(t, "", nil)
+	h.m = press(h.m, "n")
+	h.m = paste(h.m, "one\ntwo")
+	if h.m.form.err == "" {
+		t.Fatal("want paste error")
+	}
+	h.m = typeInto(h.m, "ok")
+	if h.m.form.err != "" {
+		t.Fatalf("error should clear after a valid edit: %q", h.m.form.err)
+	}
+}
+
+// F-05: the retry overlay carries the session message; the status line must
+// not repeat it, but it still shows warnings.
+func TestRetry_MessageNotDuplicated(t *testing.T) {
+	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	_ = withFakeRDP(t)
+	h.m = press(h.m, "enter")
+	h.m = typeInto(h.m, "pw")
+	h.m = press(h.m, "enter")
+	if h.m.view != viewRetry {
+		t.Fatalf("want retry, got %v", h.m.view)
+	}
+	out := screen(h.m)
+	if n := strings.Count(out, "session ended quickly"); n != 1 {
+		t.Fatalf("message appears %d times:\n%s", n, out)
+	}
+}
+
+// F-06: starting a connection from the modal must not draw a half-cleared
+// dialog.
+func TestModal_LeavesDialogBeforeConnecting(t *testing.T) {
+	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	_ = withFakeRDP(t)
+	h.m = press(h.m, "enter")
+	h.m = typeInto(h.m, "pw")
+	h.m = press(h.m, "enter")
+	if out := screen(h.m); strings.Contains(out, "No stored password for .") {
+		t.Fatalf("empty modal drawn while connecting:\n%s", out)
+	}
+}

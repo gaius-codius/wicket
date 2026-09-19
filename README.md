@@ -33,6 +33,13 @@ wicket --help
 
 Passwords are never stored in TOML. They live in libsecret (Secret Service / `org.freedesktop.secrets`).
 
+You can hand-edit `config.toml`. Wicket keeps any keys and tables it does not
+know about, so settings for other tools survive. **Comments and formatting do
+not survive a save from the TUI**: saving rewrites the file from the parsed
+values. Keep comments you care about somewhere else, or edit the file by hand
+only. Keys named `password`, `pass`, `secret`, or `passwd` are stripped on save
+and reported, so a password never gets written back to disk.
+
 ## Theme
 
 At start, Wicket reads `$HOME/.local/state/omarchy/current/theme/colors.toml` and maps Omarchy tokens onto its chrome. A missing or broken theme file falls back per role and does not block the TUI.
@@ -42,9 +49,17 @@ At start, Wicket reads `$HOME/.local/state/omarchy/current/theme/colors.toml` an
 | Key | Action |
 |-----|--------|
 | `j` / `k`, arrows | Move |
+| `g` / `G`, Home / End | First / last |
+| PgUp / PgDn | Page |
+| `/` | Filter by name or host (Esc clears) |
 | `Enter` | Connect |
 | `n` | New profile |
 | `e` | Edit selected |
 | `D` | Delete selected |
-| `?` | Help |
-| `q` | Quit |
+| `?` | Help for the current view |
+| `q`, Ctrl+C | Quit |
+
+In the form, ↑/↓ or Tab move between fields, text fields take the usual
+cursor keys (←/→, Home/End, Ctrl+W, Ctrl+U), Ctrl+S saves, and Esc cancels
+(asking first if you changed anything). Paste with your terminal's paste
+shortcut; Ctrl+V is not bound.

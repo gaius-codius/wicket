@@ -276,7 +276,12 @@ func (m Model) chrome() (string, []hint) {
 	case viewDelete:
 		return "delete connection", []hint{{"y", "confirm"}, {"n", "cancel"}, {"?", "help"}}
 	case viewModal:
-		return "password", []hint{{"enter", "connect once"}, {"ctrl+s", "save and connect"}, {"esc", "cancel"}, {"?", "help"}}
+		hs := []hint{{"enter", "connect once"}, {"ctrl+s", "save and connect"}, {"esc", "cancel"}}
+		if m.modal.focused {
+			// ? belongs in the password, so help needs tab first.
+			return "password", append(hs, hint{"tab", "more keys"})
+		}
+		return "password", append(hs, hint{"?", "help"}, hint{"tab", "edit password"})
 	case viewRetry:
 		return m.listContext(), []hint{{"enter", "retry"}, {"n", "new password"}, {"esc", "dismiss"}, {"?", "help"}}
 	default:

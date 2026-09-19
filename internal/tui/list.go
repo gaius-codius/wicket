@@ -86,11 +86,13 @@ func (m Model) viewList(lo layout) string {
 	if lo.Wide {
 		return head + m.viewListWide(lo, ps, vis, sel, hasSel)
 	}
-	selLines := 1
+	// The selected card's details are trimmed to what is left of the budget,
+	// so the footer and frame stay on screen in a short terminal.
+	detailBudget := 0
 	if hasSel && !lo.Compact {
-		selLines += len(m.details(sel, false))
+		detailBudget = min(len(m.details(sel, false)), max(lo.Budget-1, 0))
 	}
-	start, end := listWindow(len(vis), max(slices.Index(vis, m.cursor), 0), lo.Budget, selLines)
+	start, end := listWindow(len(vis), max(slices.Index(vis, m.cursor), 0), lo.Budget, detailBudget+1)
 	nameW, hostW := columnWidths(ps, lo.Inner)
 	var lines []string
 	for _, i := range vis[start:end] {
@@ -98,10 +100,8 @@ func (m Model) viewList(lo layout) string {
 		switch {
 		case i == m.cursor:
 			lines = append(lines, m.row(p, true, nameW, hostW, lo.Inner))
-			if !lo.Compact {
-				for _, d := range m.details(p, false) {
-					lines = append(lines, "    "+m.kv(detailLabelWidth, d.key, truncate(d.label, lo.Inner-6-detailLabelWidth)))
-				}
+			for _, d := range m.details(p, false)[:detailBudget] {
+				lines = append(lines, "    "+m.kv(detailLabelWidth, d.key, truncate(d.label, lo.Inner-6-detailLabelWidth)))
 			}
 		case lo.Compact:
 			// Compact shows only names on unselected rows (UX-001).

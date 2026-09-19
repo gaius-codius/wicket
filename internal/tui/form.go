@@ -171,6 +171,9 @@ func (f *formState) editText(msg tea.Msg) {
 		return
 	}
 	f.inputs[id] = in
+	if f.errField == fieldLabel(id) {
+		f.err, f.errField = "", ""
+	}
 	v := f.textValue(id)
 	before := *v
 	*v = in.Value()

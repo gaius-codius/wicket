@@ -86,6 +86,7 @@ func (m Model) modalConnect(save bool) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.modal = modalState{}
+	m.view = viewList
 	cp := pw
 	m.useOnce = &cp
 	m.useOnceName = p.Name

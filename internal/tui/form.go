@@ -1,10 +1,11 @@
 package tui
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
-	"unicode"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
@@ -35,6 +36,39 @@ type formState struct {
 	forget   bool
 	err      string
 	errField string
+
+	// inputs holds a text input for each text field, indexed by field.
+	inputs [fieldCount]textinput.Model
+	// orig is the profile as opened, for detecting unsaved changes.
+	orig config.Profile
+	// confirmDiscard is set while asking whether to drop unsaved changes.
+	confirmDiscard bool
+}
+
+// textValue returns a pointer to the string a text field edits.
+func (f *formState) textValue(id int) *string {
+	switch id {
+	case fieldName:
+		return &f.p.Name
+	case fieldHost:
+		return &f.p.Host
+	case fieldUser:
+		return &f.p.User
+	case fieldDomain:
+		return &f.p.Domain
+	case fieldClient:
+		return &f.p.Client
+	case fieldSize:
+		return &f.p.Size
+	case fieldPassword:
+		return &f.password
+	}
+	return nil
+}
+
+// dirty reports whether anything differs from the profile as opened.
+func (f formState) dirty() bool {
+	return !reflect.DeepEqual(f.p, f.orig) || f.password != "" || f.forget
 }
 
 func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
@@ -44,7 +78,15 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 	if p.Scale == 0 {
 		p.Scale = config.DefaultScale
 	}
-	m.form = formState{oldName: oldName, p: p}
+	f := formState{oldName: oldName, p: p, orig: p}
+	for id := range fieldCount {
+		if v := f.textValue(id); v != nil {
+			f.inputs[id] = m.newInput(*v, id == fieldPassword)
+		}
+	}
+	f.inputs[fieldSize].Placeholder = "1920x1080, 100%, or empty"
+	f.focus(fieldName)
+	m.form = f
 	m.view = viewForm
 	m.status = ""
 	m.statusErr = false
@@ -60,24 +102,48 @@ func (f formState) textFocused() bool {
 	}
 }
 
-func (m Model) handleFormKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
+func (m Model) handleFormKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 	f := m.form
-	if key == "esc" {
-		return m.cancelForm()
-	}
-	if key == "ctrl+s" {
-		return m.saveForm()
-	}
-	if !f.textFocused() {
+	if f.confirmDiscard {
 		switch key {
-		case "q":
+		case "y", "Y":
 			return m.cancelForm()
+		case "n", "N", "esc":
+			f.confirmDiscard = false
+		}
+		m.form = f
+		return m, nil
+	}
+	switch key {
+	case "esc":
+		if f.dirty() {
+			f.confirmDiscard = true
+			m.form = f
+			return m, nil
+		}
+		return m.cancelForm()
+	case "ctrl+s":
+		return m.saveForm()
+	case "tab":
+		f.focus((f.field + 1) % fieldCount)
+	case "shift+tab":
+		f.focus((f.field + fieldCount - 1) % fieldCount)
+	case "up":
+		f.moveField(-1)
+	case "down":
+		f.moveField(1)
+	default:
+		if f.textFocused() {
+			if key == "enter" {
+				f.focus((f.field + 1) % fieldCount)
+				break
+			}
+			f.editText(msg)
+			break
+		}
+		switch key {
 		case "?":
 			return m.openHelp()
-		case "tab":
-			f.field = (f.field + 1) % fieldCount
-		case "shift+tab":
-			f.field = (f.field + fieldCount - 1) % fieldCount
 		case "enter", "space":
 			m.toggleFormField(&f)
 		case "left", "h":
@@ -89,86 +155,53 @@ func (m Model) handleFormKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cm
 				f.p.Scale = nextScale(f.p.Scale)
 			}
 		}
-		m.form = f
-		return m, nil
-	}
-	switch key {
-	case "tab":
-		f.field = (f.field + 1) % fieldCount
-	case "shift+tab":
-		f.field = (f.field + fieldCount - 1) % fieldCount
-	case "backspace":
-		f.backspace()
-	case "enter":
-		f.field = (f.field + 1) % fieldCount
-	default:
-		if msg.Text != "" && !ctrlHeld(msg) {
-			f.insert(msg.Text)
-		}
 	}
 	m.form = f
 	return m, nil
 }
 
-func ctrlHeld(msg tea.KeyPressMsg) bool {
-	return msg.Mod.Contains(tea.ModCtrl)
-}
-
-func (f *formState) insert(s string) {
-	for _, r := range s {
-		if r == 0 || !unicode.IsPrint(r) {
-			continue
-		}
-		switch f.field {
-		case fieldName:
-			f.p.Name += string(r)
-		case fieldHost:
-			f.p.Host += string(r)
-		case fieldUser:
-			f.p.User += string(r)
-		case fieldDomain:
-			f.p.Domain += string(r)
-		case fieldClient:
-			f.p.Client += string(r)
-		case fieldSize:
-			f.p.Size += string(r)
-		case fieldPassword:
-			wasEmpty := f.password == ""
-			f.password += string(r)
-			if wasEmpty {
-				f.store = true
-			}
-		}
+// editText sends msg to the focused text input and copies the result back.
+// Typing the first password character turns Store on; clearing the password
+// turns it off.
+func (f *formState) editText(msg tea.Msg) {
+	id := f.field
+	in, err := updateInput(f.inputs[id], msg, id == fieldPassword)
+	if err != nil {
+		f.err, f.errField = err.Error(), fieldLabel(id)
+		return
 	}
-}
-
-func (f *formState) backspace() {
-	cut := func(s string) string {
-		if s == "" {
-			return s
-		}
-		rs := []rune(s)
-		return string(rs[:len(rs)-1])
-	}
-	switch f.field {
-	case fieldName:
-		f.p.Name = cut(f.p.Name)
-	case fieldHost:
-		f.p.Host = cut(f.p.Host)
-	case fieldUser:
-		f.p.User = cut(f.p.User)
-	case fieldDomain:
-		f.p.Domain = cut(f.p.Domain)
-	case fieldClient:
-		f.p.Client = cut(f.p.Client)
-	case fieldSize:
-		f.p.Size = cut(f.p.Size)
-	case fieldPassword:
-		f.password = cut(f.password)
-		if f.password == "" {
+	f.inputs[id] = in
+	v := f.textValue(id)
+	before := *v
+	*v = in.Value()
+	if id == fieldPassword {
+		switch {
+		case before == "" && *v != "":
+			f.store = true
+		case before != "" && *v == "":
 			f.store = false
 		}
 	}
+}
+
+// focus moves to field id, moving the text cursor with it.
+func (f *formState) focus(id int) {
+	if f.textValue(f.field) != nil {
+		f.inputs[f.field].Blur()
+	}
+	f.field = id
+	if f.textValue(id) != nil {
+		f.inputs[id].Focus()
+		f.inputs[id].CursorEnd()
+	}
+}
+
+func fieldLabel(id int) string { return formLabels[id] }
+
+// moveField steps focus by delta. Unlike tab, arrows stop at the first and
+// last field instead of wrapping.
+func (f *formState) moveField(delta int) {
+	f.focus(min(max(f.field+delta, 0), fieldCount-1))
 }
 
 func (m *Model) toggleFormField(f *formState) {
@@ -251,6 +284,7 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	m.form.password = ""
 	m.form = formState{}
 	m.view = viewList
+	m.clearFilter()
 	m.selectName(name)
 	if len(warns) > 0 {
 		m.setStatus(strings.Join(warns, "; "), false)
@@ -261,46 +295,66 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) viewForm(lo layout) string {
-	_ = lo
 	f := m.form
 	const labelW = len("dynamic_resolution:")
+	valueW := lo.Inner - 2 - labelW - 2
 	var b strings.Builder
-	row := func(id int, label, value string) {
+	row := func(id int, value string) {
+		label := formLabels[id]
 		mark := "  "
-		labelStyle, valueStyle := m.styles.muted, m.styles.primary
+		labelStyle := m.styles.muted
 		if f.field == id {
 			mark = m.styles.accent.Render("▌ ")
 			labelStyle = m.styles.accent
 		}
-		if f.errField == strings.ToLower(label) && f.err != "" {
-			labelStyle, valueStyle = m.styles.danger, m.styles.danger
+		if f.err != "" && f.errField == strings.ToLower(label) {
+			labelStyle = m.styles.danger
 		}
-		b.WriteString(mark + labelStyle.Render(padRight(label+":", labelW)) + "  " + valueStyle.Render(value) + "\n")
+		if f.textValue(id) != nil {
+			value = inputView(f.inputs[id], valueW)
+		} else {
+			value = m.styles.primary.Render(value)
+		}
+		b.WriteString(mark + labelStyle.Render(padRight(label+":", labelW)) + "  " + value + "\n")
 	}
-	row(fieldName, "name", f.p.Name)
-	row(fieldHost, "host", f.p.Host)
-	row(fieldUser, "user", f.p.User)
-	row(fieldDomain, "domain", f.p.Domain)
-	row(fieldClient, "client", f.p.Client)
-	sizeVal := f.p.Size
-	if f.field == fieldSize && sizeVal == "" {
-		sizeVal = m.styles.muted.Render("1920x1080, 100%, or empty")
-		mark := m.styles.accent.Render("▌ ")
-		b.WriteString(mark + m.styles.accent.Render(padRight("size:", labelW)) + "  " + sizeVal + "\n")
-	} else {
-		row(fieldSize, "size", f.p.Size)
+	for id := range fieldCount {
+		switch id {
+		case fieldFullscreen:
+			row(id, check(f.p.Fullscreen))
+		case fieldDynamic:
+			row(id, check(f.p.DynamicResolution))
+		case fieldScale:
+			row(id, "‹ "+strconv.Itoa(f.p.Scale)+"% ›")
+		case fieldStore:
+			row(id, check(f.store))
+		case fieldForget:
+			row(id, check(f.forget))
+		default:
+			row(id, "")
+		}
 	}
-	row(fieldFullscreen, "fullscreen", check(f.p.Fullscreen))
-	row(fieldDynamic, "dynamic_resolution", check(f.p.DynamicResolution))
-	row(fieldScale, "scale", strconv.Itoa(f.p.Scale))
-	masked := strings.Repeat("•", len([]rune(f.password)))
-	row(fieldPassword, "password", masked)
-	row(fieldStore, "store password", check(f.store))
-	row(fieldForget, "forget password", check(f.forget))
-	if f.err != "" {
+	switch {
+	case f.confirmDiscard:
+		b.WriteString("\n" + m.styles.warning.Render("▲ ") + m.styles.primary.Render("Discard unsaved changes?") + "\n")
+	case f.err != "":
 		b.WriteString("\n" + m.styles.danger.Render("✗ "+f.err) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+var formLabels = [fieldCount]string{
+	fieldName:       "name",
+	fieldHost:       "host",
+	fieldUser:       "user",
+	fieldDomain:     "domain",
+	fieldClient:     "client",
+	fieldSize:       "size",
+	fieldFullscreen: "fullscreen",
+	fieldDynamic:    "dynamic_resolution",
+	fieldScale:      "scale",
+	fieldPassword:   "password",
+	fieldStore:      "store password",
+	fieldForget:     "forget password",
 }
 
 func check(v bool) string {

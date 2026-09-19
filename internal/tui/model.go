@@ -2,9 +2,11 @@ package tui
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/gaius-codius/wicket/internal/config"
@@ -41,6 +43,11 @@ type Model struct {
 	quit      bool
 	// now drives relative last-used times; nil means time.Now.
 	now func() time.Time
+
+	// filter narrows the list by name or host. filtering is true while the
+	// filter input has focus.
+	filter    textinput.Model
+	filtering bool
 
 	form        formState
 	delName     string
@@ -84,6 +91,8 @@ func New(opt Options) Model {
 			Term:     opt.Term,
 		},
 	}
+	m.filter = m.newInput("", false)
+	m.filter.Placeholder = "name or host"
 	if m.app.Secrets == nil {
 		m.app.Secrets = secret.NewMemory()
 	}
@@ -133,6 +142,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.PasteMsg:
+		return m.handlePaste(msg)
+	}
+	return m, nil
+}
+
+// handlePaste sends a terminal paste to whichever text input has focus.
+func (m Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	if m.connecting {
+		return m, nil
+	}
+	switch {
+	case m.view == viewForm && m.form.textFocused() && !m.form.confirmDiscard:
+		m.form.editText(msg)
+	case m.view == viewModal && m.modal.focused:
+		return m.handleModalKey(msg, "")
+	case m.view == viewList && m.filtering:
+		return m.handleFilterKey(msg, "")
 	}
 	return m, nil
 }
@@ -145,12 +172,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	key := msg.String()
+	if key == "ctrl+c" {
+		return m.interrupt()
+	}
 	lo := newLayout(m.width, m.height)
 	if lo.Tiny && m.view == viewList {
 		if key == "q" {
 			return m.quitNow()
 		}
 		return m, nil
+	}
+	if m.view == viewList && m.filtering {
+		return m.handleFilterKey(msg, key)
 	}
 	switch m.view {
 	case viewHelp:
@@ -236,7 +269,10 @@ func (m Model) chrome() (string, []hint) {
 		if m.form.oldName != "" {
 			ctx = "edit " + m.form.oldName
 		}
-		return ctx, []hint{{"ctrl+s", "save"}, {"tab", "next field"}, {"esc", "cancel"}, {"?", "help"}}
+		if m.form.confirmDiscard {
+			return ctx, []hint{{"y", "discard"}, {"n", "keep editing"}}
+		}
+		return ctx, []hint{{"ctrl+s", "save"}, {"↑/↓", "move"}, {"esc", "cancel"}, {"?", "help"}}
 	case viewDelete:
 		return "delete connection", []hint{{"y", "confirm"}, {"n", "cancel"}, {"?", "help"}}
 	case viewModal:
@@ -255,12 +291,27 @@ func (m Model) profiles() []config.Profile {
 	return m.app.Cfg.Profiles()
 }
 
+// selected returns the profile under the cursor, if it is visible through
+// the filter.
 func (m Model) selected() (config.Profile, bool) {
 	ps := m.profiles()
-	if m.cursor < 0 || m.cursor >= len(ps) {
+	if m.cursor < 0 || m.cursor >= len(ps) || !slices.Contains(m.visible(), m.cursor) {
 		return config.Profile{}, false
 	}
 	return ps[m.cursor], true
+}
+
+// interrupt quits from any view on ctrl+c. Nothing is saved: the form and
+// password dialog only write on ctrl+s, so typed passwords are dropped.
+func (m Model) interrupt() (tea.Model, tea.Cmd) {
+	m.form = formState{}
+	m.modal = modalState{}
+	if m.retry.held != nil {
+		m.retry.held.Clear()
+	}
+	m.retry = retryState{}
+	m.clearUseOnce()
+	return m.quitNow()
 }
 
 func (m Model) quitNow() (tea.Model, tea.Cmd) {

@@ -3,6 +3,7 @@ package tui
 import (
 	"image/color"
 
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/lipgloss/v2"
 	"github.com/gaius-codius/wicket/internal/theme"
 )
@@ -21,6 +22,7 @@ type styles struct {
 	// the row is rendered with it, since an inner style's reset would end an
 	// outer background.
 	selection color.Color
+	input     textinput.Styles
 }
 
 // The frame does not paint a background: Wicket draws on the terminal's own
@@ -43,6 +45,19 @@ func newStyles(p theme.Palette) styles {
 		key:       fg(p.Primary).Bold(true),
 		divider:   fg(p.Border),
 		selection: p.Selection,
+		input:     inputStyles(p),
+	}
+}
+
+func inputStyles(p theme.Palette) textinput.Styles {
+	state := textinput.StyleState{
+		Text:        lipgloss.NewStyle().Foreground(p.Primary),
+		Placeholder: lipgloss.NewStyle().Foreground(p.Muted),
+	}
+	return textinput.Styles{
+		Focused: state,
+		Blurred: state,
+		Cursor:  textinput.CursorStyle{Color: p.Accent},
 	}
 }
 

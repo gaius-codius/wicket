@@ -27,6 +27,7 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 	warns, err := m.app.DeleteProfile(name)
 	m.delName = ""
 	m.view = viewList
+	m.clearFilter()
 	if err != nil {
 		m.setStatus(err.Error(), true)
 		return m, nil

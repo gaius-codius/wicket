@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,16 +20,17 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 	case "?":
 		return m.openHelp()
 	case "esc":
-		return m, nil
-	case "j", "down":
-		if m.cursor < len(ps)-1 {
-			m.cursor++
+		if m.filter.Value() != "" {
+			m.clearFilter()
 		}
 		return m, nil
-	case "k", "up":
-		if m.cursor > 0 {
-			m.cursor--
+	case "/":
+		if empty {
+			return m, nil
 		}
+		return m.startFilter()
+	case "j", "down", "k", "up", "g", "home", "G", "end", "pgup", "pgdown":
+		m.moveCursor(key)
 		return m, nil
 	case "n":
 		return m.openForm("", config.Profile{
@@ -71,17 +73,27 @@ func (m Model) viewList(lo layout) string {
 	if len(ps) == 0 {
 		return m.viewEmpty(lo)
 	}
+	var head string
+	if m.filterActive() {
+		head = m.viewFilter(lo) + "\n\n"
+		lo.Budget = max(lo.Budget-2, 1)
+	}
+	vis := m.visible()
+	if len(vis) == 0 {
+		return head + m.styles.muted.Render("No matches.")
+	}
+	sel, hasSel := m.selected()
 	if lo.Wide {
-		return m.viewListWide(lo, ps)
+		return head + m.viewListWide(lo, ps, vis, sel, hasSel)
 	}
 	selLines := 1
-	if !lo.Compact {
-		selLines += len(m.details(ps[m.cursor], false))
+	if hasSel && !lo.Compact {
+		selLines += len(m.details(sel, false))
 	}
-	start, end := listWindow(len(ps), m.cursor, lo.Budget, selLines)
+	start, end := listWindow(len(vis), max(slices.Index(vis, m.cursor), 0), lo.Budget, selLines)
 	nameW, hostW := columnWidths(ps, lo.Inner)
 	var lines []string
-	for i := start; i < end; i++ {
+	for _, i := range vis[start:end] {
 		p := ps[i]
 		switch {
 		case i == m.cursor:
@@ -98,24 +110,26 @@ func (m Model) viewList(lo layout) string {
 			lines = append(lines, m.row(p, false, nameW, hostW, lo.Inner))
 		}
 	}
-	return strings.Join(lines, "\n")
+	return head + strings.Join(lines, "\n")
 }
 
 // viewListWide shows profiles on the left and the selected profile's details
 // on the right, so moving the cursor does not reflow the list.
-func (m Model) viewListWide(lo layout, ps []config.Profile) string {
+func (m Model) viewListWide(lo layout, ps []config.Profile, vis []int, sel config.Profile, hasSel bool) string {
 	nameW, hostW := columnWidths(ps, lo.Inner/2)
 	leftW := 2 + nameW + 2 + hostW
 	rightW := lo.Inner - leftW - 3
-	start, end := listWindow(len(ps), m.cursor, lo.Budget, 1)
+	start, end := listWindow(len(vis), max(slices.Index(vis, m.cursor), 0), lo.Budget, 1)
 	var left []string
-	for i := start; i < end; i++ {
+	for _, i := range vis[start:end] {
 		left = append(left, m.row(ps[i], i == m.cursor, nameW, hostW, leftW))
 	}
-	p := ps[m.cursor]
-	right := []string{m.styles.primary.Bold(true).Render(truncate(p.Name, rightW)), ""}
-	for _, d := range m.details(p, true) {
-		right = append(right, m.kv(detailLabelWidth, d.key, truncate(d.label, rightW-2-detailLabelWidth)))
+	var right []string
+	if hasSel {
+		right = []string{m.styles.primary.Bold(true).Render(truncate(sel.Name, rightW)), ""}
+		for _, d := range m.details(sel, true) {
+			right = append(right, m.kv(detailLabelWidth, d.key, truncate(d.label, rightW-2-detailLabelWidth)))
+		}
 	}
 	if len(right) > lo.Budget {
 		right = right[:max(lo.Budget, 1)]
@@ -254,20 +268,30 @@ func displayLine(p config.Profile) string {
 }
 
 func (m Model) listHints() []hint {
-	if len(m.profiles()) == 0 {
+	switch {
+	case len(m.profiles()) == 0:
 		return []hint{{"n", "new"}, {"?", "help"}, {"q", "quit"}}
+	case m.filtering:
+		return []hint{{"↑/↓", "move"}, {"enter", "done"}, {"esc", "clear"}}
+	case m.filter.Value() != "":
+		return []hint{{"enter", "connect"}, {"/", "edit filter"}, {"esc", "clear filter"}, {"?", "help"}, {"q", "quit"}}
 	}
-	return []hint{{"enter", "connect"}, {"n", "new"}, {"e", "edit"}, {"D", "delete"}, {"?", "help"}, {"q", "quit"}}
+	return []hint{{"enter", "connect"}, {"n", "new"}, {"e", "edit"}, {"D", "delete"}, {"/", "filter"}, {"?", "help"}, {"q", "quit"}}
 }
 
 func (m Model) listContext() string {
-	switch n := len(m.profiles()); n {
-	case 0:
+	n := len(m.profiles())
+	noun := "connections"
+	if n == 1 {
+		noun = "connection"
+	}
+	switch {
+	case n == 0:
 		return "no connections"
-	case 1:
-		return "1 connection"
+	case m.filterActive():
+		return fmt.Sprintf("%d of %d %s", len(m.visible()), n, noun)
 	default:
-		return fmt.Sprintf("%d connections", n)
+		return fmt.Sprintf("%d %s", n, noun)
 	}
 }
 

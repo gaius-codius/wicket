@@ -55,6 +55,10 @@ func TestForm_EscAfterPasswordCreatesNothing(t *testing.T) {
 	h.m = typeInto(h.m, "work")
 	h.m.form.password = "typed-secret"
 	h.m = press(h.m, "esc")
+	if h.m.view != viewForm || !h.m.form.confirmDiscard {
+		t.Fatal("esc on an edited form should ask before discarding")
+	}
+	h.m = press(h.m, "y")
 	if h.m.view != viewList {
 		t.Fatal(h.m.view)
 	}
@@ -344,5 +348,30 @@ func TestForm_FallbackThemeStillRenders(t *testing.T) {
 	out := screen(h.m)
 	if !strings.Contains(out, "name:") {
 		t.Fatalf("%s", out)
+	}
+}
+
+func TestForm_ArrowKeysMoveFields(t *testing.T) {
+	h := newHarness(t, "", nil)
+	h.m = press(h.m, "n")
+	h.m = press(h.m, "up")
+	if h.m.form.field != fieldName {
+		t.Fatalf("up on first field: %d", h.m.form.field)
+	}
+	// Down works from text fields and from toggles alike.
+	h.m = press(h.m, "down", "down", "down", "down", "down", "down")
+	if h.m.form.field != fieldFullscreen {
+		t.Fatalf("after 6 downs: %d", h.m.form.field)
+	}
+	h.m = press(h.m, "down", "down", "down", "down", "down", "down", "down")
+	if h.m.form.field != fieldForget {
+		t.Fatalf("down past last field should stop at last: %d", h.m.form.field)
+	}
+	h.m = press(h.m, "up")
+	if h.m.form.field != fieldStore {
+		t.Fatalf("up: %d", h.m.form.field)
+	}
+	if h.m.form.p.Name != "" {
+		t.Fatalf("arrows typed into a field: %q", h.m.form.p.Name)
 	}
 }

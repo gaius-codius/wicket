@@ -36,10 +36,15 @@ func helpKeys(v view) []hint {
 		return []hint{{"q", "quit"}, {"?", "help"}}
 	case viewForm:
 		return []hint{
-			{"tab / shift+tab", "move fields"},
+			{"↑/↓, tab", "move fields"},
+			{"←/→, home/end", "move in text"},
+			{"ctrl+w / ctrl+u", "delete word / line"},
+			{"space, enter", "toggle checkbox"},
+			{"←/→", "change scale"},
 			{"ctrl+s", "save"},
-			{"esc / q", "cancel to list"},
-			{"?", "help"},
+			{"esc", "cancel to list"},
+			{"?", "help (off a text field)"},
+			{"ctrl+c", "quit without saving"},
 		}
 	case viewModal:
 		return []hint{
@@ -64,12 +69,15 @@ func helpKeys(v view) []hint {
 	default:
 		return []hint{
 			{"j/k, arrows", "move"},
+			{"g/G, home/end", "first / last"},
+			{"pgup/pgdn", "page"},
+			{"/", "filter by name or host"},
 			{"enter", "connect"},
 			{"n", "new"},
 			{"e", "edit selected"},
 			{"D", "delete selected"},
 			{"?", "help"},
-			{"q", "quit"},
+			{"q, ctrl+c", "quit"},
 		}
 	}
 }

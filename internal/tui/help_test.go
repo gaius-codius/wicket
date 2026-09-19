@@ -59,7 +59,11 @@ func TestHelp_FormKeys(t *testing.T) {
 		t.Fatal("q in help returns to form")
 	}
 	h.m = press(h.m, "q")
+	if h.m.view != viewForm || h.m.quit {
+		t.Fatal("q on an unfocused form field should do nothing")
+	}
+	h.m = press(h.m, "esc")
 	if h.m.view != viewList || h.m.quit {
-		t.Fatal("q on unfocused form returns to list without process exit")
+		t.Fatal("esc on an unchanged form returns to list without process exit")
 	}
 }

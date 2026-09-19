@@ -2,6 +2,7 @@ package theme
 
 import (
 	"image/color"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,16 +33,17 @@ type Report struct {
 }
 
 type fileColors struct {
-	Mode             string `toml:"mode"`
-	Background       string `toml:"background"`
-	DarkerBackground string `toml:"darker_background"`
-	Foreground       string `toml:"foreground"`
-	Muted            string `toml:"muted"`
-	Accent           string `toml:"accent"`
-	Green            string `toml:"green"`
-	Red              string `toml:"red"`
-	Yellow           string `toml:"yellow"`
-	Selection        string `toml:"selection"`
+	Mode            string `toml:"mode"`
+	Background      string `toml:"background"`
+	Foreground      string `toml:"foreground"`
+	DarkForeground  string `toml:"dark_foreground"`
+	LightForeground string `toml:"light_foreground"`
+	Muted           string `toml:"muted"`
+	Accent          string `toml:"accent"`
+	Green           string `toml:"green"`
+	Red             string `toml:"red"`
+	Yellow          string `toml:"yellow"`
+	Selection       string `toml:"selection"`
 }
 
 func darkFallback() map[string]string {
@@ -103,26 +105,57 @@ func Load(home string) (Palette, Report) {
 		fell = append(fell, role)
 	}
 	put("surface", fc.Background)
-	if h, ok := parseHex(fc.DarkerBackground); ok {
-		hex["border"] = h
-	} else {
-		hex["border"] = fb["border"]
-		fell = append(fell, "border")
-	}
+	// Omarchy themes use muted as a surface/border tone (see
+	// hyprland_inactive_border), and darker_background is almost the same
+	// as background, so a border drawn in it cannot be seen.
+	put("border", fc.Muted)
 	put("primary", fc.Foreground)
-	put("muted", fc.Muted)
-	if h, ok := parseHex(fc.Muted); ok {
-		hex["secondary"] = h
-	} else {
-		hex["secondary"] = fb["secondary"]
-		fell = append(fell, "secondary")
-	}
+	// muted is too dim to read as text in most themes. Use the dimmest
+	// theme token that is still readable on the background, else foreground.
+	text := readableText(hex["surface"], hex["primary"], fc.Muted, fc.DarkForeground, fc.LightForeground)
+	hex["muted"] = text
+	hex["secondary"] = text
 	put("accent", fc.Accent)
 	put("success", fc.Green)
 	put("danger", fc.Red)
 	put("warning", fc.Yellow)
 	put("selection", fc.Selection)
 	return paletteFromHex(hex), Report{FallbackRoles: fell}
+}
+
+// minTextContrast is the WCAG AA contrast ratio for normal text.
+const minTextContrast = 4.5
+
+// readableText returns the first candidate that parses and reaches
+// minTextContrast against surface, or primary when none does.
+func readableText(surface, primary string, candidates ...string) string {
+	for _, raw := range candidates {
+		if h, ok := parseHex(raw); ok && contrast(h, surface) >= minTextContrast {
+			return h
+		}
+	}
+	return primary
+}
+
+// contrast is the WCAG 2 contrast ratio between two #RRGGBB colors.
+func contrast(a, b string) float64 {
+	la, lb := luminance(a), luminance(b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+func luminance(hex string) float64 {
+	r, g, b, _ := mustRGBA(hex).RGBA()
+	lin := func(v uint32) float64 {
+		c := float64(v>>8) / 255
+		if c <= 0.03928 {
+			return c / 12.92
+		}
+		return math.Pow((c+0.055)/1.055, 2.4)
+	}
+	return 0.2126*lin(r) + 0.7152*lin(g) + 0.0722*lin(b)
 }
 
 func allRoles() []string {

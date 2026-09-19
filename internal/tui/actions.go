@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
@@ -230,15 +229,4 @@ func (a *App) ProbeClient(p config.Profile) error {
 
 func (a *App) StoreSecret(p config.Profile, pw secret.Password) error {
 	return a.Secrets.Upsert(secret.IdentityFor(a.Cfg.Path(), p), pw)
-}
-
-func lastUsedLabel(st *config.StateStore, name string) string {
-	if st == nil {
-		return "never"
-	}
-	t, ok := st.LastUsed(name)
-	if !ok {
-		return "never"
-	}
-	return t.Format(time.RFC3339)
 }

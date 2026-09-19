@@ -263,24 +263,19 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 func (m Model) viewForm(lo layout) string {
 	_ = lo
 	f := m.form
-	title := "NEW"
-	if f.oldName != "" {
-		title = "EDIT"
-	}
+	const labelW = len("dynamic_resolution:")
 	var b strings.Builder
-	b.WriteString(m.styles.header.Render(title))
-	b.WriteByte('\n')
 	row := func(id int, label, value string) {
 		mark := "  "
-		style := m.styles.muted
+		labelStyle, valueStyle := m.styles.muted, m.styles.primary
 		if f.field == id {
 			mark = m.styles.accent.Render("▌ ")
-			style = m.styles.primary
+			labelStyle = m.styles.accent
 		}
 		if f.errField == strings.ToLower(label) && f.err != "" {
-			style = m.styles.danger
+			labelStyle, valueStyle = m.styles.danger, m.styles.danger
 		}
-		b.WriteString(mark + style.Render(label+": "+value) + "\n")
+		b.WriteString(mark + labelStyle.Render(padRight(label+":", labelW)) + "  " + valueStyle.Render(value) + "\n")
 	}
 	row(fieldName, "name", f.p.Name)
 	row(fieldHost, "host", f.p.Host)
@@ -291,7 +286,7 @@ func (m Model) viewForm(lo layout) string {
 	if f.field == fieldSize && sizeVal == "" {
 		sizeVal = m.styles.muted.Render("1920x1080, 100%, or empty")
 		mark := m.styles.accent.Render("▌ ")
-		b.WriteString(mark + m.styles.primary.Render("size: ") + sizeVal + "\n")
+		b.WriteString(mark + m.styles.accent.Render(padRight("size:", labelW)) + "  " + sizeVal + "\n")
 	} else {
 		row(fieldSize, "size", f.p.Size)
 	}
@@ -303,10 +298,9 @@ func (m Model) viewForm(lo layout) string {
 	row(fieldStore, "store password", check(f.store))
 	row(fieldForget, "forget password", check(f.forget))
 	if f.err != "" {
-		b.WriteString(m.styles.danger.Render(f.err) + "\n")
+		b.WriteString("\n" + m.styles.danger.Render("✗ "+f.err) + "\n")
 	}
-	b.WriteString(m.styles.footer.Render("[ctrl+s] save  [esc] cancel  [?] help"))
-	return b.String()
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func check(v bool) string {

@@ -54,7 +54,7 @@ func (m Model) viewDelete(lo layout) string {
 	if ok {
 		name, host = p.Name, p.Host
 	}
-	return m.styles.header.Render("DELETE") + "\n" +
-		m.styles.primary.Render("Delete "+name+" ("+host+")?") + "\n" +
-		m.styles.footer.Render("[y] confirm  [n] cancel  [esc] cancel  [?] help")
+	return m.styles.primary.Render("Delete ") + m.styles.primary.Bold(true).Render(name) +
+		m.styles.muted.Render(" ("+host+")") + m.styles.primary.Render("?") + "\n" +
+		m.styles.muted.Render("Removes the profile, its last-used time, and its stored password.")
 }

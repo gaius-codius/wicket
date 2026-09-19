@@ -4,6 +4,7 @@ import (
 	"io"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
@@ -180,8 +181,8 @@ func (m Model) handleRetryKey(key string) (tea.Model, tea.Cmd) {
 func (m Model) viewRetry(lo layout) string {
 	_ = lo
 	hint := "If the password may be wrong, press n for a new password."
-	return m.styles.header.Render("RETRY") + "\n" +
-		m.styles.primary.Render(m.retry.status) + "\n" +
-		m.styles.muted.Render(hint) + "\n" +
-		m.styles.footer.Render("[enter] retry  [n] new password  [esc] dismiss  [?] help")
+	width := newLayout(m.width, m.height).Inner
+	wrap := lipgloss.NewStyle().Width(width)
+	return m.styles.warning.Render("▲ ") + m.styles.primary.Render(m.retry.status) + "\n" +
+		m.styles.muted.Render(wrap.Render(hint))
 }

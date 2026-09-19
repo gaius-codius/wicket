@@ -113,12 +113,10 @@ func (m Model) viewModal(lo layout) string {
 	if md.lookupErr != nil {
 		note = "Secret store unavailable; enter a password to continue."
 	}
-	body := m.styles.header.Render("PASSWORD") + "\n" +
-		m.styles.muted.Render(note) + "\n" +
-		mark + m.styles.primary.Render("password: "+masked) + "\n"
+	body := m.styles.muted.Render(note) + "\n\n" +
+		mark + m.styles.muted.Render("password  ") + m.styles.primary.Render(masked)
 	if md.err != "" {
-		body += m.styles.danger.Render(md.err) + "\n"
+		body += "\n" + m.styles.danger.Render(md.err)
 	}
-	body += m.styles.footer.Render("[enter] connect once  [ctrl+s] save and connect  [esc] cancel  [?] help")
 	return body
 }

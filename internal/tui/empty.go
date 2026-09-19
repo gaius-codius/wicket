@@ -1,8 +1,7 @@
 package tui
 
 func (m Model) viewEmpty(lo layout) string {
-	body := m.styles.header.Render("CONNECTIONS") + "\n" +
-		m.styles.muted.Render("No saved connections. Press n to add one.") + "\n" +
-		m.listFooter(lo)
-	return body
+	_ = lo
+	return m.styles.primary.Render("No saved connections.") + "\n" +
+		m.styles.muted.Render("Press ") + m.styles.key.Render("n") + m.styles.muted.Render(" to add one.")
 }

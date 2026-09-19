@@ -3,8 +3,10 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/gaius-codius/wicket/internal/config"
 )
 
@@ -69,34 +71,204 @@ func (m Model) viewList(lo layout) string {
 	if len(ps) == 0 {
 		return m.viewEmpty(lo)
 	}
-	selLines := 4
-	if lo.Compact {
-		selLines = 1
+	if lo.Wide {
+		return m.viewListWide(lo, ps)
 	}
-	start, end := listWindow(len(ps), m.cursor, m.listCardBudget(lo), selLines)
-	var b strings.Builder
-	b.WriteString(m.styles.header.Render("CONNECTIONS"))
-	b.WriteByte('\n')
+	selLines := 1
+	if !lo.Compact {
+		selLines += len(m.details(ps[m.cursor], false))
+	}
+	start, end := listWindow(len(ps), m.cursor, lo.Budget, selLines)
+	nameW, hostW := columnWidths(ps, lo.Inner)
+	var lines []string
 	for i := start; i < end; i++ {
-		b.WriteString(m.renderCard(ps[i], i == m.cursor, lo))
-		b.WriteByte('\n')
+		p := ps[i]
+		switch {
+		case i == m.cursor:
+			lines = append(lines, m.row(p, true, nameW, hostW, lo.Inner))
+			if !lo.Compact {
+				for _, d := range m.details(p, false) {
+					lines = append(lines, "    "+m.kv(detailLabelWidth, d.key, truncate(d.label, lo.Inner-6-detailLabelWidth)))
+				}
+			}
+		case lo.Compact:
+			// Compact shows only names on unselected rows (UX-001).
+			lines = append(lines, "  "+m.styles.muted.Render(truncate(p.Name, lo.Inner-2)))
+		default:
+			lines = append(lines, m.row(p, false, nameW, hostW, lo.Inner))
+		}
 	}
-	b.WriteString(m.listFooter(lo))
-	return b.String()
+	return strings.Join(lines, "\n")
 }
 
-func (m Model) listCardBudget(lo layout) int {
-	n := lo.Height - 8
-	if m.status != "" {
-		n--
+// viewListWide shows profiles on the left and the selected profile's details
+// on the right, so moving the cursor does not reflow the list.
+func (m Model) viewListWide(lo layout, ps []config.Profile) string {
+	nameW, hostW := columnWidths(ps, lo.Inner/2)
+	leftW := 2 + nameW + 2 + hostW
+	rightW := lo.Inner - leftW - 3
+	start, end := listWindow(len(ps), m.cursor, lo.Budget, 1)
+	var left []string
+	for i := start; i < end; i++ {
+		left = append(left, m.row(ps[i], i == m.cursor, nameW, hostW, leftW))
 	}
-	if m.view == viewRetry {
-		n -= 4
+	p := ps[m.cursor]
+	right := []string{m.styles.primary.Bold(true).Render(truncate(p.Name, rightW)), ""}
+	for _, d := range m.details(p, true) {
+		right = append(right, m.kv(detailLabelWidth, d.key, truncate(d.label, rightW-2-detailLabelWidth)))
 	}
-	if n < 1 {
-		return 1
+	if len(right) > lo.Budget {
+		right = right[:max(lo.Budget, 1)]
 	}
-	return n
+	sep := m.styles.divider.Render("│")
+	lines := make([]string, max(len(left), len(right)))
+	for i := range lines {
+		l, r := "", ""
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		lines[i] = padRight(l, leftW) + " " + sep + " " + r
+	}
+	return strings.Join(lines, "\n")
+}
+
+// row renders one profile as "▌ name  host". The selected row carries the
+// accent bar and the theme's selection background across the full width.
+func (m Model) row(p config.Profile, selected bool, nameW, hostW, width int) string {
+	name := padRight(truncate(p.Name, nameW), nameW)
+	host := truncate(p.Host, hostW)
+	if !selected {
+		return padRight("  "+m.styles.primary.Render(name)+"  "+m.styles.muted.Render(host), width)
+	}
+	st := m.styles
+	text := st.onSelection(st.accent).Render("▌ ") +
+		st.onSelection(st.primary.Bold(true)).Render(name) +
+		st.onSelection(st.primary).Render("  ") +
+		st.onSelection(st.muted).Render(host)
+	if gap := width - lipgloss.Width(text); gap > 0 {
+		text += st.onSelection(st.primary).Render(strings.Repeat(" ", gap))
+	}
+	return text
+}
+
+// columnWidths sizes the name and host columns to their longest values,
+// within width.
+func columnWidths(ps []config.Profile, width int) (nameW, hostW int) {
+	for _, p := range ps {
+		nameW = max(nameW, lipgloss.Width(p.Name))
+		hostW = max(hostW, lipgloss.Width(p.Host))
+	}
+	nameW = min(nameW, 24)
+	avail := width - 4 - nameW
+	if avail < 8 {
+		nameW = max(width/2-2, 4)
+		avail = width - 4 - nameW
+	}
+	return nameW, max(min(hostW, avail), 1)
+}
+
+// detailLabelWidth fits the longest detail label, "last used".
+const detailLabelWidth = 9
+
+// details lists the selected profile's fields as label/value pairs. The
+// single-column layout already shows the host on the row.
+func (m Model) details(p config.Profile, withHost bool) []hint {
+	var ds []hint
+	if withHost {
+		ds = append(ds, hint{"host", p.Host})
+	}
+	ds = append(ds, hint{"user", p.User})
+	if p.Domain != "" {
+		ds = append(ds, hint{"domain", p.Domain})
+	}
+	ds = append(ds, hint{"last used", m.lastUsed(p.Name)})
+	ds = append(ds, hint{"display", displayLine(p)})
+	if p.Client != "" && p.Client != config.DefaultClient {
+		ds = append(ds, hint{"client", p.Client})
+	}
+	return ds
+}
+
+func (m Model) lastUsed(name string) string {
+	if m.app == nil || m.app.State == nil {
+		return "never"
+	}
+	t, ok := m.app.State.LastUsed(name)
+	if !ok {
+		return "never"
+	}
+	now := time.Now()
+	if m.now != nil {
+		now = m.now()
+	}
+	return humanTime(t, now)
+}
+
+// humanTime formats t relative to now: "just now", "12 min ago",
+// "today 13:21", "yesterday 13:21", "Mon 13:21", "2 Sep", or "2 Sep 2025".
+func humanTime(t, now time.Time) string {
+	t = t.In(now.Location())
+	if d := now.Sub(t); d >= 0 && d < time.Minute {
+		return "just now"
+	} else if d >= 0 && d < time.Hour {
+		return fmt.Sprintf("%d min ago", int(d/time.Minute))
+	}
+	day := func(x time.Time) time.Time {
+		y, mo, d := x.Date()
+		return time.Date(y, mo, d, 0, 0, 0, 0, x.Location())
+	}
+	days := int(day(now).Sub(day(t)).Hours()/24 + 0.5)
+	switch {
+	case days == 0:
+		return "today " + t.Format("15:04")
+	case days == 1:
+		return "yesterday " + t.Format("15:04")
+	case days > 1 && days < 7:
+		return t.Format("Mon 15:04")
+	case t.Year() == now.Year():
+		return t.Format("2 Jan")
+	default:
+		return t.Format("2 Jan 2006")
+	}
+}
+
+// displayLine summarises the display settings, leaving out an unset size.
+func displayLine(p config.Profile) string {
+	var parts []string
+	if p.Size != "" {
+		parts = append(parts, p.Size)
+	}
+	if p.Fullscreen {
+		parts = append(parts, "fullscreen")
+	} else {
+		parts = append(parts, "window")
+	}
+	if p.DynamicResolution {
+		parts = append(parts, "dynamic resolution")
+	}
+	parts = append(parts, fmt.Sprintf("scale %d%%", p.Scale))
+	return strings.Join(parts, " · ")
+}
+
+func (m Model) listHints() []hint {
+	if len(m.profiles()) == 0 {
+		return []hint{{"n", "new"}, {"?", "help"}, {"q", "quit"}}
+	}
+	return []hint{{"enter", "connect"}, {"n", "new"}, {"e", "edit"}, {"D", "delete"}, {"?", "help"}, {"q", "quit"}}
+}
+
+func (m Model) listContext() string {
+	switch n := len(m.profiles()); n {
+	case 0:
+		return "no connections"
+	case 1:
+		return "1 connection"
+	default:
+		return fmt.Sprintf("%d connections", n)
+	}
 }
 
 // listWindow returns a half-open [start, end) of profiles that fit in budget
@@ -136,53 +308,4 @@ func listWindow(n, cursor, budget, selLines int) (start, end int) {
 		}
 	}
 	return start, end
-}
-
-func (m Model) renderCard(p config.Profile, selected bool, lo layout) string {
-	name := p.Name
-	if selected {
-		bar := m.styles.accent.Render("▌ ")
-		if lo.Compact {
-			line := name
-			if p.Host != "" {
-				line += "  " + p.Host
-			}
-			return bar + m.styles.primary.Render(line)
-		}
-		var lines []string
-		lines = append(lines, bar+m.styles.primary.Render(name))
-		detail := "  host " + p.Host + "  user " + p.User
-		if p.Domain != "" {
-			detail += "  domain " + p.Domain
-		}
-		lines = append(lines, m.styles.muted.Render(detail))
-		used := lastUsedLabel(m.app.State, p.Name)
-		lines = append(lines, m.styles.muted.Render("  last-used "+used))
-		lines = append(lines, m.styles.muted.Render("  "+displayLine(p)))
-		return strings.Join(lines, "\n")
-	}
-	return "  " + m.styles.muted.Render(name)
-}
-
-func displayLine(p config.Profile) string {
-	size := p.Size
-	if size == "" {
-		size = "default"
-	}
-	mode := "window"
-	if p.Fullscreen {
-		mode = "fullscreen"
-	}
-	dyn := ""
-	if p.DynamicResolution {
-		dyn = " dynamic"
-	}
-	return fmt.Sprintf("%s  %s%s  scale %d", size, mode, dyn, p.Scale)
-}
-
-func (m Model) listFooter(lo layout) string {
-	if lo.Compact {
-		return m.styles.footer.Render("[enter] connect  [n] new  [e] edit  [D] delete  [?] help  [q] quit")
-	}
-	return m.styles.footer.Render("[enter] connect  [n] new  [e] edit  [D] delete  [?] help  [q] quit")
 }

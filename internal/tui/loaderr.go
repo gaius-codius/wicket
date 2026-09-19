@@ -19,9 +19,7 @@ func (m Model) viewLoadError(lo layout) string {
 	if path == "" {
 		path = "(unknown path)"
 	}
-	return m.styles.header.Render("ERROR") + "\n" +
-		m.styles.danger.Render("cannot load config") + "\n" +
-		m.styles.muted.Render(path) + "\n" +
-		m.styles.primary.Render(m.loadErr) + "\n" +
-		m.styles.footer.Render("[q] quit  [?] help")
+	return m.styles.danger.Render("✗ Cannot load config") + "\n" +
+		m.styles.muted.Render(path) + "\n\n" +
+		m.styles.primary.Render(m.loadErr)
 }

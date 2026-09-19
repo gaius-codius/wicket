@@ -18,59 +18,58 @@ func (m Model) handleHelpKey(key string) (tea.Model, tea.Cmd) {
 
 func (m Model) viewHelp(lo layout) string {
 	_ = lo
-	var b strings.Builder
-	b.WriteString(m.styles.header.Render("KEYS"))
-	b.WriteByte('\n')
-	b.WriteString(m.styles.muted.Render(helpBody(m.helpFor)))
-	b.WriteByte('\n')
-	b.WriteString(m.styles.footer.Render("[?] close  [esc] close  [q] close"))
-	return b.String()
+	keys := helpKeys(m.helpFor)
+	w := 0
+	for _, k := range keys {
+		w = max(w, len(k.key))
+	}
+	lines := make([]string, len(keys))
+	for i, k := range keys {
+		lines[i] = m.styles.key.Render(padRight(k.key, w)) + "  " + m.styles.muted.Render(k.label)
+	}
+	return strings.Join(lines, "\n")
 }
 
-func helpBody(v view) string {
+func helpKeys(v view) []hint {
 	switch v {
 	case viewLoadErr:
-		return strings.Join([]string{
-			"q  quit",
-			"?  help",
-		}, "\n")
+		return []hint{{"q", "quit"}, {"?", "help"}}
 	case viewForm:
-		return strings.Join([]string{
-			"tab / shift+tab  move fields",
-			"ctrl+s           save",
-			"esc / q          cancel to list",
-			"?                help",
-		}, "\n")
+		return []hint{
+			{"tab / shift+tab", "move fields"},
+			{"ctrl+s", "save"},
+			{"esc / q", "cancel to list"},
+			{"?", "help"},
+		}
 	case viewModal:
-		return strings.Join([]string{
-			"enter   connect once",
-			"ctrl+s  save and connect",
-			"esc     cancel",
-			"?       help",
-		}, "\n")
+		return []hint{
+			{"enter", "connect once"},
+			{"ctrl+s", "save and connect"},
+			{"esc", "cancel"},
+			{"?", "help"},
+		}
 	case viewDelete:
-		return strings.Join([]string{
-			"y      confirm delete",
-			"n/esc  cancel",
-			"?      help",
-		}, "\n")
+		return []hint{
+			{"y", "confirm delete"},
+			{"n / esc", "cancel"},
+			{"?", "help"},
+		}
 	case viewRetry:
-		return strings.Join([]string{
-			"enter  retry",
-			"n      new password",
-			"esc    dismiss",
-			"?      help",
-		}, "\n")
+		return []hint{
+			{"enter", "retry"},
+			{"n", "new password"},
+			{"esc", "dismiss"},
+			{"?", "help"},
+		}
 	default:
-		return strings.Join([]string{
-			"j/k, arrows  move",
-			"enter        connect",
-			"n            new",
-			"e            edit selected",
-			"D            delete selected",
-			"?            help",
-			"q            quit",
-			"esc          no-op",
-		}, "\n")
+		return []hint{
+			{"j/k, arrows", "move"},
+			{"enter", "connect"},
+			{"n", "new"},
+			{"e", "edit selected"},
+			{"D", "delete selected"},
+			{"?", "help"},
+			{"q", "quit"},
+		}
 	}
 }

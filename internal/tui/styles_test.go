@@ -15,10 +15,10 @@ func TestStyles_Chrome(t *testing.T) {
 	if !strings.ContainsAny(raw, "╭╮╯╰┌┐┘└") {
 		t.Fatalf("want rounded/box border in %q", raw)
 	}
-	if !strings.Contains(plain, "[enter]") || !strings.Contains(plain, "connect") {
+	if !strings.Contains(plain, "enter connect") || !strings.Contains(plain, "q quit") {
 		t.Fatalf("footer keys:\n%s", plain)
 	}
-	if !strings.Contains(plain, "CONNECTIONS") {
-		t.Fatal("uppercase section header")
+	if !strings.Contains(plain, "1 connection") || !strings.Contains(plain, "────") {
+		t.Fatalf("header context and divider:\n%s", plain)
 	}
 }

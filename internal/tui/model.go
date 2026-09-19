@@ -3,8 +3,10 @@ package tui
 import (
 	"os"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
@@ -37,6 +39,8 @@ type Model struct {
 	loadErr   string
 	loadPath  string
 	quit      bool
+	// now drives relative last-used times; nil means time.Now.
+	now func() time.Time
 
 	form        formState
 	delName     string
@@ -177,6 +181,25 @@ func (m Model) render() string {
 	if lo.Tiny && m.view != viewLoadErr {
 		return m.styles.muted.Render("resize terminal")
 	}
+	if lo.Wide && m.view != viewList && m.view != viewRetry {
+		// Only the list uses the wide two-pane layout; forms and dialogs
+		// read better at the normal width.
+		lo.Panel = min(lo.Panel, panelNormal)
+		lo.Inner = lo.Panel - 4
+	}
+	context, hs := m.chrome()
+	foot := m.hints(lo.Inner, hs...)
+	status := m.statusLines(lo.Inner)
+	var retry string
+	if m.view == viewRetry {
+		retry = m.viewRetry(lo)
+	}
+	lo.Budget = lo.Height - chromeLines - len(foot) - len(status)
+	if retry != "" {
+		lo.Budget -= lipgloss.Height(retry) + 1
+	}
+	lo.Budget = max(lo.Budget, 1)
+
 	var body string
 	switch m.view {
 	case viewHelp:
@@ -190,24 +213,39 @@ func (m Model) render() string {
 	case viewModal:
 		body = m.viewModal(lo)
 	case viewRetry:
-		body = m.viewList(lo) + "\n" + m.viewRetry(lo)
+		body = m.viewList(lo) + "\n\n" + retry
 	default:
 		body = m.viewList(lo)
 	}
-	title := m.styles.title.Render("WICKET")
-	inner := title + "\n" + body
-	if m.status != "" {
-		st := m.styles.statusOK
-		if m.statusErr {
-			st = m.styles.statusErr
+	parts := []string{m.header(lo.Inner, context), m.divider(lo.Inner), "", body, ""}
+	parts = append(parts, status...)
+	parts = append(parts, foot...)
+	panel := m.styles.frame.Width(lo.Panel).Render(strings.Join(parts, "\n"))
+	return lipgloss.Place(lo.Width, lo.Height, lipgloss.Center, lipgloss.Center, panel)
+}
+
+// chrome returns the header context and footer keys for the current view.
+func (m Model) chrome() (string, []hint) {
+	switch m.view {
+	case viewHelp:
+		return "keys", []hint{{"esc", "close"}}
+	case viewLoadErr:
+		return "config error", []hint{{"q", "quit"}, {"?", "help"}}
+	case viewForm:
+		ctx := "new connection"
+		if m.form.oldName != "" {
+			ctx = "edit " + m.form.oldName
 		}
-		inner += "\n" + st.Render(m.status)
+		return ctx, []hint{{"ctrl+s", "save"}, {"tab", "next field"}, {"esc", "cancel"}, {"?", "help"}}
+	case viewDelete:
+		return "delete connection", []hint{{"y", "confirm"}, {"n", "cancel"}, {"?", "help"}}
+	case viewModal:
+		return "password", []hint{{"enter", "connect once"}, {"ctrl+s", "save and connect"}, {"esc", "cancel"}, {"?", "help"}}
+	case viewRetry:
+		return m.listContext(), []hint{{"enter", "retry"}, {"n", "new password"}, {"esc", "dismiss"}, {"?", "help"}}
+	default:
+		return m.listContext(), m.listHints()
 	}
-	w := lo.Width - 2
-	if w < 1 {
-		w = 1
-	}
-	return m.styles.frame.Width(w).Render(inner)
 }
 
 func (m Model) profiles() []config.Profile {

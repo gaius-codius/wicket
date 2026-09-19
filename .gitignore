@@ -1,0 +1,28 @@
+# Binaries
+/wicket
+dist/
+bin/
+
+# Go
+*.test
+*.out
+coverage.out
+
+# IDE/editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local runtime/config data
+*.log
+*.db
+.env
+
+# Worktrees
+.worktrees/
+working-docs/

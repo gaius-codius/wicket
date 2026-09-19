@@ -1,0 +1,8 @@
+xfreerdp3
+/v:h
+/u:u
+/size:1920x1080
+/f
++dynamic-resolution
+/scale:140
+/from-stdin:force

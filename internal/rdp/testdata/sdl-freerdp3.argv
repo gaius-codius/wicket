@@ -1,0 +1,7 @@
+sdl-freerdp3
+/v:192.168.1.20
+/u:jdoe
+/d:CORP
+/size:100%
++dynamic-resolution
+/from-stdin:force

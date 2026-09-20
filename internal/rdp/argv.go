@@ -31,8 +31,10 @@ func BuildPlan(p config.Profile) (Plan, error) {
 	if p.Domain != "" {
 		args = append(args, "/d:"+p.Domain)
 	}
-	if p.Size != "" {
-		args = append(args, "/size:"+p.Size)
+	if size := strings.TrimSpace(p.Size); size != "" {
+		// A hand-edited config can hold padding that validation tolerates;
+		// FreeRDP would take the spaces as part of the value.
+		args = append(args, "/size:"+size)
 	}
 	if p.Fullscreen {
 		args = append(args, "/f")

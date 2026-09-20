@@ -1,6 +1,7 @@
 package rdp
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -79,5 +80,19 @@ func TestBuildPlan_RejectsPathClient(t *testing.T) {
 	p := config.Profile{Name: "n", Host: "h", User: "u", Client: "/tmp/x", Scale: 100, DynamicResolution: true}
 	if _, err := BuildPlan(p); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+// Validation tolerates padding around size, so BuildPlan has to trim it
+// rather than hand FreeRDP an argument with spaces inside the value.
+func TestBuildPlan_TrimsSize(t *testing.T) {
+	p := config.Profile{Name: "n", Host: "h", User: "u", Client: "sdl-freerdp3", Scale: 100, Size: "  1920x1080 "}
+	plan, err := BuildPlan(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "/size:1920x1080"
+	if !slices.Contains(plan.Args, want) {
+		t.Fatalf("args = %v, want %q", plan.Args, want)
 	}
 }

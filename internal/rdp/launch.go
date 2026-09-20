@@ -150,7 +150,15 @@ func (l *Launcher) Start(plan Plan, cred Credential) (*Session, error) {
 		return nil, err
 	}
 	if cred != nil {
-		_ = cred.WriteLine(stdin)
+		// A credential that cannot reach the child is fatal: the client would
+		// otherwise sit at a prompt it can never satisfy, and the caller would
+		// blame the password.
+		if err := cred.WriteLine(stdin); err != nil {
+			_ = stdin.Close()
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = cmd.Wait()
+			return nil, fmt.Errorf("could not send the password to %s: %w", plan.Client, err)
+		}
 	}
 	_ = stdin.Close()
 
@@ -176,10 +184,13 @@ func (s *Session) Wait() Outcome {
 	if s == nil || s.cmd == nil {
 		return Outcome{StartErr: errors.New("no session")}
 	}
+	// signal.Stop removes only this session's channel. signal.Reset must not be
+	// used here: it is process-global and would also tear down Bubble Tea's own
+	// SIGINT handler, so the next Ctrl+C would kill the TUI outright and leave
+	// the terminal in raw mode.
 	defer func() {
 		signal.Stop(s.interrupt)
 		close(s.interrupt)
-		signal.Reset(os.Interrupt)
 	}()
 	err := s.cmd.Wait()
 	dur := s.clock.Now().Sub(s.started)

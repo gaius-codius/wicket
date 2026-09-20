@@ -85,7 +85,7 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 			f.inputs[id] = m.newInput(*v, id == fieldPassword)
 		}
 	}
-	f.inputs[fieldSize].Placeholder = "1920x1080, 100%, or empty (FreeRDP chooses)"
+	f.inputs[fieldSize].Placeholder = "dimension (1920x1080), N% (100%) or empty for default"
 	f.focus(fieldName)
 	m.form = f
 	m.view = viewForm

@@ -59,6 +59,14 @@ func (m Model) viewDelete(lo layout) string {
 	// The name and host come from the config and can be longer than the
 	// panel, so the question is truncated and the note is wrapped.
 	head := truncate("Delete "+name+" ("+host+")?", lo.Inner)
-	return m.styles.primary.Render(head) + "\n" +
-		m.styles.muted.Render(wrap.Render("Removes the profile, its last-used time, and its stored password."))
+	lines := []string{m.styles.primary.Render(head)}
+	// The question is what the user is answering, so the note gives up its
+	// lines first. Clipping the view from the bottom instead left a short
+	// terminal asking for a "y" with nothing but an ellipsis to go on.
+	note := strings.Split(m.styles.muted.Render(wrap.Render(
+		"Removes the profile, its last-used time, and its stored password.")), "\n")
+	if room := lo.Budget - len(lines); room > 0 {
+		lines = append(lines, clipLines(note, room)...)
+	}
+	return strings.Join(lines, "\n")
 }

@@ -188,3 +188,31 @@ func slicesHasKey(hs []hint, key string) bool {
 }
 
 var _ = tea.WindowSizeMsg{}
+
+// A dialog that asks a question has to show the question. Both of these used
+// to be clipped from the bottom, so a short terminal replaced the delete
+// target with an ellipsis and hid the password field altogether -- while
+// keystrokes still reached the invisible field and enter still connected.
+func TestDialogs_KeepWhatMatters(t *testing.T) {
+	cfg := fixtureTOML("work", "host.invalid", "user")
+	for w := 20; w <= 130; w += 2 {
+		for h := heightTiny; h <= 30; h++ {
+			del := stripANSI(sized(t, cfg, w, h, "D").render())
+			if !strings.Contains(del, "Delete") {
+				t.Fatalf("%dx%d: the delete confirmation names nothing:\n%s", w, h, del)
+			}
+			modal := sized(t, cfg, w, h, "enter")
+			if modal.view != viewModal {
+				t.Fatalf("%dx%d: view %v, want the password modal", w, h, modal.view)
+			}
+			out := stripANSI(modal.render())
+			label := "password"
+			if newLayout(w, h).Inner < 24 {
+				label = "pw"
+			}
+			if !strings.Contains(out, label) {
+				t.Fatalf("%dx%d: no password field:\n%s", w, h, out)
+			}
+		}
+	}
+}

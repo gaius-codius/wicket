@@ -113,13 +113,19 @@ func (m Model) viewModal(lo layout) string {
 	if lo.Inner < 24 {
 		label = "pw"
 	}
-	lines := strings.Split(m.styles.muted.Render(wrap.Render(note)), "\n")
-	lines = append(lines, "")
-	lines = append(lines, mark+m.styles.muted.Render(label+"  ")+
-		inputView(md.ti, max(lo.Inner-len(label)-4, 1)))
+	// The field is the point of the dialog, and the error says why it is
+	// still here, so both outlast the note. Clipping the view from the bottom
+	// instead hid the field entirely below ten rows, while keystrokes still
+	// went into it and enter still connected with whatever it held.
+	tail := []string{mark + m.styles.muted.Render(label+"  ") +
+		inputView(md.ti, max(lo.Inner-len(label)-4, 1))}
 	if md.err != "" {
-		lines = append(lines, "")
-		lines = append(lines, strings.Split(m.styles.danger.Render(wrap.Render("✗ "+md.err)), "\n")...)
+		tail = append(tail, "")
+		tail = append(tail, strings.Split(m.styles.danger.Render(wrap.Render("✗ "+md.err)), "\n")...)
 	}
-	return strings.Join(lines, "\n")
+	head := append(strings.Split(m.styles.muted.Render(wrap.Render(note)), "\n"), "")
+	if room := lo.Budget - len(tail); room > 0 {
+		return strings.Join(append(clipLines(head, room), tail...), "\n")
+	}
+	return strings.Join(clipLines(tail, lo.Budget), "\n")
 }

@@ -216,3 +216,18 @@ func TestDialogs_KeepWhatMatters(t *testing.T) {
 		}
 	}
 }
+
+// A warning must not be the first thing a short terminal gives up. The footer
+// keys are in the help view and the README; a status line that is never drawn
+// is simply lost.
+func TestRender_ShortTerminalKeepsTheStatus(t *testing.T) {
+	m := sized(t, fixtureTOML("work", "h", "u"), 80, 24)
+	m.setStatus("could not save password", true)
+	for h := heightTiny; h <= 12; h++ {
+		nm, _ := m.Update(teaWin(80, h))
+		out := stripANSI(nm.(Model).render())
+		if !strings.Contains(out, "could not save password") {
+			t.Fatalf("height %d dropped the status:\n%s", h, out)
+		}
+	}
+}

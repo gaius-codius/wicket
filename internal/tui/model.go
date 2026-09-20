@@ -280,7 +280,9 @@ func (m Model) fitChrome(lo *layout) (context string, status, foot []string, c c
 	c = chromeParts{header: true, divider: true, topGap: true, gap: true,
 		status: len(status) > 0, foot: len(foot) > 0}
 	avail := max(lo.Height-2, 1) // the frame's top and bottom border
-	for _, drop := range []*bool{&c.gap, &c.topGap, &c.divider, &c.status, &c.foot, &c.header} {
+	// The footer goes before the status line: the keys are in the help view
+	// and the README, while a warning that is never drawn is simply lost.
+	for _, drop := range []*bool{&c.gap, &c.topGap, &c.divider, &c.foot, &c.status, &c.header} {
 		if c.cost(len(status), len(foot))+1 <= avail {
 			break
 		}

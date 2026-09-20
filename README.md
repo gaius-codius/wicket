@@ -21,7 +21,7 @@ Install the binary somewhere on your `PATH`.
 ```
 wicket                 # start the TUI
 wicket connect work    # connect a named profile without the TUI
-wicket --help
+wicket --help          # or -h, or: wicket help
 ```
 
 `wicket connect` is for Hyprland keybindings and scripts. It does not create a config file. On a non-TTY (no password prompt), the profile must already have a password saved from the TUI.
@@ -86,5 +86,9 @@ carry one trailing line break, which is dropped; anything spanning more than
 one line is refused rather than silently truncated.
 
 Wicket keeps its chrome inside the window at any size. Below about five rows
-it asks you to resize; between there and a full-height terminal it drops the
-divider, spacing and status line before it gives up any of the list.
+it asks you to resize; between there and a full-height terminal it drops
+spacing, the divider and then the footer keys before it gives up any of the
+list. The status line outlives the footer, since a warning you never see is
+lost while the keys are in the help view. Dialogs shed their explanatory note
+first, so the delete confirmation always names what it is about to delete and
+the password prompt always shows its field.

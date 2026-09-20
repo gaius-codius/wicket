@@ -252,3 +252,31 @@ func TestConnect_MultipleWarningSurvives(t *testing.T) {
 		t.Fatalf("status %q", h.m.status)
 	}
 }
+
+// Pressing n after a failed session asks for a replacement. Saying "No stored
+// password" there was backwards: a password is stored, and suspecting it is
+// wrong is the reason for pressing n at all.
+func TestRetry_NewPasswordDoesNotClaimThereIsNone(t *testing.T) {
+	_ = withFakeRDP(t)
+	store := secret.NewMemory()
+	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
+	p, _ := h.m.app.Cfg.Profile("work")
+	if err := store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, "secret")); err != nil {
+		t.Fatal(err)
+	}
+	h.m = press(h.m, "enter")
+	if h.m.view != viewRetry {
+		t.Fatalf("view %v, want the retry overlay", h.m.view)
+	}
+	h.m = press(h.m, "n")
+	if h.m.view != viewModal {
+		t.Fatalf("view %v, want the password modal", h.m.view)
+	}
+	out := stripANSI(screen(h.m))
+	if strings.Contains(out, "No stored password") {
+		t.Fatalf("the modal denies the stored password:\n%s", out)
+	}
+	if !strings.Contains(out, "Enter a new password for work") {
+		t.Fatalf("%s", out)
+	}
+}

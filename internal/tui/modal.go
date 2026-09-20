@@ -16,11 +16,14 @@ type modalState struct {
 	focused   bool
 	err       string
 	lookupErr error
+	// replacing is set when the user asked for a new password for a profile
+	// that may already have one, rather than being asked for a missing one.
+	replacing bool
 	ti        textinput.Model
 }
 
-func (m Model) openModal(p config.Profile, lookupErr error) (tea.Model, tea.Cmd) {
-	m.modal = modalState{profile: p, focused: true, lookupErr: lookupErr, ti: m.newInput("", true)}
+func (m Model) openModal(p config.Profile, lookupErr error, replacing bool) (tea.Model, tea.Cmd) {
+	m.modal = modalState{profile: p, focused: true, lookupErr: lookupErr, replacing: replacing, ti: m.newInput("", true)}
 	m.modal.ti.Focus()
 	m.view = viewModal
 	return m, nil
@@ -103,8 +106,13 @@ func (m Model) viewModal(lo layout) string {
 		mark = m.styles.accent.Render("▌ ")
 	}
 	note := "No stored password for " + md.profile.Name + "."
-	if md.lookupErr != nil {
+	switch {
+	case md.lookupErr != nil:
 		note = "Secret store unavailable; enter a password to continue."
+	case md.replacing:
+		// Reached by pressing n after a session failed, which is exactly when
+		// a password is stored and suspected of being wrong.
+		note = "Enter a new password for " + md.profile.Name + "."
 	}
 	// Wrapping here rather than letting the frame do it keeps the line count
 	// honest, so a long profile name cannot push the panel past the window.

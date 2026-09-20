@@ -52,7 +52,9 @@ func TestNoArgsStartsTUI(t *testing.T) {
 
 func TestHelpMentionsTUIAndConnect(t *testing.T) {
 	t.Parallel()
-	for _, flag := range []string{"--help", "-h"} {
+	// "help" is the word a user reaches for first, and it used to be an
+	// unknown command.
+	for _, flag := range []string{"--help", "-h", "help"} {
 		t.Run(flag, func(t *testing.T) {
 			t.Parallel()
 			got := runCLI(t, []string{flag})

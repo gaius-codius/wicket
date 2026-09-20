@@ -63,7 +63,7 @@ func (m Model) connectProfile(p config.Profile, typed *secret.Password) (tea.Mod
 	}
 	res := m.app.ResolveCredential(p, typed)
 	if res.NeedModal {
-		return m.openModal(p, res.Err)
+		return m.openModal(p, res.Err, false)
 	}
 	extra := ""
 	if res.Multiple {
@@ -169,7 +169,7 @@ func (m Model) handleRetryKey(key string) (tea.Model, tea.Cmd) {
 		}
 		m.retry = retryState{}
 		m.clearUseOnce()
-		return m.openModal(p, nil)
+		return m.openModal(p, nil, true)
 	case "enter":
 		p := m.retry.profile
 		held := m.retry.held

@@ -65,7 +65,7 @@ func helpKeys(v view) []hint {
 			{"←/→, home/end", "move in text"},
 			{"ctrl+w / ctrl+u", "delete word / line"},
 			{"space, enter", "toggle checkbox"},
-			{"←/→", "change scale"},
+			{"←/→, h/l", "change scale"},
 			{"ctrl+s", "save"},
 			{"esc", "cancel to list"},
 			{"?", "help (off a text field)"},

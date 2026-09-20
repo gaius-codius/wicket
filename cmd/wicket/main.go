@@ -46,7 +46,7 @@ func run(args []string, stdout, stderr io.Writer, runTUI func() error) int {
 	}
 
 	switch args[0] {
-	case "-h", "--help":
+	case "help", "-h", "--help":
 		fmt.Fprint(stdout, helpText)
 		return 0
 	case "connect":

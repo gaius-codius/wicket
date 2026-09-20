@@ -32,6 +32,12 @@ type PasswordIntent struct {
 func (i PasswordIntent) set() bool    { return i.Action == PasswordSet }
 func (i PasswordIntent) forget() bool { return i.Action == PasswordForget }
 
+func trim(fields ...*string) {
+	for _, f := range fields {
+		*f = strings.TrimSpace(*f)
+	}
+}
+
 type TerminalController interface {
 	Release() error
 	Restore() error
@@ -60,7 +66,11 @@ func (a *App) term() TerminalController {
 }
 
 func (a *App) SaveProfile(oldName string, newP config.Profile, intent PasswordIntent) (warnings []string, err error) {
-	newP.Size = strings.TrimSpace(newP.Size)
+	// Surrounding whitespace is trimmed rather than rejected. A paste was
+	// already trimmed on its way into the field, so typing the same trailing
+	// space was the only way to see "must not have leading or trailing
+	// whitespace" -- the validator still guards a hand-edited config file.
+	trim(&newP.Name, &newP.Host, &newP.User, &newP.Domain, &newP.Client, &newP.Size)
 	if err := config.ValidateProfile(newP); err != nil {
 		return nil, err
 	}

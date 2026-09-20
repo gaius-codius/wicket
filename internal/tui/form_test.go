@@ -457,3 +457,26 @@ func TestStatus_SaveAndDeleteWarningsAreErrors(t *testing.T) {
 		t.Fatalf("delete warning is not marked as an error: %q\n%s", h2.m.status, stripANSI(h2.m.render()))
 	}
 }
+
+// A paste is trimmed on its way into the field, so typing the same trailing
+// space was the only way to be told off for it. Both are trimmed on save now.
+func TestForm_TypedWhitespaceIsTrimmedNotRejected(t *testing.T) {
+	h := newHarness(t, "", secret.NewMemory())
+	h.m = press(h.m, "n")
+	h.m = typeInto(h.m, "  work  ")
+	h.m = focusField(t, h.m, fieldHost)
+	h.m = typeInto(h.m, " host.invalid ")
+	h.m = focusField(t, h.m, fieldUser)
+	h.m = typeInto(h.m, " jdoe ")
+	h.m = press(h.m, "ctrl+s")
+	if h.m.view != viewList {
+		t.Fatalf("view=%v err=%s", h.m.view, h.m.form.err)
+	}
+	p, ok := h.m.app.Cfg.Profile("work")
+	if !ok {
+		t.Fatalf("profile not saved under a trimmed name: %+v", h.m.app.Cfg.Profiles())
+	}
+	if p.Host != "host.invalid" || p.User != "jdoe" {
+		t.Fatalf("%+v", p)
+	}
+}

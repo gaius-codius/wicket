@@ -287,7 +287,6 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	f := m.form
 	f.err = ""
 	f.errField = ""
-	f.p.Size = strings.TrimSpace(f.p.Size)
 	// A typed password is stored, an empty one leaves the keyring as it is, and
 	// the checkbox clears it. editText and toggleFormField keep the first and
 	// last of those from being asked for at once.

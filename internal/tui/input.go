@@ -62,8 +62,28 @@ func trimOneLineEnd(s string) string {
 	return s
 }
 
-// inputView renders ti at width cells.
+// inputView renders ti in width cells.
+//
+// Two bubbles quirks have to be worked around here. The widget always draws
+// one cell more than the width it is given -- a cursor cell past the end of
+// the value, or an extra cell of padding -- so it is asked for one less. And
+// it recomputes its horizontal scroll window only when the cursor moves, not
+// when the width changes; because the width is set here, on a copy, rather
+// than on the stored input, a long value would otherwise be drawn in full and
+// wrap the row it sits in. Walking the cursor to the end forces the recompute,
+// and walking it back anchors an unfocused value at its head, which is the
+// interesting end of a name or a hostname.
 func inputView(ti textinput.Model, width int) string {
-	ti.SetWidth(max(width, 1))
+	if width < 2 {
+		return ""
+	}
+	ti.SetWidth(width - 1)
+	pos := ti.Position()
+	ti.CursorEnd()
+	if ti.Focused() {
+		ti.SetCursor(pos)
+	} else {
+		ti.CursorStart()
+	}
 	return ti.View()
 }

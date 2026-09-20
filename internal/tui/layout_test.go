@@ -36,7 +36,10 @@ func TestRender_NeverOverflowsTheWindow(t *testing.T) {
 	var bad int
 	for w := widthTiny; w <= 130; w++ {
 		for h := heightTiny; h <= 30; h++ {
-			for _, keys := range [][]string{nil, {"/"}, {"n"}, {"?"}, {"D"}, {"enter"}} {
+			// "e" matters as much as "n": the edit form is the only one whose
+			// fields hold values, and a value wider than its column is what
+			// used to wrap the row and push the bottom border off screen.
+			for _, keys := range [][]string{nil, {"/"}, {"n"}, {"e"}, {"?"}, {"D"}, {"enter"}} {
 				m := sized(t, cfg, w, h, keys...)
 				gotW, gotH := measure(m.render())
 				if gotW > w || gotH > h {
@@ -50,6 +53,58 @@ func TestRender_NeverOverflowsTheWindow(t *testing.T) {
 	}
 	if bad > 0 {
 		t.Fatalf("%d size and view combinations overflowed", bad)
+	}
+}
+
+// A value longer than its column scrolls inside the column; it must not wrap
+// onto the next line, which cost the panel its bottom border on a short
+// terminal.
+func TestForm_LongValueStaysOnItsRow(t *testing.T) {
+	m := sized(t, fixtureTOML("work", "h", "u"), 80, 24, "e")
+	before := strings.Split(stripANSI(m.render()), "\n")
+	m = typeInto(m, strings.Repeat("X", 60))
+	after := strings.Split(stripANSI(m.render()), "\n")
+	if len(after) != len(before) {
+		t.Fatalf("row wrapped: %d lines, was %d:\n%s", len(after), len(before), strings.Join(after, "\n"))
+	}
+	var row string
+	for _, ln := range after {
+		if strings.Contains(ln, "name:") {
+			row = ln
+		}
+		if w := lipgloss.Width(ln); w != 0 && w != 80 {
+			t.Fatalf("line is %d cells wide:\n%s", w, strings.Join(after, "\n"))
+		}
+	}
+	if !strings.Contains(row, "XXXX") {
+		t.Fatalf("the value left its row: %q", row)
+	}
+}
+
+// Every form row occupies exactly one line. A row that wraps costs the panel a
+// line it never budgeted for; the size placeholder did that at narrow widths,
+// because the text input draws one cell more than the width it is given.
+func TestForm_RowsNeverWrap(t *testing.T) {
+	cfg := fixtureTOML("work", "host.invalid", "user")
+	for w := widthTiny; w <= 130; w++ {
+		for _, key := range []string{"n", "e"} {
+			m := sized(t, cfg, w, 30, key)
+			lo := m.panelLayout()
+			m.fitChrome(&lo)
+			rows := strings.Split(m.viewForm(lo), "\n")
+			if want := len(m.form.fields()); len(rows) != want {
+				t.Fatalf("width %d, %q: %d lines for %d rows:\n%s",
+					w, key, len(rows), want, stripANSI(m.render()))
+			}
+			for i, ln := range rows {
+				// A row wider than the panel wraps inside the frame, which
+				// the row count above cannot see.
+				if got := lipgloss.Width(ln); got > lo.Inner {
+					t.Fatalf("width %d, %q: row %d is %d cells in a %d-cell panel:\n%s",
+						w, key, i, got, lo.Inner, stripANSI(m.render()))
+				}
+			}
+		}
 	}
 }
 

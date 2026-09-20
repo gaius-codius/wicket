@@ -212,15 +212,9 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) render() string {
-	lo := newLayout(m.width, m.height)
+	lo := m.panelLayout()
 	if lo.Tiny && m.view != viewLoadErr {
 		return m.styles.muted.Render("resize terminal")
-	}
-	if lo.Wide && m.view != viewList && m.view != viewRetry {
-		// Only the list uses the wide two-pane layout; forms and dialogs
-		// read better at the normal width.
-		lo.Panel = min(lo.Panel, panelNormal)
-		lo.Inner = max(lo.Panel-4, 1)
 	}
 	context, status, foot, c := m.fitChrome(&lo)
 
@@ -257,6 +251,18 @@ func (m Model) render() string {
 		panel = assemble(bodyLines)
 	}
 	return lipgloss.Place(lo.Width, lo.Height, lipgloss.Center, lipgloss.Center, panel)
+}
+
+// panelLayout is the layout the current view is drawn in.
+func (m Model) panelLayout() layout {
+	lo := newLayout(m.width, m.height)
+	if lo.Wide && m.view != viewList && m.view != viewRetry {
+		// Only the list uses the wide two-pane layout; forms and dialogs
+		// read better at the normal width.
+		lo.Panel = min(lo.Panel, panelNormal)
+		lo.Inner = max(lo.Panel-4, 1)
+	}
+	return lo
 }
 
 // fitChrome decides which pieces of the panel survive at the current height

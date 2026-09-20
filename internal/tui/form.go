@@ -122,12 +122,6 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 		}
 	}
 	f.inputs[fieldSize].Placeholder = "dimension (1920x1080), N% (100%) or empty for default"
-	// Saying what an empty field does answers the question the form otherwise
-	// leaves open on an edit: whether a stored password is about to be lost.
-	f.inputs[fieldPassword].Placeholder = "saved to the keyring"
-	if oldName != "" {
-		f.inputs[fieldPassword].Placeholder = "empty keeps the saved password"
-	}
 	f.focus(fieldName)
 	m.form = f
 	m.view = viewForm

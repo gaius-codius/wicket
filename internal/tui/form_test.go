@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -429,5 +430,30 @@ func TestForm_TypedPasswordOnEditReplacesTheStoredOne(t *testing.T) {
 	}
 	if buf.String() != "new\n" {
 		t.Fatalf("stored %q, want the typed password", buf.String())
+	}
+}
+
+// A warning from a save or a delete is something that did not happen, so it
+// gets the error marker. It used to share the informational "•" with routine
+// notes, which read as though the password had been stored.
+func TestStatus_SaveAndDeleteWarningsAreErrors(t *testing.T) {
+	cfg := fixtureTOML("work", "h", "u")
+	store := &wrapStore{inner: secret.NewMemory(), upsertErr: errors.New("boom")}
+	h := newHarness(t, cfg, store)
+	h.m = press(h.m, "e")
+	h.m = focusField(t, h.m, fieldPassword)
+	h.m = typeInto(h.m, "pw")
+	h.m = press(h.m, "ctrl+s")
+	if !strings.Contains(h.m.status, "could not save password") {
+		t.Fatalf("status %q", h.m.status)
+	}
+	if !h.m.statusErr || !strings.Contains(stripANSI(h.m.render()), "✗ could not save password") {
+		t.Fatalf("warning is not marked as an error:\n%s", stripANSI(h.m.render()))
+	}
+
+	h2 := newHarness(t, cfg, &wrapStore{inner: secret.NewMemory(), deleteErr: errors.New("boom")})
+	h2.m = press(h2.m, "D", "y")
+	if !h2.m.statusErr || !strings.Contains(stripANSI(h2.m.render()), "✗ a leftover secret") {
+		t.Fatalf("delete warning is not marked as an error: %q\n%s", h2.m.status, stripANSI(h2.m.render()))
 	}
 }

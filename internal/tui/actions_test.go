@@ -202,9 +202,9 @@ func TestSaveProfile_RenameMovesState(t *testing.T) {
 	}
 }
 
-func TestSaveProfile_RenameLookupUnavailableAborts(t *testing.T) {
+func TestSaveProfile_RenameSurvivesAnUnreachableKeyring(t *testing.T) {
 	inner := secret.NewMemory()
-	store := &wrapStore{inner: inner, lookupErr: secret.ErrUnavailable}
+	store := &wrapStore{inner: inner, lookupErr: secret.ErrUnavailable, deleteErr: secret.ErrUnavailable}
 	a := testApp(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := a.Cfg.Profile("work")
 	oldID := secret.IdentityFor(a.Cfg.Path(), p)
@@ -213,17 +213,35 @@ func TestSaveProfile_RenameLookupUnavailableAborts(t *testing.T) {
 	}
 	newP := p
 	newP.Name = "office"
-	if _, err := a.SaveProfile("work", newP, PasswordIntent{}); err == nil {
-		t.Fatal("want abort")
+	// Without a Secret Service there is no way to tell whether this profile
+	// even has a password, and refusing the rename made renaming impossible
+	// on any machine without one.
+	warns, err := a.SaveProfile("work", newP, PasswordIntent{})
+	if err != nil {
+		t.Fatalf("rename blocked by the keyring: %v", err)
 	}
-	if _, ok := a.Cfg.Profile("work"); !ok {
-		t.Fatal("TOML renamed despite abort")
+	if _, ok := a.Cfg.Profile("office"); !ok {
+		t.Fatal("profile not renamed")
 	}
-	if _, ok := a.Cfg.Profile("office"); ok {
-		t.Fatal("new name written")
+	if len(warns) != 1 || !strings.Contains(warns[0], "keyring unavailable") {
+		t.Fatalf("warnings %q, want one naming the keyring", warns)
 	}
 	if _, err := inner.Lookup(oldID); err != nil {
 		t.Fatalf("old secret destroyed: %v", err)
+	}
+}
+
+func TestDeleteProfile_UnreachableKeyringSaysSo(t *testing.T) {
+	store := &wrapStore{inner: secret.NewMemory(), deleteErr: secret.ErrUnavailable}
+	a := testApp(t, fixtureTOML("work", "h", "u"), store)
+	warns, err := a.DeleteProfile("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "a leftover secret may remain" claimed one for every profile deleted
+	// without a keyring, including the ones that never had a password.
+	if len(warns) != 1 || !strings.Contains(warns[0], "keyring unavailable") {
+		t.Fatalf("warnings %q", warns)
 	}
 }
 

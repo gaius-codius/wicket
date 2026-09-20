@@ -140,12 +140,12 @@ func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce b
 		hp := held
 		m.retry = retryState{profile: p, held: &hp, useOnce: keepUseOnce, status: cr.Status, class: cr.Class}
 		m.view = viewRetry
-		m.setStatus(warn, false)
+		m.setStatus(warn, warn != "")
 	default:
 		m.retry = retryState{}
 		m.view = viewList
 		m.clearUseOnce()
-		m.setStatus(status, cr.IsError)
+		m.setStatus(status, cr.IsError || warn != "")
 	}
 	return m, nil
 }

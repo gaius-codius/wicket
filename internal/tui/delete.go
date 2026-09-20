@@ -41,11 +41,7 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 	} else {
 		m.cursor = idx
 	}
-	if len(warns) > 0 {
-		m.setStatus(strings.Join(warns, "; "), false)
-	} else {
-		m.setStatus("", false)
-	}
+	m.setStatus(strings.Join(warns, "; "), len(warns) > 0)
 	return m, nil
 }
 

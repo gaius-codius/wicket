@@ -320,11 +320,9 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	m.view = viewList
 	m.clearFilter()
 	m.selectName(name)
-	if len(warns) > 0 {
-		m.setStatus(strings.Join(warns, "; "), false)
-	} else {
-		m.setStatus("", false)
-	}
+	// Every warning SaveProfile returns is something that did not happen, so
+	// they carry the error marker rather than the informational one.
+	m.setStatus(strings.Join(warns, "; "), len(warns) > 0)
 	return m, nil
 }
 

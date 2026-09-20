@@ -85,23 +85,28 @@ func (a *App) SaveProfile(oldName string, newP config.Profile, intent PasswordIn
 	}
 	newID := secret.IdentityFor(a.Cfg.Path(), newP)
 
+	// A rename leaves the identity otherwise unchanged, so an existing secret
+	// is carried to the new name before the config moves and the old entry is
+	// deleted below. A typed replacement needs none of that: it is written
+	// after the config, like every other save.
 	copiedNew := false
-	if renamed && !identityChanged {
-		if intent.set() {
-			if err := a.Secrets.Upsert(newID, intent.Password); err != nil {
+	if renamed && !identityChanged && !intent.set() && !intent.forget() {
+		res, lerr := a.Secrets.Lookup(oldID)
+		switch {
+		case lerr == nil:
+			if err := a.Secrets.Upsert(newID, res.Password); err != nil {
 				return nil, err
 			}
 			copiedNew = true
-		} else if !intent.forget() {
-			res, lerr := a.Secrets.Lookup(oldID)
-			if lerr == nil {
-				if err := a.Secrets.Upsert(newID, res.Password); err != nil {
-					return nil, err
-				}
-				copiedNew = true
-			} else if !errors.Is(lerr, secret.ErrNotFound) {
-				return nil, lerr
-			}
+		case errors.Is(lerr, secret.ErrNotFound):
+			// Nothing to carry over.
+		case errors.Is(lerr, secret.ErrUnavailable):
+			// A keyring Wicket cannot reach must not block a rename. The
+			// profile may have no password at all, and on a machine with no
+			// Secret Service there would otherwise be no way to rename
+			// anything. The delete below reports what was left behind.
+		default:
+			return nil, lerr
 		}
 	}
 
@@ -122,11 +127,11 @@ func (a *App) SaveProfile(oldName string, newP config.Profile, intent PasswordIn
 
 	if old != nil && (renamed || identityChanged || intent.forget()) {
 		if err := a.Secrets.Delete(oldID); err != nil && !errors.Is(err, secret.ErrNotFound) {
-			warnings = append(warnings, "a leftover secret may remain")
+			warnings = append(warnings, leftoverWarning(err))
 		}
 	}
 
-	if intent.set() && !copiedNew {
+	if intent.set() {
 		if err := a.Secrets.Upsert(newID, intent.Password); err != nil {
 			warnings = append(warnings, "could not save password: "+err.Error())
 		}
@@ -149,9 +154,20 @@ func (a *App) DeleteProfile(name string) (warnings []string, err error) {
 		}
 	}
 	if err := a.Secrets.Delete(id); err != nil && !errors.Is(err, secret.ErrNotFound) {
-		warnings = append(warnings, "a leftover secret may remain")
+		warnings = append(warnings, leftoverWarning(err))
 	}
 	return warnings, nil
+}
+
+// leftoverWarning describes a secret that could not be removed. A keyring that
+// is not there at all is worth saying plainly: the old warning claimed a
+// leftover secret for every profile deleted on a machine with no Secret
+// Service, including the ones that never had a password.
+func leftoverWarning(err error) string {
+	if errors.Is(err, secret.ErrUnavailable) {
+		return "keyring unavailable; any saved password was left in place"
+	}
+	return "a leftover secret may remain"
 }
 
 type credResult struct {

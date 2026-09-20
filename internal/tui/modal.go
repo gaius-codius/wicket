@@ -121,19 +121,25 @@ func (m Model) viewModal(lo layout) string {
 	if lo.Inner < 24 {
 		label = "pw"
 	}
-	// The field is the point of the dialog, and the error says why it is
-	// still here, so both outlast the note. Clipping the view from the bottom
-	// instead hid the field entirely below ten rows, while keystrokes still
-	// went into it and enter still connected with whatever it held.
-	tail := []string{mark + m.styles.muted.Render(label+"  ") +
+	// The field is the dialog: without it there is nothing to answer with,
+	// and keystrokes reach it whether or not it is drawn. So it is kept
+	// first, then the error, then the note -- which only restates what the
+	// user can see. Clipping the whole view from the bottom instead lost the
+	// field at any height under ten, and keeping the error ahead of it lost
+	// the field again as soon as there was an error to show.
+	lines := []string{mark + m.styles.muted.Render(label+"  ") +
 		inputView(md.ti, max(lo.Inner-len(label)-4, 1))}
 	if md.err != "" {
-		tail = append(tail, "")
-		tail = append(tail, strings.Split(m.styles.danger.Render(wrap.Render("✗ "+md.err)), "\n")...)
+		errText := strings.Split(m.styles.danger.Render(wrap.Render("✗ "+md.err)), "\n")
+		// The blank line separating the error from the field is the first
+		// thing to go, so a panel with room for one more line spends it on
+		// the error rather than on the gap above it.
+		if room := lo.Budget - len(lines); room > len(errText) {
+			lines = append(lines, append([]string{""}, errText...)...)
+		} else {
+			lines = append(lines, fit(errText, room)...)
+		}
 	}
 	head := append(strings.Split(m.styles.muted.Render(wrap.Render(note)), "\n"), "")
-	if room := lo.Budget - len(tail); room > 0 {
-		return strings.Join(append(clipLines(head, room), tail...), "\n")
-	}
-	return strings.Join(clipLines(tail, lo.Budget), "\n")
+	return strings.Join(append(fit(head, lo.Budget-len(lines)), lines...), "\n")
 }

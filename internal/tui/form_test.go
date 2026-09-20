@@ -480,3 +480,24 @@ func TestForm_TypedWhitespaceIsTrimmedNotRejected(t *testing.T) {
 		t.Fatalf("%+v", p)
 	}
 }
+
+// The saved profile is the one selected afterwards, even when the name was
+// typed with whitespace around it: the form used to look for the untrimmed
+// name, find nothing, and silently leave the cursor where it was.
+func TestForm_SelectsTheSavedProfileAfterTrimming(t *testing.T) {
+	h := newHarness(t, fixtureTOML("aaa", "h", "u"), secret.NewMemory())
+	h.m = press(h.m, "n")
+	h.m = typeInto(h.m, "  qqq  ")
+	h.m = focusField(t, h.m, fieldHost)
+	h.m = typeInto(h.m, "192.0.2.9")
+	h.m = focusField(t, h.m, fieldUser)
+	h.m = typeInto(h.m, "u")
+	h.m = press(h.m, "ctrl+s")
+	if h.m.view != viewList {
+		t.Fatalf("view=%v err=%s", h.m.view, h.m.form.err)
+	}
+	sel, ok := h.m.selected()
+	if !ok || sel.Name != "qqq" {
+		t.Fatalf("selected %+v, want the profile just saved", sel)
+	}
+}

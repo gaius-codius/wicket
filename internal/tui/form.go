@@ -287,6 +287,10 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	f := m.form
 	f.err = ""
 	f.errField = ""
+	// Trim before saving rather than after: SaveProfile trims its own copy,
+	// so the form was left holding " work " and selected a profile by a name
+	// that no longer existed.
+	trim(&f.p.Name, &f.p.Host, &f.p.User, &f.p.Domain, &f.p.Client, &f.p.Size)
 	// A typed password is stored, an empty one leaves the keyring as it is, and
 	// the checkbox clears it. editText and toggleFormField keep the first and
 	// last of those from being asked for at once.

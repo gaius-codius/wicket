@@ -359,6 +359,16 @@ func (m Model) bodyLines(lo layout) []string {
 	return clipLines(strings.Split(body, "\n"), lo.Budget)
 }
 
+// fit returns as much of lines as room allows, and nothing at all when the
+// only thing that would survive is the ellipsis clipLines leaves behind: a
+// lone "…" spends a line of a short panel saying nothing.
+func fit(lines []string, room int) []string {
+	if room <= 0 || (room == 1 && len(lines) > 1) {
+		return nil
+	}
+	return clipLines(lines, room)
+}
+
 // clipLines trims lines to at most n, marking the cut with an ellipsis so a
 // truncated view does not look like the whole of it.
 func clipLines(lines []string, n int) []string {

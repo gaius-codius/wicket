@@ -201,17 +201,21 @@ func TestDialogs_KeepWhatMatters(t *testing.T) {
 			if !strings.Contains(del, "Delete") {
 				t.Fatalf("%dx%d: the delete confirmation names nothing:\n%s", w, h, del)
 			}
-			modal := sized(t, cfg, w, h, "enter")
-			if modal.view != viewModal {
-				t.Fatalf("%dx%d: view %v, want the password modal", w, h, modal.view)
-			}
-			out := stripANSI(modal.render())
 			label := "password"
 			if newLayout(w, h).Inner < 24 {
 				label = "pw"
 			}
-			if !strings.Contains(out, label) {
-				t.Fatalf("%dx%d: no password field:\n%s", w, h, out)
+			// Once with nothing to report, once with an error on screen: the
+			// error used to take the field's line with it.
+			for _, keys := range [][]string{{"enter"}, {"enter", "enter"}} {
+				modal := sized(t, cfg, w, h, keys...)
+				if modal.view != viewModal {
+					t.Fatalf("%dx%d after %v: view %v, want the password modal", w, h, keys, modal.view)
+				}
+				out := stripANSI(modal.render())
+				if !strings.Contains(out, label) {
+					t.Fatalf("%dx%d after %v: no password field:\n%s", w, h, keys, out)
+				}
 			}
 		}
 	}
@@ -229,5 +233,15 @@ func TestRender_ShortTerminalKeepsTheStatus(t *testing.T) {
 		if !strings.Contains(out, "could not save password") {
 			t.Fatalf("height %d dropped the status:\n%s", h, out)
 		}
+	}
+}
+
+// The blank line above the error is worth less than the error, so a panel
+// with one line to spare spends it on the message rather than the gap.
+func TestModal_ShowsTheErrorWhenOneLineIsLeft(t *testing.T) {
+	m := sized(t, fixtureTOML("work", "host.invalid", "user"), 80, 9, "enter", "enter")
+	out := stripANSI(m.render())
+	if !strings.Contains(out, "password") || !strings.Contains(out, "✗ password required") {
+		t.Fatalf("80x9 shows the field but not why it is still here:\n%s", out)
 	}
 }

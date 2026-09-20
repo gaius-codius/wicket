@@ -61,8 +61,6 @@ func (m Model) viewDelete(lo layout) string {
 	// terminal asking for a "y" with nothing but an ellipsis to go on.
 	note := strings.Split(m.styles.muted.Render(wrap.Render(
 		"Removes the profile, its last-used time, and its stored password.")), "\n")
-	if room := lo.Budget - len(lines); room > 0 {
-		lines = append(lines, clipLines(note, room)...)
-	}
+	lines = append(lines, fit(note, lo.Budget-len(lines))...)
 	return strings.Join(lines, "\n")
 }

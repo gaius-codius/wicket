@@ -38,9 +38,12 @@ type Model struct {
 	status    string
 	statusErr bool
 	helpFor   view
-	loadErr   string
-	loadPath  string
-	quit      bool
+	// helpTop is the first help line shown, so a long key list stays
+	// reachable in a short terminal.
+	helpTop  int
+	loadErr  string
+	loadPath string
+	quit     bool
 	// now drives relative last-used times; nil means time.Now.
 	now func() time.Time
 
@@ -48,6 +51,10 @@ type Model struct {
 	// filter input has focus.
 	filter    textinput.Model
 	filtering bool
+	// filterErr holds the status message the filter replaced with its own
+	// error, so clearing the error restores it.
+	filterErr    string
+	filterErrSet bool
 
 	form        formState
 	delName     string
@@ -135,11 +142,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case connectDoneMsg:
 		return m.handleConnectDone(msg)
-	case tea.InterruptMsg:
-		if m.connecting {
-			return m, nil
-		}
-		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	case tea.PasteMsg:
@@ -218,21 +220,119 @@ func (m Model) render() string {
 		// Only the list uses the wide two-pane layout; forms and dialogs
 		// read better at the normal width.
 		lo.Panel = min(lo.Panel, panelNormal)
-		lo.Inner = lo.Panel - 4
+		lo.Inner = max(lo.Panel-4, 1)
 	}
-	context, hs := m.chrome()
-	foot := m.hints(lo.Inner, hs...)
-	status := m.statusLines(lo.Inner)
-	var retry string
-	if m.view == viewRetry {
-		retry = m.viewRetry(lo)
-	}
-	lo.Budget = lo.Height - chromeLines - len(foot) - len(status)
-	if retry != "" {
-		lo.Budget -= lipgloss.Height(retry) + 1
-	}
-	lo.Budget = max(lo.Budget, 1)
+	context, status, foot, c := m.fitChrome(&lo)
 
+	bodyLines := m.bodyLines(lo)
+	assemble := func(body []string) string {
+		parts := make([]string, 0, len(body)+len(status)+len(foot)+4)
+		if c.header {
+			parts = append(parts, m.header(lo.Inner, context))
+		}
+		if c.divider {
+			parts = append(parts, m.divider(lo.Inner))
+		}
+		if c.topGap {
+			parts = append(parts, "")
+		}
+		parts = append(parts, body...)
+		if c.gap {
+			parts = append(parts, "")
+		}
+		if c.status {
+			parts = append(parts, status...)
+		}
+		if c.foot {
+			parts = append(parts, foot...)
+		}
+		return m.styles.frame.Width(lo.Panel).Render(strings.Join(parts, "\n"))
+	}
+	panel := assemble(bodyLines)
+	// A body that measures taller than it counted (a wrapped line, say) would
+	// still push the border off screen. Give lines back until it fits, rather
+	// than cutting the frame.
+	for lipgloss.Height(panel) > lo.Height && len(bodyLines) > 1 {
+		bodyLines = bodyLines[:len(bodyLines)-1]
+		panel = assemble(bodyLines)
+	}
+	return lipgloss.Place(lo.Width, lo.Height, lipgloss.Center, lipgloss.Center, panel)
+}
+
+// fitChrome decides which pieces of the panel survive at the current height
+// and sets lo.Budget to the lines left for the body.
+//
+// Chrome is dropped least-useful-first so the body keeps at least one line and
+// the panel still fits the window. Without this the frame ran off the bottom
+// of any terminal under eight rows, taking the footer and the bottom border
+// with it.
+func (m Model) fitChrome(lo *layout) (context string, status, foot []string, c chromeParts) {
+	context, hs := m.chrome()
+	foot = m.hints(lo.Inner, hs...)
+	status = m.statusLines(lo.Inner)
+
+	c = chromeParts{header: true, divider: true, topGap: true, gap: true,
+		status: len(status) > 0, foot: len(foot) > 0}
+	avail := max(lo.Height-2, 1) // the frame's top and bottom border
+	for _, drop := range []*bool{&c.gap, &c.topGap, &c.divider, &c.status, &c.foot, &c.header} {
+		if c.cost(len(status), len(foot))+1 <= avail {
+			break
+		}
+		*drop = false
+	}
+	lo.Budget = max(avail-c.cost(len(status), len(foot)), 1)
+	return context, status, foot, c
+}
+
+// listBudget is how many rows the list body gets at the current size. Page
+// movement uses it so pgup and pgdn move by what is on screen, rather than by
+// half the window, which counted the chrome as list rows.
+func (m Model) listBudget() int {
+	lo := newLayout(m.width, m.height)
+	m.fitChrome(&lo)
+	if m.filterActive() {
+		lo.Budget = max(lo.Budget-2, 1)
+	}
+	return lo.Budget
+}
+
+// chromeParts records which pieces of the panel survive at the current height.
+type chromeParts struct {
+	header, divider, topGap, gap, status, foot bool
+}
+
+func (c chromeParts) cost(statusLines, footLines int) int {
+	n := 0
+	for _, on := range []bool{c.header, c.divider, c.topGap, c.gap} {
+		if on {
+			n++
+		}
+	}
+	if c.status {
+		n += statusLines
+	}
+	if c.foot {
+		n += footLines
+	}
+	return n
+}
+
+// bodyLines renders the current view into at most lo.Budget lines.
+func (m Model) bodyLines(lo layout) []string {
+	if m.view == viewRetry {
+		// The overlay is the point of this view, so it takes its lines first
+		// and the list underneath gets what is left.
+		rl := strings.Split(m.viewRetry(lo), "\n")
+		if len(rl) > lo.Budget-1 {
+			rl = rl[:max(lo.Budget-1, 0)]
+		}
+		listLo := lo
+		listLo.Budget = max(lo.Budget-len(rl)-1, 1)
+		out := strings.Split(m.viewList(listLo), "\n")
+		out = append(out, "")
+		out = append(out, rl...)
+		return clipLines(out, lo.Budget)
+	}
 	var body string
 	switch m.view {
 	case viewHelp:
@@ -245,23 +345,31 @@ func (m Model) render() string {
 		body = m.viewDelete(lo)
 	case viewModal:
 		body = m.viewModal(lo)
-	case viewRetry:
-		body = m.viewList(lo) + "\n\n" + retry
 	default:
 		body = m.viewList(lo)
 	}
-	parts := []string{m.header(lo.Inner, context), m.divider(lo.Inner), "", body, ""}
-	parts = append(parts, status...)
-	parts = append(parts, foot...)
-	panel := m.styles.frame.Width(lo.Panel).Render(strings.Join(parts, "\n"))
-	return lipgloss.Place(lo.Width, lo.Height, lipgloss.Center, lipgloss.Center, panel)
+	return clipLines(strings.Split(body, "\n"), lo.Budget)
+}
+
+// clipLines trims lines to at most n, marking the cut with an ellipsis so a
+// truncated view does not look like the whole of it.
+func clipLines(lines []string, n int) []string {
+	if n < 1 {
+		n = 1
+	}
+	if len(lines) <= n {
+		return lines
+	}
+	out := append([]string{}, lines[:n]...)
+	out[n-1] = "…"
+	return out
 }
 
 // chrome returns the header context and footer keys for the current view.
 func (m Model) chrome() (string, []hint) {
 	switch m.view {
 	case viewHelp:
-		return "keys", []hint{{"esc", "close"}}
+		return "keys", []hint{{"↑/↓", "scroll"}, {"esc", "close"}}
 	case viewLoadErr:
 		return "config error", []hint{{"q", "quit"}, {"?", "help"}}
 	case viewForm:
@@ -272,7 +380,12 @@ func (m Model) chrome() (string, []hint) {
 		if m.form.confirmDiscard {
 			return ctx, []hint{{"y", "discard"}, {"n", "keep editing"}}
 		}
-		return ctx, []hint{{"ctrl+s", "save"}, {"↑/↓", "move"}, {"esc", "cancel"}, {"?", "help"}}
+		hs := []hint{{"ctrl+s", "save"}, {"↑/↓", "move"}, {"esc", "cancel"}}
+		if m.form.textFocused() {
+			// ? is text while a field has focus, so do not offer it here.
+			return ctx, hs
+		}
+		return ctx, append(hs, hint{"?", "help"})
 	case viewDelete:
 		return "delete connection", []hint{{"y", "confirm"}, {"n", "cancel"}, {"?", "help"}}
 	case viewModal:
@@ -327,6 +440,7 @@ func (m Model) quitNow() (tea.Model, tea.Cmd) {
 func (m Model) openHelp() (tea.Model, tea.Cmd) {
 	m.prev = m.view
 	m.helpFor = m.view
+	m.helpTop = 0
 	m.view = viewHelp
 	return m, nil
 }
@@ -342,20 +456,6 @@ func (m *Model) selectName(name string) {
 			m.cursor = i
 			return
 		}
-	}
-}
-
-func (m *Model) clampCursor() {
-	ps := m.profiles()
-	if len(ps) == 0 {
-		m.cursor = 0
-		return
-	}
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
-	if m.cursor >= len(ps) {
-		m.cursor = len(ps) - 1
 	}
 }
 

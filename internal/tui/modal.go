@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"strings"
+
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
@@ -103,10 +106,20 @@ func (m Model) viewModal(lo layout) string {
 	if md.lookupErr != nil {
 		note = "Secret store unavailable; enter a password to continue."
 	}
-	body := m.styles.muted.Render(note) + "\n\n" +
-		mark + m.styles.muted.Render("password  ") + inputView(md.ti, lo.Inner-12)
-	if md.err != "" {
-		body += "\n\n" + m.styles.danger.Render("✗ "+md.err)
+	// Wrapping here rather than letting the frame do it keeps the line count
+	// honest, so a long profile name cannot push the panel past the window.
+	wrap := lipgloss.NewStyle().Width(lo.Inner)
+	label := "password"
+	if lo.Inner < 24 {
+		label = "pw"
 	}
-	return body
+	lines := strings.Split(m.styles.muted.Render(wrap.Render(note)), "\n")
+	lines = append(lines, "")
+	lines = append(lines, mark+m.styles.muted.Render(label+"  ")+
+		inputView(md.ti, max(lo.Inner-len(label)-4, 1)))
+	if md.err != "" {
+		lines = append(lines, "")
+		lines = append(lines, strings.Split(m.styles.danger.Render(wrap.Render("✗ "+md.err)), "\n")...)
+	}
+	return strings.Join(lines, "\n")
 }

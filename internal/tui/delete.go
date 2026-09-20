@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 func (m Model) handleDeleteKey(key string) (tea.Model, tea.Cmd) {
@@ -49,13 +50,15 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) viewDelete(lo layout) string {
-	_ = lo
 	p, ok := m.app.Cfg.Profile(m.delName)
 	name, host := m.delName, ""
 	if ok {
 		name, host = p.Name, p.Host
 	}
-	return m.styles.primary.Render("Delete ") + m.styles.primary.Bold(true).Render(name) +
-		m.styles.muted.Render(" ("+host+")") + m.styles.primary.Render("?") + "\n" +
-		m.styles.muted.Render("Removes the profile, its last-used time, and its stored password.")
+	wrap := lipgloss.NewStyle().Width(lo.Inner)
+	// The name and host come from the config and can be longer than the
+	// panel, so the question is truncated and the note is wrapped.
+	head := truncate("Delete "+name+" ("+host+")?", lo.Inner)
+	return m.styles.primary.Render(head) + "\n" +
+		m.styles.muted.Render(wrap.Render("Removes the profile, its last-used time, and its stored password."))
 }

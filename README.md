@@ -40,9 +40,18 @@ values. Keep comments you care about somewhere else, or edit the file by hand
 only. Keys named `password`, `pass`, `secret`, or `passwd` are stripped on save
 and reported, so a password never gets written back to disk.
 
+A save takes a lock beside the file and re-reads it first, so an edit made in
+another editor (or another Wicket) while a form was open is not overwritten.
+Profile fields reject control characters: a newline or an escape sequence in a
+host or a name would otherwise reach the terminal and the FreeRDP command line.
+
 ## Theme
 
 At start, Wicket reads `$HOME/.local/state/omarchy/current/theme/colors.toml` and maps Omarchy tokens onto its chrome. A missing or broken theme file falls back per role and does not block the TUI.
+
+Text is held to the WCAG AA contrast ratio against the theme's own background.
+A theme whose foreground would be unreadable there is overridden, so the UI is
+legible on every installed theme rather than only on most of them.
 
 ## Keys (list)
 
@@ -50,7 +59,7 @@ At start, Wicket reads `$HOME/.local/state/omarchy/current/theme/colors.toml` an
 |-----|--------|
 | `j` / `k`, arrows | Move |
 | `g` / `G`, Home / End | First / last |
-| PgUp / PgDn | Page |
+| PgUp / PgDn | Page (one screen of rows) |
 | `/` | Filter by name or host (Esc clears) |
 | `Enter` | Connect |
 | `n` | New profile |
@@ -61,5 +70,15 @@ At start, Wicket reads `$HOME/.local/state/omarchy/current/theme/colors.toml` an
 
 In the form, ↑/↓ or Tab move between fields, text fields take the usual
 cursor keys (←/→, Home/End, Ctrl+W, Ctrl+U), Ctrl+S saves, and Esc cancels
-(asking first if you changed anything). Paste with your terminal's paste
-shortcut; Ctrl+V is not bound.
+(asking first if you changed anything). The form scrolls to the focused field,
+so every field is reachable in a short terminal. `?` opens help only when a
+checkbox has focus: in a text field it types a literal `?`. The same is true of
+the password dialog, where Tab leaves the field first.
+
+Paste with your terminal's paste shortcut; Ctrl+V is not bound. A paste may
+carry one trailing line break, which is dropped; anything spanning more than
+one line is refused rather than silently truncated.
+
+Wicket keeps its chrome inside the window at any size. Below about five rows
+it asks you to resize; between there and a full-height terminal it drops the
+divider, spacing and status line before it gives up any of the list.

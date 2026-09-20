@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
 
@@ -151,13 +152,32 @@ func TestList_JumpKeys(t *testing.T) {
 	h := newHarness(t, manyProfiles(30), panicStore{})
 	nm, _ := h.m.Update(teaWin(80, 24))
 	h.m = nm.(Model)
+	page := max(h.m.listBudget()-1, 1)
+	if page >= 29 {
+		t.Fatalf("page %d is not smaller than the list; the test proves nothing", page)
+	}
 	for _, c := range []struct {
 		key  string
 		want int
-	}{{"G", 29}, {"g", 0}, {"end", 29}, {"home", 0}, {"pgdown", 12}, {"pgup", 0}} {
+	}{{"G", 29}, {"g", 0}, {"end", 29}, {"home", 0}, {"pgdown", page}, {"pgup", 0}} {
 		h.m = press(h.m, c.key)
 		if h.m.cursor != c.want {
 			t.Fatalf("%s: cursor %d, want %d", c.key, h.m.cursor, c.want)
+		}
+	}
+}
+
+// A page must never jump past what the reader can see, or the cursor lands on
+// a profile that was never on screen.
+func TestList_PageStaysWithinTheViewport(t *testing.T) {
+	for _, height := range []int{8, 12, 24, 40} {
+		h := newHarness(t, manyProfiles(60), panicStore{})
+		nm, _ := h.m.Update(teaWin(80, height))
+		h.m = nm.(Model)
+		before := h.m.cursor
+		h.m = press(h.m, "pgdown")
+		if moved := h.m.cursor - before; moved > h.m.listBudget() {
+			t.Errorf("height %d: pgdown moved %d rows, viewport is %d", height, moved, h.m.listBudget())
 		}
 	}
 }
@@ -294,15 +314,57 @@ func TestRetry_MessageNotDuplicated(t *testing.T) {
 	}
 }
 
-// F-06: starting a connection from the modal must not draw a half-cleared
-// dialog.
+// Starting a connection must not leave the view on a dialog whose state has
+// already been cleared. The harness has to be the asynchronous one: with a
+// synchronous terminal the connection finishes inside Update and the
+// intermediate model, which is the whole defect, is never observed.
 func TestModal_LeavesDialogBeforeConnecting(t *testing.T) {
-	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	h := newAsyncHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	_ = withFakeRDP(t)
 	h.m = press(h.m, "enter")
 	h.m = typeInto(h.m, "pw")
-	h.m = press(h.m, "enter")
-	if out := screen(h.m); strings.Contains(out, "No stored password for .") {
-		t.Fatalf("empty modal drawn while connecting:\n%s", out)
+
+	nm, cmd := h.m.Update(keyMsg("enter"))
+	m := nm.(Model)
+	if cmd == nil {
+		t.Fatal("connecting should return a command to run the client")
+	}
+	if !m.connecting {
+		t.Fatal("model should be marked as connecting")
+	}
+	if m.view != viewList {
+		t.Fatalf("view = %v while connecting, want viewList", m.view)
+	}
+	if out := stripANSI(m.View().Content); strings.Contains(out, "No stored password") {
+		t.Fatalf("cleared dialog drawn while connecting:\n%s", out)
+	}
+}
+
+// Retrying has the same requirement as the dialog: the overlay's message is
+// cleared before the client starts, so the view must move on with it.
+func TestRetry_LeavesOverlayBeforeConnecting(t *testing.T) {
+	h := newAsyncHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	_ = withFakeRDP(t)
+	p, ok := h.m.app.Cfg.Profile("work")
+	if !ok {
+		t.Fatal("fixture profile missing")
+	}
+	held := mustPassword(t, "pw")
+	h.m.view = viewRetry
+	h.m.retry = retryState{
+		profile: p, held: &held, useOnce: true,
+		status: "session ended quickly", class: rdp.ClassShortSession,
+	}
+
+	nm, cmd := h.m.Update(keyMsg("enter"))
+	m := nm.(Model)
+	if cmd == nil {
+		t.Fatal("retry should return a command to run the client")
+	}
+	if m.view != viewList {
+		t.Fatalf("view = %v while retrying, want viewList", m.view)
+	}
+	if out := stripANSI(m.View().Content); strings.Contains(out, "▲") {
+		t.Fatalf("blanked retry overlay drawn while connecting:\n%s", out)
 	}
 }

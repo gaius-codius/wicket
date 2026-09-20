@@ -31,12 +31,12 @@ func (m Model) newInput(value string, password bool) textinput.Model {
 	return ti
 }
 
-// updateInput feeds a key or paste to ti. Pastes are cleaned first: a
+// updateInput feeds a key or paste to ti. Pastes are cleaned first: one
 // trailing line break is dropped, and a paste that still spans lines is
 // rejected. Outside passwords, surrounding whitespace is trimmed.
 func updateInput(ti textinput.Model, msg tea.Msg, password bool) (textinput.Model, error) {
 	if p, ok := msg.(tea.PasteMsg); ok {
-		s := strings.TrimRight(p.Content, "\r\n")
+		s := trimOneLineEnd(p.Content)
 		if strings.ContainsAny(s, "\r\n") {
 			return ti, errMultilinePaste
 		}
@@ -47,6 +47,19 @@ func updateInput(ti textinput.Model, msg tea.Msg, password bool) (textinput.Mode
 	}
 	ti, _ = ti.Update(msg)
 	return ti, nil
+}
+
+// trimOneLineEnd drops a single trailing line terminator. Trimming every one
+// of them would quietly accept a multi-line paste whose extra lines happen to
+// be empty, while rejecting the same paste with text on the second line.
+func trimOneLineEnd(s string) string {
+	switch {
+	case strings.HasSuffix(s, "\r\n"):
+		return s[:len(s)-2]
+	case strings.HasSuffix(s, "\n"), strings.HasSuffix(s, "\r"):
+		return s[:len(s)-1]
+	}
+	return s
 }
 
 // inputView renders ti at width cells.

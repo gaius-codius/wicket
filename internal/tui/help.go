@@ -10,24 +10,49 @@ func (m Model) handleHelpKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc", "?", "q":
 		m.view = m.prev
+		m.helpTop = 0
 		return m, nil
-	default:
-		return m, nil
+	case "j", "down":
+		m.helpTop++
+	case "k", "up":
+		m.helpTop--
+	case "g", "home":
+		m.helpTop = 0
+	case "G", "shift+g", "end", "pgdown":
+		m.helpTop = len(helpKeys(m.helpFor))
+	case "pgup":
+		m.helpTop = 0
 	}
+	return m, nil
 }
 
-func (m Model) viewHelp(lo layout) string {
-	_ = lo
+// helpLines renders the key list one entry per line, truncated to width so a
+// narrow panel does not wrap an entry onto a second row.
+func (m Model) helpLines(width int) []string {
 	keys := helpKeys(m.helpFor)
 	w := 0
 	for _, k := range keys {
 		w = max(w, len(k.key))
 	}
+	w = min(w, max(width-4, 1))
 	lines := make([]string, len(keys))
 	for i, k := range keys {
-		lines[i] = m.styles.key.Render(padRight(k.key, w)) + "  " + m.styles.muted.Render(k.label)
+		lines[i] = m.styles.key.Render(padRight(truncate(k.key, w), w)) + "  " +
+			m.styles.muted.Render(truncate(k.label, max(width-w-2, 1)))
 	}
-	return strings.Join(lines, "\n")
+	return lines
+}
+
+// viewHelp shows the key list, scrolled so every entry is reachable even when
+// the panel is shorter than the list.
+func (m Model) viewHelp(lo layout) string {
+	lines := m.helpLines(lo.Inner)
+	budget := max(lo.Budget, 1)
+	if len(lines) <= budget {
+		return strings.Join(lines, "\n")
+	}
+	top := min(max(m.helpTop, 0), len(lines)-budget)
+	return strings.Join(lines[top:top+budget], "\n")
 }
 
 func helpKeys(v view) []hint {
@@ -50,8 +75,9 @@ func helpKeys(v view) []hint {
 		return []hint{
 			{"enter", "connect once"},
 			{"ctrl+s", "save and connect"},
+			{"tab", "leave the password field"},
 			{"esc", "cancel"},
-			{"?", "help"},
+			{"?", "help (off the password field)"},
 		}
 	case viewDelete:
 		return []hint{

@@ -37,6 +37,24 @@ func (m *Model) clearFilter() {
 	m.filtering = false
 	m.filter.Blur()
 	m.filter.SetValue("")
+	m.clearFilterErr()
+}
+
+// setFilterErr and clearFilterErr keep a rejected filter paste from leaving a
+// stale error behind, and from wiping a warning the filter did not raise.
+func (m *Model) setFilterErr(msg string) {
+	m.filterErr = m.status
+	m.filterErrSet = true
+	m.setStatus(msg, true)
+}
+
+func (m *Model) clearFilterErr() {
+	if !m.filterErrSet {
+		return
+	}
+	m.filterErrSet = false
+	m.setStatus(m.filterErr, false)
+	m.filterErr = ""
 }
 
 // handleFilterKey edits the filter while it has focus. Arrows move through
@@ -50,6 +68,7 @@ func (m Model) handleFilterKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 	case "enter":
 		m.filtering = false
 		m.filter.Blur()
+		m.clearFilterErr()
 		if m.filter.Value() == "" {
 			m.clearFilter()
 		}
@@ -60,10 +79,11 @@ func (m Model) handleFilterKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 	}
 	ti, err := updateInput(m.filter, msg, false)
 	if err != nil {
-		m.setStatus(err.Error(), true)
+		m.setFilterErr(err.Error())
 		return m, nil
 	}
 	m.filter = ti
+	m.clearFilterErr()
 	if vis := m.visible(); len(vis) > 0 && !slices.Contains(vis, m.cursor) {
 		m.cursor = vis[0]
 	}
@@ -81,7 +101,10 @@ func (m *Model) moveCursor(key string) {
 		m.cursor = vis[0]
 		return
 	}
-	page := max(m.height/2, 1)
+	// A page is what is on screen, less one row of overlap, so the reader
+	// keeps their place. It used to be half the window, which counted the
+	// header, footer and borders as list rows.
+	page := max(m.listBudget()-1, 1)
 	switch key {
 	case "j", "down":
 		pos++
@@ -89,7 +112,7 @@ func (m *Model) moveCursor(key string) {
 		pos--
 	case "g", "home":
 		pos = 0
-	case "G", "end":
+	case "G", "shift+g", "end":
 		pos = len(vis) - 1
 	case "pgdown":
 		pos += page

@@ -29,7 +29,7 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.startFilter()
-	case "j", "down", "k", "up", "g", "home", "G", "end", "pgup", "pgdown":
+	case "j", "down", "k", "up", "g", "home", "G", "shift+g", "end", "pgup", "pgdown":
 		m.moveCursor(key)
 		return m, nil
 	case "n":

@@ -7,6 +7,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
@@ -299,9 +300,16 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 
 func (m Model) viewForm(lo layout) string {
 	f := m.form
-	const labelW = len("dynamic_resolution:")
-	valueW := lo.Inner - 2 - labelW - 2
-	var b strings.Builder
+	// The label column is sized to the panel, not the other way round: a
+	// narrow terminal should truncate labels rather than render rows wider
+	// than the frame.
+	longest := 0
+	for _, l := range formLabels {
+		longest = max(longest, len(l)+1)
+	}
+	labelW := min(longest, max(lo.Inner-2-6, 3))
+	valueW := max(lo.Inner-2-labelW-2, 1)
+	rows := make([]string, 0, fieldCount)
 	row := func(id int, value string) {
 		label := formLabels[id]
 		mark := "  "
@@ -316,9 +324,9 @@ func (m Model) viewForm(lo layout) string {
 		if f.textValue(id) != nil {
 			value = inputView(f.inputs[id], valueW)
 		} else {
-			value = m.styles.primary.Render(value)
+			value = m.styles.primary.Render(truncate(value, valueW))
 		}
-		b.WriteString(mark + labelStyle.Render(padRight(label+":", labelW)) + "  " + value + "\n")
+		rows = append(rows, mark+labelStyle.Render(padRight(truncate(label+":", labelW), labelW))+"  "+value)
 	}
 	for id := range fieldCount {
 		switch id {
@@ -336,13 +344,21 @@ func (m Model) viewForm(lo layout) string {
 			row(id, "")
 		}
 	}
+	wrap := lipgloss.NewStyle().Width(lo.Inner)
+	var tail []string
 	switch {
 	case f.confirmDiscard:
-		b.WriteString("\n" + m.styles.warning.Render("▲ ") + m.styles.primary.Render("Discard unsaved changes?") + "\n")
+		tail = []string{"", m.styles.warning.Render("▲ ") + m.styles.primary.Render(wrap.Render("Discard unsaved changes?"))}
 	case f.err != "":
-		b.WriteString("\n" + m.styles.danger.Render("✗ "+f.err) + "\n")
+		tail = append([]string{""}, strings.Split(m.styles.danger.Render(wrap.Render("✗ "+f.err)), "\n")...)
 	}
-	return strings.TrimRight(b.String(), "\n")
+	// The form scrolls to the focused field instead of running past the
+	// bottom of the panel, where the last rows were unreachable but still
+	// saved by ctrl+s.
+	budget := max(lo.Budget-len(tail), 1)
+	start, end := listWindow(len(rows), f.field, budget, 1)
+	out := append([]string{}, rows[start:end]...)
+	return strings.Join(append(out, tail...), "\n")
 }
 
 var formLabels = [fieldCount]string{

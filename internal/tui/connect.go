@@ -175,6 +175,10 @@ func (m Model) handleRetryKey(key string) (tea.Model, tea.Cmd) {
 		held := m.retry.held
 		useOnce := m.retry.useOnce
 		m.retry = retryState{}
+		// Leave the overlay before starting the client. Connecting is
+		// asynchronous in production, so staying here would draw the retry
+		// box with its message already cleared.
+		m.view = viewList
 		if useOnce && held != nil && !held.Empty() {
 			cp := *held
 			m.useOnce = &cp

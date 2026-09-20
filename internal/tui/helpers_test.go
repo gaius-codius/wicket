@@ -221,3 +221,32 @@ func mustPassword(t *testing.T, s string) secret.Password {
 	}
 	return pw
 }
+
+// newAsyncHarness mirrors production, where Run installs nopTerm and
+// runConnect hands the client to tea.Exec. Only then is the model returned by
+// Update the one the user sees while the session runs, which is where a view
+// left pointing at a cleared dialog shows up.
+func newAsyncHarness(t *testing.T, body string, store secret.Store) *harness {
+	t.Helper()
+	h := newHarness(t, body, store)
+	h.m.app.Term = nopTerm{}
+	return h
+}
+
+// focusField moves to id the way a user would. Assigning form.field directly
+// leaves the input blurred, and Bubbles then drops every keystroke, so a test
+// that types into it proves nothing.
+func focusField(t *testing.T, m Model, id int) Model {
+	t.Helper()
+	for i := 0; i <= fieldCount; i++ {
+		if m.form.field == id {
+			if v := m.form.textValue(id); v != nil && !m.form.inputs[id].Focused() {
+				t.Fatalf("field %d is current but its input is not focused", id)
+			}
+			return m
+		}
+		m = press(m, "down")
+	}
+	t.Fatalf("could not reach field %d", id)
+	return m
+}

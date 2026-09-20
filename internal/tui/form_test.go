@@ -126,9 +126,18 @@ func TestForm_TypeThenClearPasswordSavesUnchangedSecret(t *testing.T) {
 	id := secret.IdentityFor(h.m.app.Cfg.Path(), p)
 	_ = store.Upsert(id, mustPassword(t, "keep-me"))
 	h.m = press(h.m, "e")
-	h.m.form.field = fieldPassword
+	h.m = focusField(t, h.m, fieldPassword)
 	h.m = typeInto(h.m, "x")
+	if h.m.form.password != "x" {
+		t.Fatalf("password field holds %q; the keystroke never reached the input", h.m.form.password)
+	}
+	if !h.m.form.store {
+		t.Fatal("typing a password should turn store on")
+	}
 	h.m = press(h.m, "backspace")
+	if h.m.form.password != "" {
+		t.Fatalf("password field holds %q after backspace", h.m.form.password)
+	}
 	if h.m.form.store {
 		t.Fatal("cleared password must not leave store on")
 	}

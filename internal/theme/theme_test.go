@@ -3,6 +3,7 @@ package theme
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -168,5 +169,50 @@ func writeTheme(t *testing.T, home, body string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "colors.toml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A theme can set a foreground that is nearly invisible on its own background.
+// The floor has to hold there too, or every line of body text is unreadable.
+func TestLoad_ForegroundBelowTheFloorIsReplaced(t *testing.T) {
+	home := t.TempDir()
+	writeTheme(t, home, `mode = "dark"
+background = "#101010"
+foreground = "#121212"
+muted = "#141414"
+accent = "#6FA3D8"
+green = "#7FB069"
+red = "#D45D5D"
+yellow = "#D4A017"
+selection = "#2C3144"
+`)
+	pal, rep := Load(home)
+	for _, role := range []string{"primary", "secondary", "muted"} {
+		if got := contrast(pal.Hex[role], pal.Hex["surface"]); got < minTextContrast {
+			t.Errorf("%s contrast %.2f on surface, want >= %.1f", role, got, minTextContrast)
+		}
+	}
+	if !slices.Contains(rep.FallbackRoles, "primary") {
+		t.Errorf("FallbackRoles = %v, want primary reported", rep.FallbackRoles)
+	}
+}
+
+// A type error used to leave Mode set or unset depending on where the decoder
+// stopped, so the same file could load light or dark from run to run.
+func TestLoad_ModeIsStableWhenATypeErrorStopsTheDecode(t *testing.T) {
+	home := t.TempDir()
+	writeTheme(t, home, `mode = "light"
+background = 12345
+foreground = "#2A2A32"
+`)
+	first, _ := Load(home)
+	for i := 0; i < 32; i++ {
+		got, _ := Load(home)
+		if got.Hex["surface"] != first.Hex["surface"] {
+			t.Fatalf("run %d surface %s, first run %s", i, got.Hex["surface"], first.Hex["surface"])
+		}
+	}
+	if first.Hex["surface"] != lightFallback()["surface"] {
+		t.Fatalf("surface = %s, want the light fallback %s", first.Hex["surface"], lightFallback()["surface"])
 	}
 }

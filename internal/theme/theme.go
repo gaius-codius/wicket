@@ -84,15 +84,20 @@ func Load(home string) (Palette, Report) {
 	if err != nil {
 		return paletteFromHex(fb), Report{MissingFile: true, FallbackRoles: allRoles()}
 	}
-	var fc fileColors
-	if _, err := toml.Decode(string(data), &fc); err != nil {
-		if strings.EqualFold(strings.TrimSpace(fc.Mode), "light") {
-			fb = lightFallback()
-		}
+	// Read mode from an untyped decode first. Decoding straight into
+	// fileColors leaves Mode set or unset depending on where the decoder hit
+	// the first type error, which made light/dark selection vary run to run
+	// for the same file.
+	var raw map[string]any
+	if _, err := toml.Decode(string(data), &raw); err != nil {
 		return paletteFromHex(fb), Report{InvalidTOML: true, FallbackRoles: allRoles()}
 	}
-	if strings.EqualFold(strings.TrimSpace(fc.Mode), "light") {
+	if modeIsLight(raw) {
 		fb = lightFallback()
+	}
+	var fc fileColors
+	if _, err := toml.Decode(string(data), &fc); err != nil {
+		return paletteFromHex(fb), Report{InvalidTOML: true, FallbackRoles: allRoles()}
 	}
 	hex := map[string]string{}
 	var fell []string
@@ -110,6 +115,13 @@ func Load(home string) (Palette, Report) {
 	// as background, so a border drawn in it cannot be seen.
 	put("border", fc.Muted)
 	put("primary", fc.Foreground)
+	// A theme whose own foreground fails the contrast floor would otherwise
+	// make every line of body text unreadable, and readableText leans on
+	// primary as its last resort.
+	if fixed := readableOn(hex["surface"], hex["primary"]); fixed != hex["primary"] {
+		hex["primary"] = fixed
+		fell = append(fell, "primary")
+	}
 	// muted is too dim to read as text in most themes. Use the dimmest
 	// theme token that is still readable on the background, else foreground.
 	text := readableText(hex["surface"], hex["primary"], fc.Muted, fc.DarkForeground, fc.LightForeground)
@@ -135,6 +147,24 @@ func readableText(surface, primary string, candidates ...string) string {
 		}
 	}
 	return primary
+}
+
+// readableOn returns want when it reads on surface, and otherwise black or
+// white, whichever reads better. Plain black or white always clears the floor
+// against something, so this cannot fail.
+func readableOn(surface, want string) string {
+	if want != "" && contrast(want, surface) >= minTextContrast {
+		return want
+	}
+	if contrast("#000000", surface) >= contrast("#FFFFFF", surface) {
+		return "#000000"
+	}
+	return "#FFFFFF"
+}
+
+func modeIsLight(raw map[string]any) bool {
+	s, _ := raw["mode"].(string)
+	return strings.EqualFold(strings.TrimSpace(s), "light")
 }
 
 // contrast is the WCAG 2 contrast ratio between two #RRGGBB colors.

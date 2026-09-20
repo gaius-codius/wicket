@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/gaius-codius/wicket/internal/testutil"
 )
 
 type runResult struct {
@@ -16,20 +18,10 @@ type runResult struct {
 	tuiCalls int
 }
 
-// TestMain points config and state at a missing path so no test in this
-// package can read the user's real config, keyring, or spawn FreeRDP.
+// TestMain points config, state and the bus somewhere harmless so no test in
+// this package can read the user's real config or keyring, or spawn FreeRDP.
 // Tests that need a config still override with t.Setenv.
-func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "wicket-cmd-test-")
-	if err != nil {
-		panic(err)
-	}
-	os.Setenv("WICKET_CONFIG", filepath.Join(dir, "missing.toml"))
-	os.Setenv("WICKET_STATE", filepath.Join(dir, "state.toml"))
-	code := m.Run()
-	os.RemoveAll(dir)
-	os.Exit(code)
-}
+func TestMain(m *testing.M) { os.Exit(testutil.Sandbox(m)) }
 
 func runCLI(t *testing.T, args []string) runResult {
 	t.Helper()

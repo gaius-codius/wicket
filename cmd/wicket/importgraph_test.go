@@ -20,8 +20,12 @@ func TestImportGraph(t *testing.T) {
 	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
 
 	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedImports | packages.NeedFiles,
-		Dir:  root,
+		// Tests must be loaded too: without them the Charm ban below would
+		// never see a _test.go file, and the whole rule could be bypassed by
+		// putting the import in a test.
+		Mode:  packages.NeedName | packages.NeedImports | packages.NeedFiles,
+		Dir:   root,
+		Tests: true,
 	}
 	pkgs, err := packages.Load(cfg, "github.com/gaius-codius/wicket/...")
 	if err != nil {
@@ -36,7 +40,10 @@ func TestImportGraph(t *testing.T) {
 		if pkg.Name == "" {
 			continue
 		}
-		path := pkg.PkgPath
+		path, isTest, skip := realPkgPath(pkg.ID, pkg.PkgPath)
+		if skip {
+			continue
+		}
 		if path == "github.com/gaius-codius/wicket/tools" || strings.HasPrefix(path, "github.com/gaius-codius/wicket/tools/") {
 			continue
 		}
@@ -47,6 +54,9 @@ func TestImportGraph(t *testing.T) {
 		}
 
 		switch {
+		case isTest:
+			// Layering below governs the shipped binary. A test may reach for
+			// another internal package (a fake, a fixture) without breaking it.
 		case path == internalPrefix+"config" || strings.HasPrefix(path, internalPrefix+"config/"):
 			for imp := range imports {
 				if strings.HasPrefix(imp, internalPrefix) {
@@ -71,18 +81,20 @@ func TestImportGraph(t *testing.T) {
 					t.Errorf("internal/rdp imports theme (%s)", imp)
 				case imp == internalPrefix+"tui" || strings.HasPrefix(imp, internalPrefix+"tui/"):
 					t.Errorf("internal/rdp imports tui (%s)", imp)
-				case isBubbleTea(imp):
-					t.Errorf("internal/rdp imports Bubble Tea (%s)", imp)
+				case isCharm(imp):
+					t.Errorf("internal/rdp imports a Charm library (%s)", imp)
 				}
 			}
 		}
 
+		// The Charm ban holds for tests as well, so a stray import in a
+		// _test.go file cannot quietly widen the dependency.
 		for imp := range imports {
-			if !isBubbleTea(imp) && !isLipgloss(imp) {
+			if !isCharm(imp) {
 				continue
 			}
 			if !strings.HasPrefix(path, internalPrefix+"tui") {
-				t.Errorf("%s imports %s; Bubble Tea and Lipgloss may appear only under internal/tui", path, imp)
+				t.Errorf("%s imports %s; Bubble Tea, Bubbles and Lipgloss may appear only under internal/tui", pkg.PkgPath, imp)
 			}
 		}
 
@@ -98,8 +110,9 @@ func TestImportGraph(t *testing.T) {
 		}
 	}
 
-	// packages.Load omits _test.go unless Tests is set; parse these on disk instead
-	// so the Charm ban on actions_test.go is actually enforced (see the rules in this file).
+	// The two files that must stay Charm-free even inside internal/tui are also
+	// checked straight off disk, so the rule holds even if the loader stops
+	// reporting one of them.
 	tuiDir := filepath.Join(root, "internal", "tui")
 	for _, name := range []string{"actions.go", "actions_test.go"} {
 		assertNoCharmImports(t, filepath.Join(tuiDir, name))
@@ -115,10 +128,35 @@ func assertNoCharmImports(t *testing.T, path string) {
 	}
 	for _, spec := range f.Imports {
 		imp := strings.Trim(spec.Path.Value, `"`)
-		if isBubbleTea(imp) || isLipgloss(imp) || strings.HasPrefix(imp, "charm.land/bubbles") {
+		if isCharm(imp) {
 			t.Errorf("%s must not import Bubble Tea, Bubbles, or Lipgloss: %s", filepath.Base(path), imp)
 		}
 	}
+}
+
+// realPkgPath maps a package loaded with Tests set back to the package it
+// belongs to. An in-package test variant keeps the original PkgPath and is
+// only distinguishable by its ID ("p [p.test]"); an external test package is
+// "p_test"; and each test binary adds a synthetic "p.test" main to skip.
+func realPkgPath(id, path string) (pkg string, isTest bool, skip bool) {
+	if strings.HasSuffix(path, ".test") {
+		return "", false, true
+	}
+	isTest = strings.Contains(id, ".test]")
+	if strings.HasSuffix(path, "_test") {
+		path, isTest = strings.TrimSuffix(path, "_test"), true
+	}
+	return path, isTest, false
+}
+
+// isCharm reports whether path is any Charm TUI library. Bubbles counts: it is
+// a Bubble Tea component library, and omitting it left a hole in this rule.
+func isCharm(path string) bool {
+	return isBubbleTea(path) || isLipgloss(path) || isBubbles(path)
+}
+
+func isBubbles(path string) bool {
+	return strings.HasPrefix(path, "charm.land/bubbles") || strings.HasPrefix(path, "github.com/charmbracelet/bubbles")
 }
 
 func isBubbleTea(path string) bool {

@@ -36,7 +36,10 @@ func TestCLISecretSweep_TTY(t *testing.T) {
 	t.Setenv("FAKERDP_EXIT", "0")
 
 	mem := secret.NewMemory()
-	type snap struct{ cmd, env []byte }
+	type snap struct {
+		cmd, env []byte
+		err      error
+	}
 	seen := make(chan snap, 1)
 	go func() {
 		deadline := time.Now().Add(5 * time.Second)
@@ -53,9 +56,22 @@ func TestCLISecretSweep_TTY(t *testing.T) {
 			close(seen)
 			return
 		}
-		cmd, _ := os.ReadFile("/proc/" + pid + "/cmdline")
-		env, _ := os.ReadFile("/proc/" + pid + "/environ")
-		seen <- snap{cmd, env}
+		// These reads must be checked. Discarding the error would hand
+		// assertNoSweep an empty slice, and the sweep would pass without ever
+		// having looked at the running client.
+		cmd, err := os.ReadFile("/proc/" + pid + "/cmdline")
+		if err != nil {
+			seen <- snap{err: err}
+			_ = os.WriteFile(hold, []byte("x"), 0o600)
+			return
+		}
+		env, err := os.ReadFile("/proc/" + pid + "/environ")
+		if err != nil {
+			seen <- snap{err: err}
+			_ = os.WriteFile(hold, []byte("x"), 0o600)
+			return
+		}
+		seen <- snap{cmd: cmd, env: env}
 		_ = os.WriteFile(hold, []byte("x"), 0o600)
 	}()
 
@@ -70,6 +86,12 @@ func TestCLISecretSweep_TTY(t *testing.T) {
 		if !ok {
 			t.Fatal("child pid never appeared")
 		}
+		if s.err != nil {
+			t.Fatalf("read /proc for the running client: %v", s.err)
+		}
+		if len(s.cmd) == 0 || len(s.env) == 0 {
+			t.Fatalf("empty /proc snapshot (cmdline %d bytes, environ %d bytes); the sweep would pass vacuously", len(s.cmd), len(s.env))
+		}
 		assertNoSweep(t, s.cmd, "cmdline")
 		assertNoSweep(t, s.env, "environ")
 	case <-time.After(6 * time.Second):
@@ -77,9 +99,15 @@ func TestCLISecretSweep_TTY(t *testing.T) {
 	}
 	assertNoSweep(t, stdout.Bytes(), "stdout")
 	assertNoSweep(t, stderr.Bytes(), "stderr")
-	cfgb, _ := os.ReadFile(cfgPath)
-	stb, _ := os.ReadFile(statePath)
+	cfgb, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
 	assertNoSweep(t, cfgb, "config.toml")
+	stb, err := os.ReadFile(statePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read state: %v", err)
+	}
 	assertNoSweep(t, stb, "state.toml")
 	got := testutil.ReadRecord(t, rec)
 	for _, a := range got.Argv {

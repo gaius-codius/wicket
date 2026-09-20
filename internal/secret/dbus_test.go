@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/testutil/fakesecret"
@@ -109,5 +111,101 @@ func TestDBus_WritesWaitForTheKeyringPrompt(t *testing.T) {
 	}
 	if n := srv.Stored(); n != 0 {
 		t.Fatalf("%d items stored after an accepted delete, want 0", n)
+	}
+}
+
+// Reading from a locked keyring goes through Unlock, which answers with a
+// prompt of its own. Until this was exercised, nothing proved that Wicket
+// waits for it -- or that a refused prompt reads as "no password" rather than
+// as an error the user cannot act on.
+func TestDBus_LookupUnlocksALockedKeyring(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	store := NewDBus()
+	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Upsert(id, pw); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.SetLocked(true)
+	srv.SetPrompt(fakesecret.PromptDismiss)
+	if _, err := store.Lookup(id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("dismissed unlock: err = %v, want ErrNotFound", err)
+	}
+
+	srv.SetPrompt(fakesecret.PromptAccept)
+	got, err := store.Lookup(id)
+	if err != nil {
+		t.Fatalf("accepted unlock: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := got.Password.WriteLine(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "s3cret\n" {
+		t.Fatalf("lookup %q", buf.String())
+	}
+}
+
+// Two items can share a profile's attributes -- two machines writing the same
+// config, or a restored backup. Wicket takes the most recently modified and
+// says so, which the in-memory store proved but the real one never did.
+func TestDBus_LookupPrefersTheNewestOfSeveralMatches(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	srv.Seed(id.Attrs(), "older", 1000)
+	srv.Seed(id.Attrs(), "newer", 2000)
+
+	got, err := NewDBus().Lookup(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Multiple {
+		t.Fatal("two matching items must be reported as multiple")
+	}
+	var buf bytes.Buffer
+	if err := got.Password.WriteLine(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "newer\n" {
+		t.Fatalf("lookup %q, want the most recently modified", buf.String())
+	}
+}
+
+// A prompt nobody answers must not hang Wicket for good. The wait is bounded,
+// and the prompt is dismissed on the way out so no dialog is left behind.
+func TestDBus_UnansweredPromptTimesOutAndDismisses(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	old := promptTimeout
+	promptTimeout = 150 * time.Millisecond
+	defer func() { promptTimeout = old }()
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.SetPrompt(fakesecret.PromptStall)
+	err = NewDBus().Upsert(id, pw)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want it to wrap ErrUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err = %v, want it to say it timed out", err)
+	}
+	if n := srv.Dismissed(); n != 1 {
+		t.Fatalf("prompt dismissed %d times, want 1", n)
+	}
+	if n := srv.Stored(); n != 0 {
+		t.Fatalf("%d items stored although the prompt was never answered", n)
 	}
 }

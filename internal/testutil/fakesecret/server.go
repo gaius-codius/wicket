@@ -39,6 +39,9 @@ const (
 	PromptAccept
 	// PromptDismiss defers the write and then refuses it.
 	PromptDismiss
+	// PromptStall accepts the Prompt call and then never completes it, as a
+	// dialog nobody answers does.
+	PromptStall
 )
 
 type secretBlob struct {
@@ -59,13 +62,44 @@ type item struct {
 
 // Server is an in-process Secret Service on a private bus.
 type Server struct {
-	mu      sync.Mutex
-	conn    *dbus.Conn
-	items   map[dbus.ObjectPath]*item
-	next    int
-	session dbus.ObjectPath
-	prompt  PromptMode
-	pending func()
+	mu        sync.Mutex
+	conn      *dbus.Conn
+	items     map[dbus.ObjectPath]*item
+	next      int
+	session   dbus.ObjectPath
+	prompt    PromptMode
+	pending   func()
+	locked    bool
+	dismissed int
+}
+
+// SetLocked makes the collection answer searches with locked items, which
+// yield no secret until Unlock has been through its prompt.
+func (s *Server) SetLocked(locked bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.locked = locked
+}
+
+// Dismissed reports how many times a prompt was dismissed by the client,
+// which is how a caller gives up on a dialog nobody answered.
+func (s *Server) Dismissed() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dismissed
+}
+
+// Seed stores an item directly, bypassing the replace-on-match that CreateItem
+// does, so a test can build the duplicate-attribute state a real keyring
+// reaches through two clients or a restored backup.
+func (s *Server) Seed(attrs map[string]string, value string, modified int64) dbus.ObjectPath {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.next++
+	p := dbus.ObjectPath(fmt.Sprintf("%s/%d", collectionPath, s.next))
+	s.items[p] = &item{path: p, label: "wicket", attrs: attrs,
+		value: []byte(value), created: modified, modified: modified}
+	return p
 }
 
 // SetPrompt makes later writes go through a prompt, as a locked keyring does.
@@ -143,7 +177,11 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 	}
 	for i := 1; i <= maxItems; i++ {
 		p := dbus.ObjectPath(fmt.Sprintf("%s/%d", collectionPath, i))
-		if err := conn.Export(&itemObj{s: srv, path: p}, p, itemIface); err != nil {
+		obj := &itemObj{s: srv, path: p}
+		if err := conn.Export(obj, p, itemIface); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.Export(obj, p, "org.freedesktop.DBus.Properties"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -170,6 +208,9 @@ func (o *serviceObj) GetSecrets(items []dbus.ObjectPath, session dbus.ObjectPath
 func (o *serviceObj) ReadAlias(name string) (dbus.ObjectPath, *dbus.Error) {
 	return o.s.ReadAlias(name)
 }
+func (o *serviceObj) Unlock(paths []dbus.ObjectPath) ([]dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
+	return o.s.Unlock(paths)
+}
 func (o *collectionObj) CreateItem(properties map[string]dbus.Variant, secret secretBlob, replace bool) (dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
 	return o.s.CreateItem(properties, secret, replace)
 }
@@ -181,6 +222,11 @@ type promptObj struct{ s *Server }
 func (o *promptObj) Prompt(window string) *dbus.Error {
 	o.s.mu.Lock()
 	mode, apply := o.s.prompt, o.s.pending
+	if mode == PromptStall {
+		// Leave pending in place: the dialog is still up.
+		o.s.mu.Unlock()
+		return nil
+	}
 	o.s.pending = nil
 	if mode == PromptAccept && apply != nil {
 		apply()
@@ -193,6 +239,7 @@ func (o *promptObj) Prompt(window string) *dbus.Error {
 func (o *promptObj) Dismiss() *dbus.Error {
 	o.s.mu.Lock()
 	o.s.pending = nil
+	o.s.dismissed++
 	o.s.mu.Unlock()
 	o.s.emitCompleted(true)
 	return nil
@@ -213,13 +260,32 @@ func (s *Server) OpenSession(algorithm string, input dbus.Variant) (dbus.Variant
 func (s *Server) SearchItems(attributes map[string]string) ([]dbus.ObjectPath, []dbus.ObjectPath, *dbus.Error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var unlocked []dbus.ObjectPath
+	var unlocked, locked []dbus.ObjectPath
 	for _, it := range s.items {
-		if match(it.attrs, attributes) {
-			unlocked = append(unlocked, it.path)
+		if !match(it.attrs, attributes) {
+			continue
 		}
+		if s.locked {
+			locked = append(locked, it.path)
+			continue
+		}
+		unlocked = append(unlocked, it.path)
 	}
-	return unlocked, nil, nil
+	return unlocked, locked, nil
+}
+
+// Unlock opens the collection, through a prompt when one is configured. A
+// dismissed prompt leaves everything locked, which is what the client sees as
+// an item with no secret.
+func (s *Server) Unlock(paths []dbus.ObjectPath) ([]dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.prompt != PromptNone {
+		s.pending = func() { s.locked = false }
+		return nil, promptPath, nil
+	}
+	s.locked = false
+	return paths, "/", nil
 }
 
 func (s *Server) GetSecrets(items []dbus.ObjectPath, session dbus.ObjectPath) (map[dbus.ObjectPath]secretBlob, *dbus.Error) {
@@ -228,7 +294,7 @@ func (s *Server) GetSecrets(items []dbus.ObjectPath, session dbus.ObjectPath) (m
 	out := map[dbus.ObjectPath]secretBlob{}
 	for _, p := range items {
 		it, ok := s.items[p]
-		if !ok {
+		if !ok || s.locked {
 			continue
 		}
 		out[p] = secretBlob{Session: session, Value: it.value, ContentType: "text/plain"}
@@ -311,6 +377,28 @@ func (o *itemObj) GetSecret(session dbus.ObjectPath) (secretBlob, *dbus.Error) {
 		return secretBlob{}, dbus.NewError("org.freedesktop.Secret.Error.NoSuchObject", nil)
 	}
 	return secretBlob{Session: session, Value: it.value, ContentType: "text/plain"}, nil
+}
+
+// Get answers org.freedesktop.DBus.Properties.Get, which is how the client
+// reads an item's Modified time to pick the newest of several matches.
+func (o *itemObj) Get(iface, prop string) (dbus.Variant, *dbus.Error) {
+	o.s.mu.Lock()
+	defer o.s.mu.Unlock()
+	it, ok := o.s.items[o.path]
+	if !ok {
+		return dbus.MakeVariant(""), dbus.NewError("org.freedesktop.Secret.Error.NoSuchObject", nil)
+	}
+	switch prop {
+	case "Modified":
+		return dbus.MakeVariant(uint64(it.modified)), nil
+	case "Created":
+		return dbus.MakeVariant(uint64(it.created)), nil
+	case "Label":
+		return dbus.MakeVariant(it.label), nil
+	case "Locked":
+		return dbus.MakeVariant(o.s.locked), nil
+	}
+	return dbus.MakeVariant(""), dbus.NewError("org.freedesktop.DBus.Error.UnknownProperty", nil)
 }
 
 func (o *itemObj) Delete() (dbus.ObjectPath, *dbus.Error) {

@@ -56,3 +56,58 @@ func TestDBus_CRUDAndIsolation(t *testing.T) {
 		t.Fatalf("deleted: %v", err)
 	}
 }
+
+// A locked keyring answers a write with a prompt path. Wicket must complete
+// that prompt, and must not report success when the user refuses it.
+func TestDBus_WritesWaitForTheKeyringPrompt(t *testing.T) {
+	addr, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+	if addr == "" {
+		t.Fatal("empty bus address")
+	}
+
+	store := NewDBus()
+	p := config.Profile{Name: "work", Host: "h", User: "u"}
+	id := IdentityFor("/tmp/a.toml", p)
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv.SetPrompt(fakesecret.PromptDismiss)
+	if err := store.Upsert(id, pw); err == nil {
+		t.Fatal("Upsert reported success although the prompt was dismissed")
+	} else if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want it to wrap ErrUnavailable", err)
+	}
+	if n := srv.Stored(); n != 0 {
+		t.Fatalf("%d items stored after a dismissed prompt", n)
+	}
+	if _, err := store.Lookup(id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Lookup err = %v, want ErrNotFound", err)
+	}
+
+	srv.SetPrompt(fakesecret.PromptAccept)
+	if err := store.Upsert(id, pw); err != nil {
+		t.Fatalf("Upsert with an accepted prompt: %v", err)
+	}
+	if n := srv.Stored(); n != 1 {
+		t.Fatalf("%d items stored after an accepted prompt, want 1", n)
+	}
+
+	srv.SetPrompt(fakesecret.PromptDismiss)
+	if err := store.Delete(id); err == nil {
+		t.Fatal("Delete reported success although the prompt was dismissed")
+	}
+	if n := srv.Stored(); n != 1 {
+		t.Fatalf("%d items stored after a dismissed delete, want 1", n)
+	}
+
+	srv.SetPrompt(fakesecret.PromptAccept)
+	if err := store.Delete(id); err != nil {
+		t.Fatalf("Delete with an accepted prompt: %v", err)
+	}
+	if n := srv.Stored(); n != 0 {
+		t.Fatalf("%d items stored after an accepted delete, want 0", n)
+	}
+}

@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -33,5 +34,19 @@ func TestPassword_Redacted(t *testing.T) {
 	}
 	if _, err := pw.MarshalText(); err == nil {
 		t.Fatal("marshal")
+	}
+}
+
+// A password is written to the client's stdin before the child is known to be
+// reading, so it has to stay well inside the pipe buffer.
+func TestNewPassword_RejectsOneTooLongToWriteInOneGo(t *testing.T) {
+	if _, err := NewPassword(strings.Repeat("a", maxPasswordLen)); err != nil {
+		t.Fatalf("a password of exactly the limit was rejected: %v", err)
+	}
+	if _, err := NewPassword(strings.Repeat("a", maxPasswordLen+1)); !errors.Is(err, ErrTooLong) {
+		t.Fatalf("err = %v, want ErrTooLong", err)
+	}
+	if maxPasswordLen >= 65536 {
+		t.Fatalf("limit %d is not below the 64 KiB pipe buffer", maxPasswordLen)
 	}
 }

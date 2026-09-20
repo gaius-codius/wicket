@@ -8,8 +8,14 @@ import (
 	"strings"
 )
 
+// maxPasswordLen bounds a password so writing one to the client's stdin
+// cannot block: the write happens before the child is known to be reading,
+// and a value larger than the pipe buffer would deadlock the launch.
+const maxPasswordLen = 4096
+
 var (
 	ErrCRLF        = errors.New("password must not contain CR or LF")
+	ErrTooLong     = fmt.Errorf("password must be at most %d bytes", maxPasswordLen)
 	ErrNotFound    = errors.New("secret not found")
 	ErrUnavailable = errors.New("secret service unavailable")
 )
@@ -27,10 +33,14 @@ var (
 	_ encoding.TextMarshaler = Password{}
 )
 
-// NewPassword rejects CR/LF (REQ-007).
+// NewPassword rejects CR/LF (REQ-007) and anything too long to hand to the
+// client in one write.
 func NewPassword(s string) (Password, error) {
 	if strings.ContainsAny(s, "\r\n") {
 		return Password{}, ErrCRLF
+	}
+	if len(s) > maxPasswordLen {
+		return Password{}, ErrTooLong
 	}
 	return Password{v: s}, nil
 }

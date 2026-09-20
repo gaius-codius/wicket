@@ -3,6 +3,7 @@ package secret
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -16,7 +17,11 @@ const (
 	ssDefaultAlias    = "default"
 	ssItemAttrs       = "org.freedesktop.Secret.Item.Attributes"
 	ssItemLabel       = "org.freedesktop.Secret.Item.Label"
+	ssPromptIface     = "org.freedesktop.Secret.Prompt"
 )
+
+// promptTimeout bounds the wait for the user to answer a keyring prompt.
+var promptTimeout = 2 * time.Minute
 
 type ssSecret struct {
 	Session     dbus.ObjectPath
@@ -54,7 +59,14 @@ func (d *DBus) Lookup(id Identity) (LookupResult, error) {
 		return LookupResult{}, err
 	}
 	if len(locked) > 0 {
-		_ = svc.Call(ssServiceIface+".Unlock", 0, locked)
+		var opened []dbus.ObjectPath
+		var prompt dbus.ObjectPath
+		if err := svc.Call(ssServiceIface+".Unlock", 0, locked).Store(&opened, &prompt); err == nil {
+			// A locked keyring answers with a prompt path. Items that stay
+			// locked simply yield no secret below, so a failed or dismissed
+			// prompt is not fatal here.
+			_ = runPrompt(conn, prompt)
+		}
 	}
 	secrets := map[dbus.ObjectPath]ssSecret{}
 	if err := svc.Call(ssServiceIface+".GetSecrets", 0, items, session).Store(&secrets); err != nil {
@@ -67,6 +79,10 @@ func (d *DBus) Lookup(id Identity) (LookupResult, error) {
 	var hits []hit
 	for p, sec := range secrets {
 		pw, err := NewPassword(string(sec.Value))
+		// The transport buffer is ours and is zeroable, unlike the string
+		// inside Password. Clear it as soon as it has been copied, including
+		// for the matches we do not return.
+		clear(sec.Value)
 		if err != nil {
 			continue
 		}
@@ -101,11 +117,15 @@ func (d *DBus) Upsert(id Identity, pw Password) error {
 		ssItemAttrs: dbus.MakeVariant(id.Attrs()),
 	}
 	sec := ssSecret{Session: session, Value: []byte(pw.v), ContentType: "text/plain"}
+	defer clear(sec.Value)
 	var item, prompt dbus.ObjectPath
 	if err := conn.Object(ssBus, collPath).Call(ssCollectionIface+".CreateItem", 0, props, sec, true).Store(&item, &prompt); err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
-	return nil
+	// Against a locked keyring the item is not written until the prompt is
+	// answered. Returning nil here would tell the user the password was saved
+	// when nothing was stored.
+	return runPrompt(conn, prompt)
 }
 
 func (d *DBus) Delete(id Identity) error {
@@ -131,6 +151,10 @@ func (d *DBus) Delete(id Identity) error {
 			last = err
 			continue
 		}
+		if err := runPrompt(conn, prompt); err != nil {
+			last = err
+			continue
+		}
 		found = true
 	}
 	if !found {
@@ -140,6 +164,49 @@ func (d *DBus) Delete(id Identity) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// runPrompt completes a Secret Service prompt. The service hands back a prompt
+// path whenever it needs the user before it will do the work; a caller that
+// ignores it reports success for an operation that never happened.
+func runPrompt(conn *dbus.Conn, prompt dbus.ObjectPath) error {
+	if prompt == "" || prompt == "/" {
+		return nil
+	}
+	sigs := make(chan *dbus.Signal, 4)
+	conn.Signal(sigs)
+	defer conn.RemoveSignal(sigs)
+	match := []dbus.MatchOption{
+		dbus.WithMatchObjectPath(prompt),
+		dbus.WithMatchInterface(ssPromptIface),
+		dbus.WithMatchMember("Completed"),
+	}
+	if err := conn.AddMatchSignal(match...); err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	defer func() { _ = conn.RemoveMatchSignal(match...) }()
+
+	if call := conn.Object(ssBus, prompt).Call(ssPromptIface+".Prompt", 0, ""); call.Err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, call.Err)
+	}
+	deadline := time.After(promptTimeout)
+	for {
+		select {
+		case sig := <-sigs:
+			if sig == nil || sig.Path != prompt || sig.Name != ssPromptIface+".Completed" {
+				continue
+			}
+			if len(sig.Body) > 0 {
+				if dismissed, ok := sig.Body[0].(bool); ok && dismissed {
+					return fmt.Errorf("%w: the keyring prompt was dismissed", ErrUnavailable)
+				}
+			}
+			return nil
+		case <-deadline:
+			_ = conn.Object(ssBus, prompt).Call(ssPromptIface+".Dismiss", 0).Err
+			return fmt.Errorf("%w: timed out waiting for the keyring prompt", ErrUnavailable)
+		}
+	}
 }
 
 func openSession(svc dbus.BusObject) (dbus.ObjectPath, error) {

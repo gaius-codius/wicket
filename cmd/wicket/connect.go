@@ -107,6 +107,9 @@ func resolveCLICredential(store secret.Store, id secret.Identity, stderr io.Writ
 	}
 	fmt.Fprint(stderr, "Password: ")
 	b, err := readPassword(int(in.Fd()))
+	// The terminal hands back a mutable buffer. The string inside Password
+	// cannot be wiped, but this copy can, so do not leave a second one around.
+	defer clear(b)
 	fmt.Fprintln(stderr)
 	if err != nil {
 		return nil, err

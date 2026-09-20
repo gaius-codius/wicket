@@ -20,6 +20,25 @@ const (
 	serviceIface    = "org.freedesktop.Secret.Service"
 	collectionIface = "org.freedesktop.Secret.Collection"
 	itemIface       = "org.freedesktop.Secret.Item"
+	promptPath      = "/org/freedesktop/secrets/prompt/p1"
+	promptIface     = "org.freedesktop.Secret.Prompt"
+	// maxItems bounds the item object paths exported up front. Exporting on
+	// demand raced: CreateItem runs on a D-Bus dispatch goroutine, and
+	// godbus mutates its handler map without a lock.
+	maxItems = 64
+)
+
+// PromptMode controls whether writes need the user to answer a prompt first,
+// which is what a locked keyring does.
+type PromptMode int
+
+const (
+	// PromptNone completes writes immediately.
+	PromptNone PromptMode = iota
+	// PromptAccept defers the write until Prompt is called, then applies it.
+	PromptAccept
+	// PromptDismiss defers the write and then refuses it.
+	PromptDismiss
 )
 
 type secretBlob struct {
@@ -45,6 +64,22 @@ type Server struct {
 	items   map[dbus.ObjectPath]*item
 	next    int
 	session dbus.ObjectPath
+	prompt  PromptMode
+	pending func()
+}
+
+// SetPrompt makes later writes go through a prompt, as a locked keyring does.
+func (s *Server) SetPrompt(mode PromptMode) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prompt = mode
+}
+
+// Stored reports how many items the collection holds.
+func (s *Server) Stored() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.items)
 }
 
 func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
@@ -103,6 +138,15 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 	if err := conn.Export(coll, aliasPath, collectionIface); err != nil {
 		t.Fatal(err)
 	}
+	if err := conn.Export(&promptObj{s: srv}, promptPath, promptIface); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= maxItems; i++ {
+		p := dbus.ObjectPath(fmt.Sprintf("%s/%d", collectionPath, i))
+		if err := conn.Export(&itemObj{s: srv, path: p}, p, itemIface); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cleanup = func() {
 		_ = conn.Close()
 		_ = cmd.Process.Kill()
@@ -129,6 +173,35 @@ func (o *serviceObj) ReadAlias(name string) (dbus.ObjectPath, *dbus.Error) {
 func (o *collectionObj) CreateItem(properties map[string]dbus.Variant, secret secretBlob, replace bool) (dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
 	return o.s.CreateItem(properties, secret, replace)
 }
+
+type promptObj struct{ s *Server }
+
+// Prompt answers the outstanding prompt and emits Completed, as the Secret
+// Service does once the user has dealt with the dialog.
+func (o *promptObj) Prompt(window string) *dbus.Error {
+	o.s.mu.Lock()
+	mode, apply := o.s.prompt, o.s.pending
+	o.s.pending = nil
+	if mode == PromptAccept && apply != nil {
+		apply()
+	}
+	o.s.mu.Unlock()
+	o.s.emitCompleted(mode == PromptDismiss)
+	return nil
+}
+
+func (o *promptObj) Dismiss() *dbus.Error {
+	o.s.mu.Lock()
+	o.s.pending = nil
+	o.s.mu.Unlock()
+	o.s.emitCompleted(true)
+	return nil
+}
+
+func (s *Server) emitCompleted(dismissed bool) {
+	_ = s.conn.Emit(promptPath, promptIface+".Completed", dismissed, dbus.MakeVariant(""))
+}
+
 func (o *collectionObj) Delete() (dbus.ObjectPath, *dbus.Error) {
 	return "/", nil
 }
@@ -192,24 +265,33 @@ func (s *Server) CreateItem(properties map[string]dbus.Variant, secret secretBlo
 			label = s
 		}
 	}
-	if replace {
-		for p, it := range s.items {
-			if match(it.attrs, attrs) && len(attrs) > 0 {
-				it.value = secret.Value
-				it.modified = time.Now().Unix()
-				it.label = label
-				s.items[p] = it
-				return p, "/", nil
+	if s.next >= maxItems {
+		return "/", "/", dbus.NewError("org.freedesktop.Secret.Error.IsLocked", []any{"fake keyring is full"})
+	}
+	write := func() dbus.ObjectPath {
+		if replace {
+			for p, it := range s.items {
+				if match(it.attrs, attrs) && len(attrs) > 0 {
+					it.value = secret.Value
+					it.modified = time.Now().Unix()
+					it.label = label
+					s.items[p] = it
+					return p
+				}
 			}
 		}
+		s.next++
+		p := dbus.ObjectPath(fmt.Sprintf("%s/%d", collectionPath, s.next))
+		now := time.Now().Unix()
+		it := &item{path: p, label: label, attrs: attrs, value: secret.Value, created: now, modified: now}
+		s.items[p] = it
+		return p
 	}
-	s.next++
-	p := dbus.ObjectPath(fmt.Sprintf("%s/%d", collectionPath, s.next))
-	now := time.Now().Unix()
-	it := &item{path: p, label: label, attrs: attrs, value: secret.Value, created: now, modified: now}
-	s.items[p] = it
-	_ = s.conn.Export(&itemObj{s: s, path: p}, p, itemIface)
-	return p, "/", nil
+	if s.prompt != PromptNone {
+		s.pending = func() { write() }
+		return "/", promptPath, nil
+	}
+	return write(), "/", nil
 }
 
 func (s *Server) Delete() (dbus.ObjectPath, *dbus.Error) {
@@ -234,6 +316,11 @@ func (o *itemObj) GetSecret(session dbus.ObjectPath) (secretBlob, *dbus.Error) {
 func (o *itemObj) Delete() (dbus.ObjectPath, *dbus.Error) {
 	o.s.mu.Lock()
 	defer o.s.mu.Unlock()
+	if o.s.prompt != PromptNone {
+		path := o.path
+		o.s.pending = func() { delete(o.s.items, path) }
+		return promptPath, nil
+	}
 	delete(o.s.items, o.path)
 	return "/", nil
 }

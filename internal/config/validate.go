@@ -192,14 +192,14 @@ func validateSize(size string) error {
 	if strings.HasSuffix(s, "%") {
 		n := s[:len(s)-1]
 		if !positiveInt(n) {
-			return &FieldError{Field: "size", Msg: "use WIDTHxHEIGHT (e.g. 1920x1080), N% (e.g. 100%), or empty"}
+			return &FieldError{Field: "size", Msg: "use dimension (1920x1080), N% (e.g. 100%), or empty (FreeRDP chooses)"}
 		}
 		return nil
 	}
 	lower := strings.ToLower(s)
 	w, h, ok := strings.Cut(lower, "x")
 	if !ok || !positiveInt(w) || !positiveInt(h) {
-		return &FieldError{Field: "size", Msg: "use WIDTHxHEIGHT (e.g. 1920x1080), N% (e.g. 100%), or empty"}
+		return &FieldError{Field: "size", Msg: "use dimension (1920x1080), N% (e.g. 100%), or empty (FreeRDP chooses)"}
 	}
 	return nil
 }

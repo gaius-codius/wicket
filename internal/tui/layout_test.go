@@ -78,17 +78,20 @@ func TestRender_FilterHeadDoesNotGrowThePanel(t *testing.T) {
 	}
 }
 
-// Every form field has to be reachable. The form used to render all twelve
-// rows regardless of height, so the last ones were off screen while ctrl+s
-// still saved them.
+// Every visible form field has to be reachable. The form used to render all
+// of its rows regardless of height, so the last ones were off screen while
+// ctrl+s still saved them.
 func TestForm_ScrollsToTheFocusedField(t *testing.T) {
-	m := sized(t, fixtureTOML("work", "h", "u"), 80, 14, "n")
-	for id := range fieldCount {
-		m = focusField(t, m, id)
-		out := stripANSI(m.render())
-		label := truncate(formLabels[id]+":", len(formLabels[id])+1)
-		if !strings.Contains(out, label) {
-			t.Fatalf("field %q not on screen at 80x14:\n%s", formLabels[id], out)
+	// "n" adds, "e" edits; the two differ by the forget password row.
+	for _, key := range []string{"n", "e"} {
+		m := sized(t, fixtureTOML("work", "h", "u"), 80, 14, key)
+		for _, id := range m.form.fields() {
+			m = focusField(t, m, id)
+			out := stripANSI(m.render())
+			label := truncate(formLabels[id]+":", len(formLabels[id])+1)
+			if !strings.Contains(out, label) {
+				t.Fatalf("%q: field %q not on screen at 80x14:\n%s", key, formLabels[id], out)
+			}
 		}
 	}
 }

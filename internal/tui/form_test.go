@@ -19,7 +19,6 @@ func TestForm_AddAllFields(t *testing.T) {
 			DynamicResolution: true, Scale: 140,
 		},
 		password: "s3cret",
-		store:    true,
 	}
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
@@ -131,15 +130,9 @@ func TestForm_TypeThenClearPasswordSavesUnchangedSecret(t *testing.T) {
 	if h.m.form.password != "x" {
 		t.Fatalf("password field holds %q; the keystroke never reached the input", h.m.form.password)
 	}
-	if !h.m.form.store {
-		t.Fatal("typing a password should turn store on")
-	}
 	h.m = press(h.m, "backspace")
 	if h.m.form.password != "" {
 		t.Fatalf("password field holds %q after backspace", h.m.form.password)
-	}
-	if h.m.form.store {
-		t.Fatal("cleared password must not leave store on")
 	}
 	h.m = press(h.m, "ctrl+s")
 	if h.m.view != viewList {
@@ -157,7 +150,7 @@ func TestForm_TypeThenClearPasswordSavesUnchangedSecret(t *testing.T) {
 func TestForm_SizeTrimmedOnSave(t *testing.T) {
 	h := newHarness(t, "", secret.NewMemory())
 	base := config.Profile{Name: "n", Host: "h", User: "u", Client: config.DefaultClient, Scale: 100, DynamicResolution: true}
-	h.m.form = formState{p: base, store: false}
+	h.m.form = formState{p: base}
 	h.m.form.p.Size = "  1920x1080  "
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
@@ -168,7 +161,7 @@ func TestForm_SizeTrimmedOnSave(t *testing.T) {
 	if got.Size != "1920x1080" {
 		t.Fatalf("size %q", got.Size)
 	}
-	h.m.form = formState{p: base, store: false}
+	h.m.form = formState{p: base}
 	h.m.form.p.Name = "blanksize"
 	h.m.form.p.Size = "   "
 	h.m.view = viewForm
@@ -179,27 +172,10 @@ func TestForm_SizeTrimmedOnSave(t *testing.T) {
 	}
 }
 
-func TestForm_BlankStoreInlineError(t *testing.T) {
-	h := newHarness(t, "", nil)
-	h.m.form = formState{
-		p:     config.Profile{Name: "n", Host: "h", User: "u", Client: config.DefaultClient, Scale: 100, DynamicResolution: true},
-		store: true,
-	}
-	h.m.view = viewForm
-	h.m = press(h.m, "ctrl+s")
-	if h.m.view != viewForm {
-		t.Fatal("should stay on form")
-	}
-	if !strings.Contains(h.m.form.err, "blank") {
-		t.Fatalf("err %q", h.m.form.err)
-	}
-}
-
 func TestForm_DuplicateNameRejected(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	h.m.form = formState{
-		p:     config.Profile{Name: "work", Host: "h2", User: "u2", Client: config.DefaultClient, Scale: 100, DynamicResolution: true},
-		store: false,
+		p: config.Profile{Name: "work", Host: "h2", User: "u2", Client: config.DefaultClient, Scale: 100, DynamicResolution: true},
 	}
 	h.m.view = viewForm
 	before, _ := os.ReadFile(h.cfg)
@@ -216,7 +192,7 @@ func TestForm_DuplicateNameRejected(t *testing.T) {
 func TestForm_SizeValidation(t *testing.T) {
 	h := newHarness(t, "", secret.NewMemory())
 	base := config.Profile{Name: "n", Host: "h", User: "u", Client: config.DefaultClient, Scale: 100, DynamicResolution: true}
-	h.m.form = formState{p: base, store: false}
+	h.m.form = formState{p: base}
 	h.m.form.p.Size = "nope"
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
@@ -224,7 +200,7 @@ func TestForm_SizeValidation(t *testing.T) {
 		t.Fatal("size=nope should fail")
 	}
 	for _, size := range []string{"1920x1080", "1920X1080", "100%", ""} {
-		h.m.form = formState{p: base, store: false}
+		h.m.form = formState{p: base}
 		h.m.form.p.Name = "s" + size
 		h.m.form.p.Size = size
 		h.m.view = viewForm
@@ -246,7 +222,7 @@ func TestForm_EditFieldsRoundTrip(t *testing.T) {
 	p.Fullscreen = true
 	p.DynamicResolution = false
 	p.Scale = 180
-	h.m.form = formState{oldName: "work", p: p, store: false}
+	h.m.form = formState{oldName: "work", p: p}
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
 	got, _ := h.m.app.Cfg.Profile("work")
@@ -273,7 +249,7 @@ password = "x"
 	h := newHarness(t, src, secret.NewMemory())
 	p, _ := h.m.app.Cfg.Profile("work")
 	p.User = "new"
-	h.m.form = formState{oldName: "work", p: p, store: false}
+	h.m.form = formState{oldName: "work", p: p}
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
 	raw := map[string]any{}
@@ -324,7 +300,7 @@ func TestForm_ForgetThenEnterShowsModal(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
 	_ = store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, "secret"))
-	h.m.form = formState{oldName: "work", p: p, store: false, forget: true}
+	h.m.form = formState{oldName: "work", p: p, forget: true}
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
 	if _, err := store.Lookup(secret.IdentityFor(h.m.app.Cfg.Path(), p)); err == nil {
@@ -343,7 +319,7 @@ func TestForm_HostChangeDeletesOldSecret(t *testing.T) {
 	oldID := secret.IdentityFor(h.m.app.Cfg.Path(), p)
 	_ = store.Upsert(oldID, mustPassword(t, "secret"))
 	p.Host = "other"
-	h.m.form = formState{oldName: "work", p: p, store: false}
+	h.m.form = formState{oldName: "work", p: p}
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
 	if _, err := store.Lookup(oldID); err == nil {
@@ -373,14 +349,85 @@ func TestForm_ArrowKeysMoveFields(t *testing.T) {
 		t.Fatalf("after 6 downs: %d", h.m.form.field)
 	}
 	h.m = press(h.m, "down", "down", "down", "down", "down", "down", "down")
-	if h.m.form.field != fieldForget {
+	if h.m.form.field != fieldPassword {
 		t.Fatalf("down past last field should stop at last: %d", h.m.form.field)
 	}
 	h.m = press(h.m, "up")
-	if h.m.form.field != fieldStore {
+	if h.m.form.field != fieldScale {
 		t.Fatalf("up: %d", h.m.form.field)
 	}
 	if h.m.form.p.Name != "" {
 		t.Fatalf("arrows typed into a field: %q", h.m.form.p.Name)
+	}
+}
+
+// "forget password" deletes what is already in the keyring, so it only means
+// something on an edit. On the add form it was inert but still counted as an
+// unsaved change, so ticking it made esc ask whether to discard nothing.
+func TestForm_ForgetRowIsEditOnly(t *testing.T) {
+	cfg := fixtureTOML("work", "h", "u")
+	add := stripANSI(sized(t, cfg, 80, 30, "n").render())
+	if strings.Contains(add, "forget password") {
+		t.Fatalf("add form offers a password to forget:\n%s", add)
+	}
+	edit := stripANSI(sized(t, cfg, 80, 30, "e").render())
+	if !strings.Contains(edit, "forget password") {
+		t.Fatalf("edit form hides it:\n%s", edit)
+	}
+}
+
+// Typing a replacement and asking to forget cancel each other out, so the form
+// never sends both. Whichever the user does last wins.
+func TestForm_ForgetAndTypedPasswordAreExclusive(t *testing.T) {
+	cfg := fixtureTOML("work", "h", "u")
+
+	m := sized(t, cfg, 80, 30, "e")
+	m = focusField(t, m, fieldForget)
+	m = press(m, "space")
+	if !m.form.forget {
+		t.Fatal("space should tick forget password")
+	}
+	m = focusField(t, m, fieldPassword)
+	m = typeInto(m, "x")
+	if m.form.forget {
+		t.Fatal("typing a password should clear a pending forget")
+	}
+
+	m = sized(t, cfg, 80, 30, "e")
+	m = focusField(t, m, fieldPassword)
+	m = typeInto(m, "x")
+	m = focusField(t, m, fieldForget)
+	m = press(m, "space")
+	if !m.form.forget || m.form.password != "" {
+		t.Fatalf("forget should drop the typed password: forget=%v password=%q", m.form.forget, m.form.password)
+	}
+}
+
+// A typed password is stored on save; there is no second box to tick.
+func TestForm_TypedPasswordOnEditReplacesTheStoredOne(t *testing.T) {
+	store := secret.NewMemory()
+	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
+	p, _ := h.m.app.Cfg.Profile("work")
+	id := secret.IdentityFor(h.m.app.Cfg.Path(), p)
+	if err := store.Upsert(id, mustPassword(t, "old")); err != nil {
+		t.Fatal(err)
+	}
+	h.m = press(h.m, "e")
+	h.m = focusField(t, h.m, fieldPassword)
+	h.m = typeInto(h.m, "new")
+	h.m = press(h.m, "ctrl+s")
+	if h.m.view != viewList {
+		t.Fatalf("view=%v err=%s", h.m.view, h.m.form.err)
+	}
+	got, err := store.Lookup(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf strings.Builder
+	if err := got.Password.WriteLine(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "new\n" {
+		t.Fatalf("stored %q, want the typed password", buf.String())
 	}
 }

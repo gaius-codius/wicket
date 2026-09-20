@@ -238,6 +238,7 @@ func newAsyncHarness(t *testing.T, body string, store secret.Store) *harness {
 // that types into it proves nothing.
 func focusField(t *testing.T, m Model, id int) Model {
 	t.Helper()
+	// tab wraps, so this reaches a field in either direction.
 	for i := 0; i <= fieldCount; i++ {
 		if m.form.field == id {
 			if v := m.form.textValue(id); v != nil && !m.form.inputs[id].Focused() {
@@ -245,7 +246,7 @@ func focusField(t *testing.T, m Model, id int) Model {
 			}
 			return m
 		}
-		m = press(m, "down")
+		m = press(m, "tab")
 	}
 	t.Fatalf("could not reach field %d", id)
 	return m

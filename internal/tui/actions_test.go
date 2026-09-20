@@ -147,7 +147,7 @@ func TestSaveProfile_CRLFRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewPassword must reject CR/LF")
 	}
-	_, err = a.SaveProfile("", p, PasswordIntent{Set: true, Store: true, Password: secret.Password{}})
+	_, err = a.SaveProfile("", p, PasswordIntent{Action: PasswordSet, Password: secret.Password{}})
 	if err == nil {
 		t.Fatal("blank stored password rejected")
 	}
@@ -176,7 +176,7 @@ func TestSaveProfile_Forget(t *testing.T) {
 	a := testApp(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := a.Cfg.Profile("work")
 	_ = store.Upsert(secret.IdentityFor(a.Cfg.Path(), p), mustPassword(t, "secret"))
-	if _, err := a.SaveProfile("work", p, PasswordIntent{Forget: true}); err != nil {
+	if _, err := a.SaveProfile("work", p, PasswordIntent{Action: PasswordForget}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Lookup(secret.IdentityFor(a.Cfg.Path(), p)); !errors.Is(err, secret.ErrNotFound) {
@@ -227,7 +227,37 @@ func TestSaveProfile_RenameLookupUnavailableAborts(t *testing.T) {
 	}
 }
 
-func TestSaveProfile_RenameTypedStoreOffMovesSecret(t *testing.T) {
+func TestSaveProfile_RenameTypedReplacesSecret(t *testing.T) {
+	store := secret.NewMemory()
+	a := testApp(t, fixtureTOML("work", "h", "u"), store)
+	p, _ := a.Cfg.Profile("work")
+	oldID := secret.IdentityFor(a.Cfg.Path(), p)
+	if err := store.Upsert(oldID, mustPassword(t, "old")); err != nil {
+		t.Fatal(err)
+	}
+	newP := p
+	newP.Name = "office"
+	typed := mustPassword(t, "new")
+	if _, err := a.SaveProfile("work", newP, PasswordIntent{Action: PasswordSet, Password: typed}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Lookup(oldID); !errors.Is(err, secret.ErrNotFound) {
+		t.Fatalf("old identity remains: %v", err)
+	}
+	got, err := store.Lookup(secret.IdentityFor(a.Cfg.Path(), newP))
+	if err != nil {
+		t.Fatal("typed password should be stored under the new name")
+	}
+	var buf strings.Builder
+	if err := got.Password.WriteLine(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "new\n" {
+		t.Fatalf("stored %q, the typed password must win over the old one", buf.String())
+	}
+}
+
+func TestSaveProfile_RenameBlankMovesSecret(t *testing.T) {
 	store := secret.NewMemory()
 	a := testApp(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := a.Cfg.Profile("work")
@@ -237,8 +267,7 @@ func TestSaveProfile_RenameTypedStoreOffMovesSecret(t *testing.T) {
 	}
 	newP := p
 	newP.Name = "office"
-	typed := mustPassword(t, "not-stored")
-	if _, err := a.SaveProfile("work", newP, PasswordIntent{Set: true, Password: typed, Store: false}); err != nil {
+	if _, err := a.SaveProfile("work", newP, PasswordIntent{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Lookup(oldID); !errors.Is(err, secret.ErrNotFound) {
@@ -246,14 +275,14 @@ func TestSaveProfile_RenameTypedStoreOffMovesSecret(t *testing.T) {
 	}
 	got, err := store.Lookup(secret.IdentityFor(a.Cfg.Path(), newP))
 	if err != nil {
-		t.Fatal("secret should move with the name")
+		t.Fatal("an untouched password should follow the rename")
 	}
 	var buf strings.Builder
 	if err := got.Password.WriteLine(&buf); err != nil {
 		t.Fatal(err)
 	}
 	if buf.String() != "kept\n" {
-		t.Fatalf("moved %q, typed replacement must not replace the stored secret when store is off", buf.String())
+		t.Fatalf("moved %q", buf.String())
 	}
 }
 

@@ -76,7 +76,7 @@ func TestConnect_RestartSharedStore(t *testing.T) {
 		Name: "work", Host: "h", User: "u", Client: "sdl-freerdp3",
 		DynamicResolution: true, Scale: 100,
 	}
-	h.m.form = formState{p: p, password: sentinel, store: true}
+	h.m.form = formState{p: p, password: sentinel}
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
 	if h.m.view != viewList {
@@ -132,7 +132,7 @@ func TestConnect_UserChangeShowsModal(t *testing.T) {
 	p, _ := h.m.app.Cfg.Profile("work")
 	_ = store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
 	p.User = "other"
-	h.m.form = formState{oldName: "work", p: p, store: false}
+	h.m.form = formState{oldName: "work", p: p}
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
 	h.m = press(h.m, "enter")
@@ -148,7 +148,7 @@ func TestConnect_DomainChangeShowsModal(t *testing.T) {
 	p, _ := h.m.app.Cfg.Profile("work")
 	_ = store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
 	p.Domain = "CORP"
-	h.m.form = formState{oldName: "work", p: p, store: false}
+	h.m.form = formState{oldName: "work", p: p}
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
 	if h.m.view != viewList {

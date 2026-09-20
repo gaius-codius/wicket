@@ -89,9 +89,6 @@ func TestForm_PasteCleansInput(t *testing.T) {
 	if h.m.form.password != " pass word " {
 		t.Fatalf("password paste should keep spaces and drop the newline: %q", h.m.form.password)
 	}
-	if !h.m.form.store {
-		t.Fatal("pasting a password should turn Store on, like typing")
-	}
 	h.m = paste(h.m, "a\nb")
 	if h.m.form.password != " pass word " || h.m.form.err == "" {
 		t.Fatalf("multi-line paste should be rejected: %q err=%q", h.m.form.password, h.m.form.err)

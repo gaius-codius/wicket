@@ -10,12 +10,27 @@ import (
 	"github.com/gaius-codius/wicket/internal/secret"
 )
 
+// PasswordAction says what SaveProfile should do with the profile's stored
+// password. The three outcomes are exclusive by construction: "replace it" and
+// "delete it" cannot both be asked for.
+type PasswordAction int
+
+const (
+	// PasswordKeep leaves the keyring untouched, beyond following a rename.
+	PasswordKeep PasswordAction = iota
+	// PasswordSet replaces the stored password with Password.
+	PasswordSet
+	// PasswordForget deletes the stored password.
+	PasswordForget
+)
+
 type PasswordIntent struct {
-	Set      bool
+	Action   PasswordAction
 	Password secret.Password
-	Store    bool
-	Forget   bool
 }
+
+func (i PasswordIntent) set() bool    { return i.Action == PasswordSet }
+func (i PasswordIntent) forget() bool { return i.Action == PasswordForget }
 
 type TerminalController interface {
 	Release() error
@@ -49,7 +64,7 @@ func (a *App) SaveProfile(oldName string, newP config.Profile, intent PasswordIn
 	if err := config.ValidateProfile(newP); err != nil {
 		return nil, err
 	}
-	if intent.Set && intent.Store && intent.Password.Empty() {
+	if intent.set() && intent.Password.Empty() {
 		return nil, &config.FieldError{Field: "password", Msg: "cannot store a blank password"}
 	}
 	if a.Cfg.NameTaken(newP.Name, oldName) {
@@ -72,12 +87,12 @@ func (a *App) SaveProfile(oldName string, newP config.Profile, intent PasswordIn
 
 	copiedNew := false
 	if renamed && !identityChanged {
-		if intent.Set && intent.Store {
+		if intent.set() {
 			if err := a.Secrets.Upsert(newID, intent.Password); err != nil {
 				return nil, err
 			}
 			copiedNew = true
-		} else if !intent.Forget {
+		} else if !intent.forget() {
 			res, lerr := a.Secrets.Lookup(oldID)
 			if lerr == nil {
 				if err := a.Secrets.Upsert(newID, res.Password); err != nil {
@@ -105,13 +120,13 @@ func (a *App) SaveProfile(oldName string, newP config.Profile, intent PasswordIn
 		}
 	}
 
-	if old != nil && (renamed || identityChanged || intent.Forget) {
+	if old != nil && (renamed || identityChanged || intent.forget()) {
 		if err := a.Secrets.Delete(oldID); err != nil && !errors.Is(err, secret.ErrNotFound) {
 			warnings = append(warnings, "a leftover secret may remain")
 		}
 	}
 
-	if intent.Set && intent.Store && !copiedNew {
+	if intent.set() && !copiedNew {
 		if err := a.Secrets.Upsert(newID, intent.Password); err != nil {
 			warnings = append(warnings, "could not save password: "+err.Error())
 		}

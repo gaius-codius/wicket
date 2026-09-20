@@ -23,7 +23,6 @@ const (
 	fieldDynamic
 	fieldScale
 	fieldPassword
-	fieldStore
 	fieldForget
 	fieldCount
 )
@@ -33,7 +32,6 @@ type formState struct {
 	p        config.Profile
 	field    int
 	password string
-	store    bool
 	forget   bool
 	err      string
 	errField string
@@ -67,6 +65,44 @@ func (f *formState) textValue(id int) *string {
 	return nil
 }
 
+// fields lists the rows this form shows, in order. "forget password" only
+// appears on an edit: a profile being added has no stored password to delete,
+// so the row would be inert and would still mark the form dirty.
+func (f formState) fields() []int {
+	ids := make([]int, 0, fieldCount)
+	for id := range fieldCount {
+		if id == fieldForget && f.oldName == "" {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// fieldIndex is the focused field's position among the visible rows, which is
+// not its id once a row is hidden.
+func (f formState) fieldIndex() int {
+	for i, id := range f.fields() {
+		if id == f.field {
+			return i
+		}
+	}
+	return 0
+}
+
+// step moves focus by delta over the visible rows. tab wraps; arrows stop at
+// the first and last row.
+func (f *formState) step(delta int, wrap bool) {
+	ids := f.fields()
+	i := f.fieldIndex() + delta
+	if wrap {
+		i = (i + len(ids)) % len(ids)
+	} else {
+		i = min(max(i, 0), len(ids)-1)
+	}
+	f.focus(ids[i])
+}
+
 // dirty reports whether anything differs from the profile as opened.
 func (f formState) dirty() bool {
 	return !reflect.DeepEqual(f.p, f.orig) || f.password != "" || f.forget
@@ -86,6 +122,12 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 		}
 	}
 	f.inputs[fieldSize].Placeholder = "dimension (1920x1080), N% (100%) or empty for default"
+	// Saying what an empty field does answers the question the form otherwise
+	// leaves open on an edit: whether a stored password is about to be lost.
+	f.inputs[fieldPassword].Placeholder = "saved to the keyring"
+	if oldName != "" {
+		f.inputs[fieldPassword].Placeholder = "empty keeps the saved password"
+	}
 	f.focus(fieldName)
 	m.form = f
 	m.view = viewForm
@@ -126,17 +168,17 @@ func (m Model) handleFormKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 	case "ctrl+s":
 		return m.saveForm()
 	case "tab":
-		f.focus((f.field + 1) % fieldCount)
+		f.step(1, true)
 	case "shift+tab":
-		f.focus((f.field + fieldCount - 1) % fieldCount)
+		f.step(-1, true)
 	case "up":
-		f.moveField(-1)
+		f.step(-1, false)
 	case "down":
-		f.moveField(1)
+		f.step(1, false)
 	default:
 		if f.textFocused() {
 			if key == "enter" {
-				f.focus((f.field + 1) % fieldCount)
+				f.step(1, true)
 				break
 			}
 			f.editText(msg)
@@ -162,8 +204,9 @@ func (m Model) handleFormKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 }
 
 // editText sends msg to the focused text input and copies the result back.
-// Typing the first password character turns Store on; clearing the password
-// turns it off.
+// A typed password is always stored, so typing one clears a pending "forget":
+// the two requests contradict each other and the typed password is the more
+// explicit of the pair.
 func (f *formState) editText(msg tea.Msg) {
 	id := f.field
 	in, err := updateInput(f.inputs[id], msg, id == fieldPassword)
@@ -178,13 +221,8 @@ func (f *formState) editText(msg tea.Msg) {
 	v := f.textValue(id)
 	before := *v
 	*v = in.Value()
-	if id == fieldPassword {
-		switch {
-		case before == "" && *v != "":
-			f.store = true
-		case before != "" && *v == "":
-			f.store = false
-		}
+	if id == fieldPassword && before == "" && *v != "" {
+		f.forget = false
 	}
 }
 
@@ -202,12 +240,6 @@ func (f *formState) focus(id int) {
 
 func fieldLabel(id int) string { return formLabels[id] }
 
-// moveField steps focus by delta. Unlike tab, arrows stop at the first and
-// last field instead of wrapping.
-func (f *formState) moveField(delta int) {
-	f.focus(min(max(f.field+delta, 0), fieldCount-1))
-}
-
 func (m *Model) toggleFormField(f *formState) {
 	switch f.field {
 	case fieldFullscreen:
@@ -216,10 +248,15 @@ func (m *Model) toggleFormField(f *formState) {
 		f.p.DynamicResolution = !f.p.DynamicResolution
 	case fieldScale:
 		f.p.Scale = nextScale(f.p.Scale)
-	case fieldStore:
-		f.store = !f.store
 	case fieldForget:
 		f.forget = !f.forget
+		if f.forget {
+			// Forgetting and typing a replacement are contradictory, so the
+			// checkbox drops the typed password the same way typing one drops
+			// the checkbox.
+			f.password = ""
+			f.inputs[fieldPassword].SetValue("")
+		}
 	}
 }
 
@@ -256,15 +293,13 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	f := m.form
 	f.err = ""
 	f.errField = ""
-	if f.store && f.password == "" && !f.forget {
-		f.err = "cannot store a blank password"
-		f.errField = "password"
-		m.form = f
-		return m, nil
-	}
 	f.p.Size = strings.TrimSpace(f.p.Size)
-	intent := PasswordIntent{Store: f.store, Forget: f.forget}
-	if f.password != "" {
+	// A typed password is stored, an empty one leaves the keyring as it is, and
+	// the checkbox clears it. editText and toggleFormField keep the first and
+	// last of those from being asked for at once.
+	var intent PasswordIntent
+	switch {
+	case f.password != "":
 		pw, err := secret.NewPassword(f.password)
 		if err != nil {
 			f.err = err.Error()
@@ -272,8 +307,9 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 			m.form = f
 			return m, nil
 		}
-		intent.Set = true
-		intent.Password = pw
+		intent = PasswordIntent{Action: PasswordSet, Password: pw}
+	case f.forget:
+		intent = PasswordIntent{Action: PasswordForget}
 	}
 	warns, err := m.app.SaveProfile(f.oldName, f.p, intent)
 	if err != nil {
@@ -328,7 +364,7 @@ func (m Model) viewForm(lo layout) string {
 		}
 		rows = append(rows, mark+labelStyle.Render(padRight(truncate(label+":", labelW), labelW))+"  "+value)
 	}
-	for id := range fieldCount {
+	for _, id := range f.fields() {
 		switch id {
 		case fieldFullscreen:
 			row(id, check(f.p.Fullscreen))
@@ -336,8 +372,6 @@ func (m Model) viewForm(lo layout) string {
 			row(id, check(f.p.DynamicResolution))
 		case fieldScale:
 			row(id, "‹ "+strconv.Itoa(f.p.Scale)+"% ›")
-		case fieldStore:
-			row(id, check(f.store))
 		case fieldForget:
 			row(id, check(f.forget))
 		default:
@@ -356,7 +390,7 @@ func (m Model) viewForm(lo layout) string {
 	// bottom of the panel, where the last rows were unreachable but still
 	// saved by ctrl+s.
 	budget := max(lo.Budget-len(tail), 1)
-	start, end := listWindow(len(rows), f.field, budget, 1)
+	start, end := listWindow(len(rows), f.fieldIndex(), budget, 1)
 	out := append([]string{}, rows[start:end]...)
 	return strings.Join(append(out, tail...), "\n")
 }
@@ -372,7 +406,6 @@ var formLabels = [fieldCount]string{
 	fieldDynamic:    "dynamic_resolution",
 	fieldScale:      "scale",
 	fieldPassword:   "password",
-	fieldStore:      "store password",
 	fieldForget:     "forget password",
 }
 

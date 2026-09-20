@@ -77,7 +77,7 @@ func assertTUISweep(t *testing.T, save bool) {
 
 	if save {
 		p, _ := h.m.app.Cfg.Profile("work")
-		h.m.form = formState{oldName: "work", p: p, password: sentinel, store: true}
+		h.m.form = formState{oldName: "work", p: p, password: sentinel}
 		h.m.view = viewForm
 		h.m = press(h.m, "ctrl+s")
 		h.m = press(h.m, "enter")

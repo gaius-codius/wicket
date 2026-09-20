@@ -75,6 +75,12 @@ so every field is reachable in a short terminal. `?` opens help only when a
 checkbox has focus: in a text field it types a literal `?`. The same is true of
 the password dialog, where Tab leaves the field first.
 
+A password typed into the form is saved to the keyring on Ctrl+S; leaving the
+field empty keeps whatever is already stored. To drop a stored password, tick
+`forget password`, which appears only when editing an existing profile. Typing
+a password clears that checkbox and ticking it clears the typed password, so
+the two are never asked for at once.
+
 Paste with your terminal's paste shortcut; Ctrl+V is not bound. A paste may
 carry one trailing line break, which is dropped; anything spanning more than
 one line is refused rather than silently truncated.

@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
+
+	"golang.org/x/sys/unix"
 )
 
 const starterTOML = "[general]\n"
@@ -109,52 +112,105 @@ func (c *Config) Upsert(p Profile, except string) error {
 	if err := ValidateProfile(p); err != nil {
 		return err
 	}
-	if c.NameTaken(p.Name, except) {
-		return &FieldError{Field: "name", Msg: "already used"}
-	}
-	idx := -1
-	if except != "" {
-		idx = c.index(except)
-		if idx < 0 {
-			return fmt.Errorf("profile %q not found", except)
+	return c.mutate(func() error {
+		if c.NameTaken(p.Name, except) {
+			return &FieldError{Field: "name", Msg: "already used"}
 		}
-	}
-	table := map[string]any{}
-	if idx >= 0 {
-		table = c.doc.profiles[idx]
-	}
-	table = applyProfile(table, p)
-	if idx >= 0 {
-		c.doc.profiles[idx] = table
-	} else {
-		c.doc.profiles = append(c.doc.profiles, table)
-	}
-	if err := c.Save(); err != nil {
-		return err
-	}
-	return c.reload()
+		idx := -1
+		if except != "" {
+			idx = c.index(except)
+			if idx < 0 {
+				return fmt.Errorf("profile %q not found", except)
+			}
+		}
+		table := map[string]any{}
+		if idx >= 0 {
+			table = c.doc.profiles[idx]
+		}
+		table = applyProfile(table, p)
+		if idx >= 0 {
+			c.doc.profiles[idx] = table
+		} else {
+			c.doc.profiles = append(c.doc.profiles, table)
+		}
+		return nil
+	})
 }
 
 // Remove deletes the named profile and saves.
 func (c *Config) Remove(name string) error {
-	idx := c.index(name)
-	if idx < 0 {
-		return fmt.Errorf("profile %q not found", name)
+	return c.mutate(func() error {
+		idx := c.index(name)
+		if idx < 0 {
+			return fmt.Errorf("profile %q not found", name)
+		}
+		c.doc.profiles = append(c.doc.profiles[:idx], c.doc.profiles[idx+1:]...)
+		return nil
+	})
+}
+
+// mutate applies edit to the file's current contents and writes the result,
+// all while holding the config lock.
+//
+// The re-read matters: a Config can be minutes old by the time the user saves
+// a form, and writing the document captured at Open would erase whatever
+// another editor changed in between. Taking the same lock as StateStore also
+// keeps two Wicket processes from interleaving their writes.
+func (c *Config) mutate(edit func() error) error {
+	unlock, err := c.lock()
+	if err != nil {
+		return err
 	}
-	c.doc.profiles = append(c.doc.profiles[:idx], c.doc.profiles[idx+1:]...)
-	if err := c.Save(); err != nil {
+	defer unlock()
+
+	switch err := c.reload(); {
+	case err == nil:
+	case errors.Is(err, fs.ErrNotExist):
+		// The file was removed while this Config was open. Recreating it is
+		// what OpenOrCreate would have done, and is friendlier than refusing
+		// to save the profile the user just filled in.
+		fresh, perr := parseConfig(c.path, []byte(starterTOML))
+		if perr != nil {
+			return perr
+		}
+		c.doc, c.profiles = fresh.doc, fresh.profiles
+	default:
+		return fmt.Errorf("re-read config before saving: %w", err)
+	}
+	if err := edit(); err != nil {
+		return err
+	}
+	if err := c.save(); err != nil {
 		return err
 	}
 	return c.reload()
 }
 
-// Save writes the document atomically at 0600.
-func (c *Config) Save() error {
+// save writes the document atomically at 0600. Callers must hold the lock.
+func (c *Config) save() error {
 	data, err := c.doc.encode()
 	if err != nil {
 		return err
 	}
 	return atomicWrite(c.path, data)
+}
+
+func (c *Config) lock() (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(c.path), 0o700); err != nil {
+		return nil, fmt.Errorf("create config directory: %w", err)
+	}
+	f, err := os.OpenFile(c.path+lockSuffix, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("config lock: %w", err)
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("config lock: %w", err)
+	}
+	return func() {
+		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		_ = f.Close()
+	}, nil
 }
 
 func (c *Config) reload() error {

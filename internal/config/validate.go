@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 )
 
 const (
@@ -52,12 +51,20 @@ func ValidateProfile(p Profile) error {
 	return validateScale(p.Scale)
 }
 
+// hasControl reports whether s holds a control character. These fields reach
+// two places that cannot cope with one: the terminal, where an ESC would let a
+// profile name rewrite the screen, and the FreeRDP command line, where a
+// newline or tab produces an argument nobody typed.
+func hasControl(s string) bool {
+	return strings.ContainsFunc(s, unicode.IsControl)
+}
+
 func validateName(name string) error {
 	if name == "" {
 		return &FieldError{Field: "name", Msg: "must not be empty"}
 	}
-	if strings.ContainsRune(name, 0) {
-		return &FieldError{Field: "name", Msg: "must not contain NUL"}
+	if hasControl(name) {
+		return &FieldError{Field: "name", Msg: "must not contain control characters"}
 	}
 	if strings.TrimSpace(name) != name {
 		return &FieldError{Field: "name", Msg: "must not have leading or trailing whitespace"}
@@ -77,8 +84,8 @@ func validateHost(host string) error {
 		// REQ-015 is as typed after the caller trims; reject untrimmed on the stored value.
 		return &FieldError{Field: "host", Msg: "must not have leading or trailing whitespace"}
 	}
-	if strings.ContainsRune(h, 0) {
-		return &FieldError{Field: "host", Msg: "must not contain NUL"}
+	if hasControl(h) {
+		return &FieldError{Field: "host", Msg: "must not contain control characters"}
 	}
 	if strings.HasPrefix(h, "[") {
 		end := strings.LastIndex(h, "]")
@@ -135,8 +142,8 @@ func validateUser(user string) error {
 	if u != user {
 		return &FieldError{Field: "user", Msg: "must not have leading or trailing whitespace"}
 	}
-	if strings.ContainsRune(u, 0) {
-		return &FieldError{Field: "user", Msg: "must not contain NUL"}
+	if hasControl(u) {
+		return &FieldError{Field: "user", Msg: "must not contain control characters"}
 	}
 	return nil
 }
@@ -152,8 +159,8 @@ func validateDomainUser(domain, user string) error {
 	if d != domain {
 		return &FieldError{Field: "domain", Msg: "must not have leading or trailing whitespace"}
 	}
-	if strings.ContainsRune(d, 0) {
-		return &FieldError{Field: "domain", Msg: "must not contain NUL"}
+	if hasControl(d) {
+		return &FieldError{Field: "domain", Msg: "must not contain control characters"}
 	}
 	if strings.ContainsAny(user, `\@`) {
 		return &FieldError{Field: "user", Msg: `must not contain '\' or '@' when domain is set`}
@@ -165,13 +172,10 @@ func validateClient(client string) error {
 	if client == "" {
 		return &FieldError{Field: "client", Msg: "must not be empty"}
 	}
-	if strings.ContainsRune(client, 0) {
-		return &FieldError{Field: "client", Msg: "must not contain NUL"}
+	if hasControl(client) {
+		return &FieldError{Field: "client", Msg: "must not contain control characters"}
 	}
 	if strings.ContainsRune(client, '/') || strings.ContainsFunc(client, unicode.IsSpace) {
-		return &FieldError{Field: "client", Msg: "must be a basename (no '/' or whitespace)"}
-	}
-	if strings.ContainsRune(client, '\t') {
 		return &FieldError{Field: "client", Msg: "must be a basename (no '/' or whitespace)"}
 	}
 	return nil
@@ -182,8 +186,8 @@ func validateSize(size string) error {
 	if s == "" {
 		return nil
 	}
-	if strings.ContainsRune(s, 0) {
-		return &FieldError{Field: "size", Msg: "must not contain NUL"}
+	if hasControl(s) {
+		return &FieldError{Field: "size", Msg: "must not contain control characters"}
 	}
 	if strings.HasSuffix(s, "%") {
 		n := s[:len(s)-1]
@@ -213,16 +217,13 @@ func positiveInt(s string) bool {
 	if s == "" {
 		return false
 	}
+	// An explicit sign is not a size: Atoi accepts "+100", which would let
+	// "+100%" through as 100.
+	if s[0] == '+' || s[0] == '-' {
+		return false
+	}
 	n, err := strconv.Atoi(s)
-	if err != nil || n < 1 {
-		return false
-	}
-	// reject leading zeros like 01 except we allow any parseable positive int
-	_, r := utf8.DecodeRuneInString(s)
-	if r == '+' || r == '-' {
-		return false
-	}
-	return true
+	return err == nil && n >= 1
 }
 
 func fmtIndex(i int) string {

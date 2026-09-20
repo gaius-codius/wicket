@@ -251,14 +251,14 @@ func (d *document) encode() ([]byte, error) {
 	}
 	b := buf.Bytes()
 	if !bytes.Contains(b, []byte("["+keyGeneral+"]")) && !bytes.Contains(b, []byte("["+keyGeneral+".")) {
-		// Empty general map is omitted by the encoder; keep the table present.
+		// The encoder normally emits [general] even when it is empty. Should
+		// that ever change, append the header rather than prepend it: a table
+		// header at the top would swallow every bare key the encoder wrote
+		// before the first table, which is where the preserved extras live.
 		if len(b) > 0 && !bytes.HasSuffix(b, []byte("\n")) {
 			b = append(b, '\n')
 		}
-		b = append([]byte("[general]\n"), b...)
-		if !bytes.HasSuffix(b, []byte("\n")) {
-			b = append(b, '\n')
-		}
+		b = append(b, []byte("["+keyGeneral+"]\n")...)
 	}
 	return b, nil
 }

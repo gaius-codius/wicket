@@ -28,6 +28,13 @@ func atomicWrite(path string, data []byte) error {
 		cleanup()
 		return err
 	}
+	// Without this the rename can land before the data does, so a crash
+	// leaves the config in place but empty.
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		cleanup()
+		return err
+	}
 	if err := f.Close(); err != nil {
 		cleanup()
 		return err
@@ -38,6 +45,11 @@ func atomicWrite(path string, data []byte) error {
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		return err
+	}
+	// Syncing the directory makes the rename itself durable.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
 }

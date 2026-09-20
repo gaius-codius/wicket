@@ -157,3 +157,39 @@ func validProfile() Profile {
 		Scale:             100,
 	}
 }
+
+// These fields are rendered to the terminal and passed to FreeRDP, so a
+// newline, tab or ESC must not survive validation.
+func TestValidateProfile_RejectsControlCharacters(t *testing.T) {
+	base := Profile{Name: "n", Host: "h", User: "u", Client: "sdl-freerdp3", Scale: 100}
+	for _, bad := range []string{"a\nb", "a\tb", "a\x1b[31mb", "a\rb", "a\x00b"} {
+		for _, tc := range []struct {
+			field string
+			mut   func(Profile) Profile
+		}{
+			{"name", func(p Profile) Profile { p.Name = bad; return p }},
+			{"host", func(p Profile) Profile { p.Host = bad; return p }},
+			{"user", func(p Profile) Profile { p.User = bad; return p }},
+			{"domain", func(p Profile) Profile { p.Domain = bad; return p }},
+			{"client", func(p Profile) Profile { p.Client = bad; return p }},
+		} {
+			if err := ValidateProfile(tc.mut(base)); err == nil {
+				t.Errorf("%s = %q accepted", tc.field, bad)
+			}
+		}
+	}
+}
+
+// Atoi accepts "+100", which would let "+100%" through as a scale of 100.
+func TestValidateSize_RejectsASignedNumber(t *testing.T) {
+	for _, bad := range []string{"+100%", "-100%", "+1920x1080", "1920x+1080"} {
+		if err := validateSize(bad); err == nil {
+			t.Errorf("size %q accepted", bad)
+		}
+	}
+	for _, good := range []string{"100%", "1920x1080", ""} {
+		if err := validateSize(good); err != nil {
+			t.Errorf("size %q rejected: %v", good, err)
+		}
+	}
+}

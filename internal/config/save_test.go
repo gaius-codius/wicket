@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -113,5 +114,99 @@ user = "u"
 	}
 	if len(c2.Profiles()) != 0 {
 		t.Fatal("still there")
+	}
+}
+
+// A Config can be minutes old by the time the user saves. Writing the document
+// captured at Open would erase whatever another editor changed in between.
+func TestUpsert_KeepsAConcurrentEdit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[general]\n\n[[profiles]]\nname=\"a\"\nhost=\"ha\"\nuser=\"ua\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mine, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Another editor adds a profile after we opened the file.
+	theirs, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := theirs.Upsert(Profile{Name: "b", Host: "hb", User: "ub", Scale: 100, Client: "sdl-freerdp3"}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mine.Upsert(Profile{Name: "c", Host: "hc", User: "uc", Scale: 100, Client: "sdl-freerdp3"}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, p := range after.Profiles() {
+		names = append(names, p.Name)
+	}
+	if len(names) != 3 {
+		t.Fatalf("profiles = %v, want a, b and c to survive", names)
+	}
+	for _, want := range []string{"a", "b", "c"} {
+		if _, ok := after.Profile(want); !ok {
+			t.Fatalf("profile %q lost; have %v", want, names)
+		}
+	}
+}
+
+// The duplicate-name check has to see the file as it is now, not as it was
+// when this Config was opened.
+func TestUpsert_RejectsANameAddedConcurrently(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[general]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mine, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := theirs.Upsert(Profile{Name: "dup", Host: "h", User: "u", Scale: 100, Client: "sdl-freerdp3"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	err = mine.Upsert(Profile{Name: "dup", Host: "h2", User: "u2", Scale: 100, Client: "sdl-freerdp3"}, "")
+	var fe *FieldError
+	if !errors.As(err, &fe) || fe.Field != "name" {
+		t.Fatalf("err = %v, want a name field error", err)
+	}
+}
+
+// Deleting the config while a form is open should not cost the user the
+// profile they just filled in.
+func TestUpsert_RecreatesAConfigDeletedUnderIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[general]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Upsert(Profile{Name: "a", Host: "h", User: "u", Scale: 100, Client: "sdl-freerdp3"}, ""); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	after, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := after.Profile("a"); !ok {
+		t.Fatal("profile not written after the file was recreated")
 	}
 }

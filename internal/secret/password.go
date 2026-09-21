@@ -73,3 +73,10 @@ func (p *Password) Clear() {
 
 // Empty reports whether any secret was stored on this value.
 func (p Password) Empty() bool { return p.v == "" }
+
+// OccursIn reports whether the password appears in s, so text from outside
+// Wicket -- a client's log, say -- can be kept off the screen if it repeats
+// the password. An empty password occurs nowhere.
+func (p Password) OccursIn(s string) bool {
+	return p.v != "" && strings.Contains(s, p.v)
+}

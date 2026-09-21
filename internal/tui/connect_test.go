@@ -84,7 +84,7 @@ func TestConnect_RestartSharedStore(t *testing.T) {
 	}
 	m2 := New(Options{
 		Home: h.home, ConfigPath: h.cfg, StatePath: h.state, Store: store,
-		Term: h.term, Width: 80, Height: 24, Launcher: h.m.app.Launcher,
+		Width: 80, Height: 24, Launcher: h.m.app.Launcher,
 	})
 	m2 = press(m2, "enter")
 	if m2.view == viewModal {
@@ -113,15 +113,26 @@ func TestConnect_MissingClientNoLastUsed(t *testing.T) {
 	}
 }
 
-func TestConnect_TermOrder(t *testing.T) {
+// The terminal belongs to Bubble Tea while a session runs, so whatever the
+// client logs goes to a buffer instead. The launcher's writers stand in for
+// the terminal here; before the session view, they got the client's output.
+func TestConnect_ClientOutputNeverReachesTheTerminal(t *testing.T) {
 	_ = withFakeRDP(t)
+	t.Setenv("FAKERDP_OUTPUT", "[ERROR][com.freerdp.core] - ERRCONNECT_LOGON_FAILURE")
 	store := secret.NewMemory()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
 	_ = store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
 	h.m = press(h.m, "enter")
-	if strings.Join(h.term.events, ",") != "release,start,restore" {
-		t.Fatalf("events %v", h.term.events)
+	if h.stdout.Len() != 0 || h.stderr.Len() != 0 {
+		t.Fatalf("client wrote to the terminal: stdout %q stderr %q", h.stdout.String(), h.stderr.String())
+	}
+	if h.m.view != viewRetry {
+		t.Fatalf("view %v, want the retry overlay", h.m.view)
+	}
+	// What it logged is still there for the retry overlay.
+	if out := screen(h.m); !strings.Contains(out, "ERRCONNECT_LOGON_FAILURE") {
+		t.Fatalf("the client's error is missing from the overlay:\n%s", out)
 	}
 }
 

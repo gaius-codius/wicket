@@ -63,8 +63,10 @@ func main() {
 
 func startTUI() error {
 	return tui.Run(tui.Options{
-		Store:    secret.NewDBus(),
-		Launcher: &rdp.Launcher{Stdout: os.Stdout, Stderr: os.Stderr},
+		Store: secret.NewDBus(),
+		// The TUI sends the client's output to a buffer of its own: the
+		// terminal is Bubble Tea's for as long as a session runs.
+		Launcher: &rdp.Launcher{},
 		// The TUI asks the terminal for its background colour only when
 		// there is a terminal to answer.
 		StdoutIsTerminal: func() bool { return isTerminal(int(os.Stdout.Fd())) },

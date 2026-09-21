@@ -312,11 +312,11 @@ func TestRetry_MessageNotDuplicated(t *testing.T) {
 }
 
 // Starting a connection must not leave the view on a dialog whose state has
-// already been cleared. The harness has to be the asynchronous one: with a
-// synchronous terminal the connection finishes inside Update and the
-// intermediate model, which is the whole defect, is never observed.
+// already been cleared. Update is called directly, since press would follow
+// the session to its end and the intermediate model, which is the whole
+// defect, would never be observed.
 func TestModal_LeavesDialogBeforeConnecting(t *testing.T) {
-	h := newAsyncHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	_ = withFakeRDP(t)
 	h.m = press(h.m, "enter")
 	h.m = typeInto(h.m, "pw")
@@ -326,11 +326,12 @@ func TestModal_LeavesDialogBeforeConnecting(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("connecting should return a command to run the client")
 	}
-	if !m.connecting {
-		t.Fatal("model should be marked as connecting")
+	defer settle(m, cmd)
+	if m.session == nil {
+		t.Fatal("model should have a session running")
 	}
-	if m.view != viewList {
-		t.Fatalf("view = %v while connecting, want viewList", m.view)
+	if m.view != viewSession {
+		t.Fatalf("view = %v while connecting, want viewSession", m.view)
 	}
 	if out := stripANSI(m.View().Content); strings.Contains(out, "Connect to") {
 		t.Fatalf("cleared dialog drawn while connecting:\n%s", out)
@@ -340,7 +341,7 @@ func TestModal_LeavesDialogBeforeConnecting(t *testing.T) {
 // Retrying has the same requirement as the dialog: the overlay's message is
 // cleared before the client starts, so the view must move on with it.
 func TestRetry_LeavesOverlayBeforeConnecting(t *testing.T) {
-	h := newAsyncHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	_ = withFakeRDP(t)
 	p, ok := h.m.app.Cfg.Profile("work")
 	if !ok {
@@ -358,8 +359,9 @@ func TestRetry_LeavesOverlayBeforeConnecting(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("retry should return a command to run the client")
 	}
-	if m.view != viewList {
-		t.Fatalf("view = %v while retrying, want viewList", m.view)
+	defer settle(m, cmd)
+	if m.view != viewSession {
+		t.Fatalf("view = %v while retrying, want viewSession", m.view)
 	}
 	if out := stripANSI(m.View().Content); strings.Contains(out, "▲") {
 		t.Fatalf("blanked retry overlay drawn while connecting:\n%s", out)

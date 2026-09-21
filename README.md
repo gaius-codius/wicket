@@ -108,7 +108,7 @@ Omarchy theme falls back to Verdigris.
 | PgUp / PgDn | Page (one screen of rows) |
 | `/` | Filter by name or host (Esc clears) |
 | `s` | Sort most recently used first, or back to file order (not saved) |
-| `Enter` | Connect |
+| `Enter` | Connect (see [Sessions](#sessions)) |
 | `n` | New profile |
 | `e` | Edit selected |
 | `D` | Delete selected |
@@ -168,9 +168,28 @@ line says so with `✗`. In the footer, the key each view is for is drawn in the
 accent colour, and only the `y` that confirms a delete is drawn in the danger
 colour.
 
+## Sessions
+
+`Enter` starts FreeRDP and Wicket stays on screen while the session runs:
+`● Connected to <name>`, the user and host, when it opened and how long it has
+been open. The session itself is in FreeRDP's own window; Wicket comes back to
+the list when that window closes. Whatever FreeRDP logs is kept (the last
+64 KiB) rather than written over the TUI.
+
+While a session runs the only key is `Ctrl+C`, which stops it: the first sends
+FreeRDP an interrupt, as Ctrl+C in its own terminal would, and the status line
+says `Stopping session…`. If FreeRDP has not gone five seconds later, or you
+press `Ctrl+C` again, it is asked to terminate, and after that it is killed.
+Anything FreeRDP started goes with it. Ending Wicket another way while a
+session runs, such as closing the terminal or sending it SIGTERM, stops the
+session the same way before Wicket exits; only a SIGKILL, which no program can
+act on, would leave FreeRDP running. `wicket connect` is unchanged: it waits
+for FreeRDP in the foreground and passes Ctrl+C on to it.
+
 When a session ends within a few seconds, Wicket shows how the client exited
-and offers `Enter` to retry or `n` to type a new password; a short session is
-not always a wrong password, so nothing is changed until you choose.
+and the last error FreeRDP logged, and offers `Enter` to retry or `n` to type
+a new password; a short session is not always a wrong password, so nothing is
+changed until you choose. A session you stopped with `Ctrl+C` simply ends.
 
 ## Contributing
 

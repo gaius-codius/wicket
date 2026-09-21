@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gaius-codius/wicket/internal/rdp"
@@ -75,10 +75,63 @@ func keyMsg(k string) tea.KeyPressMsg {
 	}
 }
 
+// press sends keys one at a time. A key that starts a session is followed
+// through to the session's end, as if the user had waited for the client to
+// exit, so the model returned is the one they would see next; use Update
+// directly to look at the session view itself.
 func press(m Model, keys ...string) Model {
 	for _, k := range keys {
-		nm, _ := m.Update(keyMsg(k))
+		nm, cmd := m.Update(keyMsg(k))
 		m = nm.(Model)
+		if m.session != nil {
+			m = settle(m, cmd)
+		}
+	}
+	return m
+}
+
+// settle runs cmd the way Bubble Tea would and feeds the model the end of
+// the session it started. Ticks and other replies are dropped, as press has
+// always dropped them.
+func settle(m Model, cmd tea.Cmd) Model {
+	msgs := make(chan tea.Msg, 64)
+	stop := make(chan struct{})
+	defer close(stop)
+	var run func(tea.Cmd)
+	run = func(c tea.Cmd) {
+		if c == nil {
+			return
+		}
+		go func() {
+			msg := c()
+			if b, ok := msg.(tea.BatchMsg); ok {
+				for _, c := range b {
+					run(c)
+				}
+				return
+			}
+			select {
+			case msgs <- msg:
+			case <-stop:
+			}
+		}()
+	}
+	run(cmd)
+	timeout := time.After(10 * time.Second)
+	for m.session != nil {
+		select {
+		case msg := <-msgs:
+			if _, ok := msg.(sessionEndedMsg); !ok {
+				continue
+			}
+			nm, next := m.Update(msg)
+			m = nm.(Model)
+			if m.session != nil {
+				run(next)
+			}
+		case <-timeout:
+			panic("session did not end within 10s")
+		}
 	}
 	return m
 }
@@ -88,29 +141,6 @@ func typeInto(m Model, s string) Model {
 		m = press(m, string(r))
 	}
 	return m
-}
-
-type recTerm struct {
-	events []string
-}
-
-func (r *recTerm) Release() error {
-	r.events = append(r.events, "release")
-	return nil
-}
-func (r *recTerm) Restore() error {
-	r.events = append(r.events, "restore")
-	return nil
-}
-
-type seqRunner struct {
-	rdp.OSRunner
-	events *[]string
-}
-
-func (s seqRunner) Command(name string, arg ...string) *exec.Cmd {
-	*s.events = append(*s.events, "start")
-	return s.OSRunner.Command(name, arg...)
 }
 
 type panicStore struct{}
@@ -165,7 +195,6 @@ type harness struct {
 	cfg    string
 	state  string
 	store  secret.Store
-	term   *recTerm
 	stdout bytes.Buffer
 	stderr bytes.Buffer
 	m      Model
@@ -187,18 +216,17 @@ func newHarness(t *testing.T, body string, store secret.Store) *harness {
 	if store == nil {
 		store = secret.NewMemory()
 	}
-	h := &harness{t: t, home: home, cfg: cfg, state: st, store: store, term: &recTerm{}}
-	events := &h.term.events
+	h := &harness{t: t, home: home, cfg: cfg, state: st, store: store}
 	m := New(Options{
 		Home:       home,
 		ConfigPath: cfg,
 		StatePath:  st,
 		Store:      store,
-		Term:       h.term,
 		Width:      80,
 		Height:     24,
+		// The launcher's writers stand in for the terminal: the TUI must
+		// never let the client write there.
 		Launcher: &rdp.Launcher{
-			Runner: seqRunner{events: events},
 			Stdout: &h.stdout,
 			Stderr: &h.stderr,
 		},
@@ -227,17 +255,6 @@ func mustPassword(t *testing.T, s string) secret.Password {
 		t.Fatal(err)
 	}
 	return pw
-}
-
-// newAsyncHarness mirrors production, where Run installs nopTerm and
-// runConnect hands the client to tea.Exec. Only then is the model returned by
-// Update the one the user sees while the session runs, which is where a view
-// left pointing at a cleared dialog shows up.
-func newAsyncHarness(t *testing.T, body string, store secret.Store) *harness {
-	t.Helper()
-	h := newHarness(t, body, store)
-	h.m.app.Term = nopTerm{}
-	return h
 }
 
 // focusField moves to id the way a user would. Assigning form.field directly

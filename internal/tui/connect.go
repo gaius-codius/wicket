@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -21,32 +20,9 @@ type retryState struct {
 	class   rdp.Class
 	// outcome is how the client exited, when it started at all.
 	outcome rdp.Outcome
+	// note is the client's own last word on why, cleaned for the screen.
+	note string
 }
-
-type connectDoneMsg struct {
-	profile     config.Profile
-	cred        rdp.Credential
-	keepUseOnce bool
-	extra       string
-	cr          ConnectResult
-	execErr     error
-}
-
-// connectJob is a tea.ExecCommand that does not touch stdin. The child already
-// has Wicket's password pipe; tea.ExecProcess would replace it.
-type connectJob struct {
-	run func()
-}
-
-func (c *connectJob) Run() error {
-	if c != nil && c.run != nil {
-		c.run()
-	}
-	return nil
-}
-func (*connectJob) SetStdin(io.Reader)  {}
-func (*connectJob) SetStdout(io.Writer) {}
-func (*connectJob) SetStderr(io.Writer) {}
 
 func (m Model) beginConnect() (tea.Model, tea.Cmd) {
 	p, ok := m.selected()
@@ -77,40 +53,28 @@ func (m Model) connectProfile(p config.Profile, typed *secret.Password) (tea.Mod
 	return m.runConnect(p, res.Cred, typed != nil, extra)
 }
 
+// runConnect starts the client and puts the session view up while it runs.
+// Wicket keeps the terminal throughout: see session.go.
 func (m Model) runConnect(p config.Profile, cred rdp.Credential, keepUseOnce bool, extra string) (tea.Model, tea.Cmd) {
-	switch m.app.term().(type) {
-	case nopTerm:
-		m.connecting = true
-		app := m.app
-		var cr ConnectResult
-		return m, tea.Exec(&connectJob{run: func() {
-			cr = app.Connect(p, cred)
-		}}, func(err error) tea.Msg {
-			return connectDoneMsg{
-				profile: p, cred: cred, keepUseOnce: keepUseOnce, extra: extra,
-				cr: cr, execErr: err,
-			}
-		})
-	default:
-		return m.applyConnect(p, cred, keepUseOnce, extra, m.app.Connect(p, cred))
+	s, err := m.app.Start(p, cred)
+	if err != nil {
+		return m.applyConnect(p, cred, keepUseOnce, extra, startFailed(err))
 	}
-}
-
-func (m Model) handleConnectDone(msg connectDoneMsg) (tea.Model, tea.Cmd) {
-	m.connecting = false
-	if msg.execErr != nil && msg.cr.Status == "" {
-		m.refreshUsed()
-		m.clearUseOnce()
-		m.retry = retryState{}
-		m.view = viewList
-		m.setStatus(msg.execErr.Error(), statusError)
-		return m, nil
+	// A client that started has changed the last-used time.
+	m.refreshUsed()
+	m.sessionSeq++
+	held, _ := cred.(secret.Password)
+	m.session = &sessionState{
+		id: m.sessionSeq, s: s, profile: p, held: &held,
+		keepUseOnce: keepUseOnce, extra: extra, opened: m.clock(),
 	}
-	return m.applyConnect(msg.profile, msg.cred, msg.keepUseOnce, msg.extra, msg.cr)
+	m.view = viewSession
+	m.setStatus("", statusInfo)
+	return m, tea.Batch(waitSession(m.app, m.session.id, s), sessionTick(m.session.id))
 }
 
 func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce bool, extra string, cr ConnectResult) (tea.Model, tea.Cmd) {
-	// Connect records the last-used time once the client starts.
+	// The client may have started, and recorded the last-used time.
 	m.refreshUsed()
 	// warn holds messages that are not about how the session ended, so they
 	// stay on the status line even when the retry overlay is shown.
@@ -146,7 +110,8 @@ func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce b
 		}
 		held, _ := cred.(secret.Password)
 		hp := held
-		m.retry = retryState{profile: p, held: &hp, useOnce: keepUseOnce, status: cr.Status, class: cr.Class, outcome: cr.Outcome}
+		m.retry = retryState{profile: p, held: &hp, useOnce: keepUseOnce, status: cr.Status, class: cr.Class, outcome: cr.Outcome,
+			note: clientNote(cr.Output, cred)}
 		m.view = viewRetry
 		// The overlay carries the session's own message; only the other
 		// warnings stay on the status line.
@@ -215,8 +180,8 @@ const retryHint = "If the password may be wrong, press n for a new password."
 
 // viewRetry renders the overlay in at most room lines. The message is what
 // happened and always stays; how the client exited comes next, since it is
-// a fact the user cannot see anywhere else; the hint repeats a footer key and
-// goes first.
+// a fact the user cannot see anywhere else, then what the client itself last
+// said; the hint repeats a footer key and goes first.
 func (m Model) viewRetry(lo layout, room int) []string {
 	room = max(room, 1)
 	wrap := lipgloss.NewStyle().Width(max(lo.Inner-2, 1))
@@ -238,6 +203,11 @@ func (m Model) viewRetry(lo layout, room int) []string {
 	}
 	if detail := retryDetail(m.retry); detail != "" {
 		more(detail)
+	}
+	if m.retry.note != "" {
+		// One line only: a client's log line can be long, and the hint
+		// below it matters more than its tail.
+		more(truncate("client: "+m.retry.note, lo.Inner))
 	}
 	more(retryHint)
 	return lines

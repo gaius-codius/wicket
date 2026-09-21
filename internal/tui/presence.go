@@ -53,7 +53,7 @@ func (m Model) identity(p config.Profile) secret.Identity {
 // painting the list must never touch the keyring, and a D-Bus round trip per
 // frame would stall the UI behind a slow bus.
 func (m Model) ensurePresence() (Model, tea.Cmd) {
-	if m.connecting || m.quit || (m.view != viewList && m.view != viewRetry) {
+	if m.session != nil || m.quit || (m.view != viewList && m.view != viewRetry) {
 		return m, nil
 	}
 	if m.app == nil || m.app.Cfg == nil || m.app.Secrets == nil {

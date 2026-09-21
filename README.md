@@ -39,6 +39,7 @@ client on `PATH` — `sdl-freerdp3` by default, configurable per profile.
 wicket                 # start the TUI
 wicket connect work    # connect a named profile without the TUI
 wicket --help          # or -h, or: wicket help
+wicket --version       # or -v, or: wicket version
 ```
 
 `wicket connect` is for Hyprland keybindings and scripts. It does not create a config file. On a non-TTY (no password prompt), the profile must already have a password saved from the TUI.

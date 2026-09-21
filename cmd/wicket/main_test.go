@@ -190,3 +190,45 @@ func TestRepoIsLicensed(t *testing.T) {
 		t.Fatalf("LICENSE is not the MIT text:\n%s", b)
 	}
 }
+
+// The install script reads this to decide whether an update is needed, so the
+// shape of the line matters: "wicket <version>", version in field two.
+func TestVersionPrintsOneParsableLine(t *testing.T) {
+	t.Parallel()
+	for _, flag := range []string{"--version", "-v", "version"} {
+		t.Run(flag, func(t *testing.T) {
+			t.Parallel()
+			got := runCLI(t, []string{flag})
+			if got.code != 0 {
+				t.Fatalf("exit = %d, want 0; stderr=%q", got.code, got.stderr)
+			}
+			if got.tuiCalls != 0 {
+				t.Fatalf("TUI started on %s", flag)
+			}
+			line := strings.TrimSpace(got.stdout)
+			if strings.Contains(line, "\n") {
+				t.Fatalf("version printed %d lines: %q", strings.Count(line, "\n")+1, line)
+			}
+			fields := strings.Fields(line)
+			if len(fields) < 2 || fields[0] != "wicket" || fields[1] == "" {
+				t.Fatalf("version = %q, want \"wicket <version>\"", line)
+			}
+		})
+	}
+}
+
+// A release build sets version and commit with -ldflags; a "go install" build
+// sets neither and falls back to the module version baked into the binary.
+func TestVersionStringUsesTheBuildStamp(t *testing.T) {
+	oldV, oldC := version, commit
+	defer func() { version, commit = oldV, oldC }()
+
+	version, commit = "v0.1.0", "abc1234"
+	if got := versionString(); got != "wicket 0.1.0 (abc1234)" {
+		t.Fatalf("stamped build = %q", got)
+	}
+	version, commit = "0.1.0", ""
+	if got := versionString(); got != "wicket 0.1.0" {
+		t.Fatalf("no commit = %q", got)
+	}
+}

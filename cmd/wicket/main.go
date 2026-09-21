@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/gaius-codius/wicket/internal/rdp"
@@ -23,7 +24,31 @@ Commands:
 
 Options:
   -h, --help          Show this help
+  -v, --version       Show the version
 `
+
+// version is set at build time with -ldflags "-X main.version=0.1.0". A build
+// installed with "go install" has no ldflags, so the module version recorded
+// in the binary is used instead; only a build straight from a working tree
+// falls through to "dev".
+var (
+	version = "dev"
+	commit  = ""
+)
+
+func versionString() string {
+	v := version
+	if v == "dev" {
+		if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+			v = bi.Main.Version
+		}
+	}
+	v = strings.TrimPrefix(v, "v")
+	if commit == "" {
+		return "wicket " + v
+	}
+	return "wicket " + v + " (" + commit + ")"
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, startTUI))
@@ -48,6 +73,9 @@ func run(args []string, stdout, stderr io.Writer, runTUI func() error) int {
 	switch args[0] {
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, helpText)
+		return 0
+	case "version", "-v", "--version":
+		fmt.Fprintln(stdout, versionString())
 		return 0
 	case "connect":
 		return runConnect(args[1:], stdout, stderr)

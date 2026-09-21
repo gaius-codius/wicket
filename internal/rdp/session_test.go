@@ -2,6 +2,7 @@ package rdp
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -227,19 +228,56 @@ func TestSession_OwnSignalsDoesNotForward(t *testing.T) {
 	}
 }
 
-// A helper that keeps the client's output open must not hold Wait past the
-// launcher's WaitDelay, and a clean exit is still reported as one rather
-// than as a failure to start.
+// A client that exits on its own, unasked, does not leave the rest of its
+// group running either: the caller has been told the session is over and has
+// nothing left to stop a helper with.
+func TestSession_CleanExitTakesTheGroupWithIt(t *testing.T) {
+	for _, owned := range []bool{true, false} {
+		t.Run(fmt.Sprintf("OwnSignals=%v", owned), func(t *testing.T) {
+			testutil.PrependPATH(t, testutil.FakeRDPDir(t))
+			helperPID := filepath.Join(t.TempDir(), "helper.pid")
+			t.Setenv("FAKERDP_SPAWN", "1")
+			t.Setenv("FAKERDP_HELPER_PID", helperPID)
+			t.Setenv("FAKERDP_EXIT", "0")
+			tail := NewTail(0)
+			// Without OwnSignals this is the wicket connect launcher, whose
+			// helpers used to outlive it.
+			l := &Launcher{Stdout: tail, Stderr: tail, WaitDelay: time.Second}
+			var sess *Session
+			if owned {
+				sess = startOwned(t, l)
+			} else {
+				var err error
+				if sess, err = l.Start(testPlan(t), lineCred("pw")); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { sess.Terminate(time.Second) })
+			}
+			pid, _ := strconv.Atoi(waitForFile(t, helperPID))
+			if o := sess.Wait(); o.StartErr != nil || o.ExitCode != 0 || o.Signaled {
+				t.Fatalf("outcome %+v, want the client's clean exit", o)
+			}
+			waitGone(t, pid)
+		})
+	}
+}
+
+// A helper that has left the client's group, and so cannot be stopped with
+// it, still must not hold Wait open past the launcher's WaitDelay through its
+// copy of the output, and a clean exit is still reported as one rather than
+// as a failure to start.
 func TestSession_WaitDelayReportsTheClientsExit(t *testing.T) {
 	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
 	helperPID := filepath.Join(t.TempDir(), "helper.pid")
 	t.Setenv("FAKERDP_SPAWN", "1")
+	t.Setenv("FAKERDP_SPAWN_DETACHED", "1")
 	t.Setenv("FAKERDP_HELPER_PID", helperPID)
 	t.Setenv("FAKERDP_EXIT", "0")
 	tail := NewTail(0)
 	l := &Launcher{Stdout: tail, Stderr: tail, WaitDelay: 200 * time.Millisecond}
 	sess := startOwned(t, l)
 	pid, _ := strconv.Atoi(waitForFile(t, helperPID))
+	// Out of the group, the helper is out of the session's reach too.
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 
 	done := make(chan Outcome, 1)
@@ -252,6 +290,80 @@ func TestSession_WaitDelayReportsTheClientsExit(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Wait held open by the helper's copy of the output")
 	}
+	if !alive(pid) {
+		t.Fatal("setup: the detached helper did not outlive the client")
+	}
+}
+
+// A client that fails while a helper outside its group keeps its output open
+// is reported with its own exit status, and its session lasted as long as the
+// client did, not until WaitDelay gave up on the helper: timed from Wait's
+// return, a failed connect near the threshold was no longer a short session.
+func TestSession_WaitDelayKeepsTheExitAndItsTime(t *testing.T) {
+	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
+	helperPID := filepath.Join(t.TempDir(), "helper.pid")
+	t.Setenv("FAKERDP_SPAWN", "1")
+	t.Setenv("FAKERDP_SPAWN_DETACHED", "1")
+	t.Setenv("FAKERDP_HELPER_PID", helperPID)
+	t.Setenv("FAKERDP_EXIT", "131")
+	const delay = time.Second
+	tail := NewTail(0)
+	sess := startOwned(t, &Launcher{Stdout: tail, Stderr: tail, WaitDelay: delay})
+	pid, _ := strconv.Atoi(waitForFile(t, helperPID))
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+
+	o := sess.Wait()
+	if o.StartErr != nil || o.Signaled || o.ExitCode != 131 {
+		t.Fatalf("outcome %+v, want the client's exit status 131", o)
+	}
+	if runtime.GOOS == "linux" && o.Duration >= delay {
+		t.Fatalf("session lasted %v, timed past the client's exit into WaitDelay", o.Duration)
+	}
+	if !alive(pid) {
+		t.Fatal("setup: the detached helper did not outlive the client")
+	}
+}
+
+// Once the client has exited, its group is not signalled again, even while
+// Wait is still held open by its output: the client may already have been
+// collected, and its pid handed on. The helper here stays in the group and
+// ignores SIGINT; had it survived, or had the exit gone unobserved until Wait
+// returned, Interrupt would have reached it.
+func TestSession_SignalsDuringWaitDelayAreDropped(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("reads /proc")
+	}
+	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
+	dir := t.TempDir()
+	clientPID, helperPID := filepath.Join(dir, "client.pid"), filepath.Join(dir, "helper.pid")
+	t.Setenv("FAKERDP_PID", clientPID)
+	t.Setenv("FAKERDP_SPAWN", "1")
+	t.Setenv("FAKERDP_HELPER_PID", helperPID)
+	t.Setenv("FAKERDP_EXIT", "0")
+	tail := NewTail(0)
+	sess := startOwned(t, &Launcher{Stdout: tail, Stderr: tail, WaitDelay: 5 * time.Second})
+	pid, _ := strconv.Atoi(waitForFile(t, clientPID))
+	helper, _ := strconv.Atoi(waitForFile(t, helperPID))
+	t.Cleanup(func() { _ = syscall.Kill(helper, syscall.SIGKILL) })
+
+	// Wait for the client to be collected: its /proc entry goes with it.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat("/proc/" + strconv.Itoa(pid)); err != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("client never collected")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.Interrupt() {
+		t.Fatal("Interrupt signalled the group of a collected client")
+	}
+	if sig := sess.Escalate(); sig != 0 {
+		t.Fatalf("Escalate sent %v to the group of a collected client", sig)
+	}
+	sess.Wait()
 }
 
 // Nothing a session starts outlives it: the reaper and the SIGINT forwarder

@@ -310,18 +310,27 @@ func (s *Session) reap() {
 	// Wait for the exit without collecting it. Until the zombie is
 	// collected its pid, and so the group id, cannot be reused, which is
 	// what makes it safe to signal the group right up to this point.
+	// The session ends when the client does. cmd.Wait can return up to
+	// WaitDelay later, while a helper holds the output open, and a session
+	// timed from then would be reported longer than it was: long enough,
+	// near the threshold, to hide a failed connect from the retry offer.
+	var end time.Time
 	if waitExited(s.pgid) {
+		end = s.clock.Now()
 		s.mu.Lock()
-		// A client that was asked to stop may have left helpers behind in
-		// its group. They go with it, while the group id is still ours.
-		if s.stage != 0 {
-			_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
-		}
+		// Start put the client in a group of its own, so anything still in
+		// it is a helper the client left behind. It goes with the client,
+		// while the group id is still ours. Without this a helper would
+		// outlive the session, and wicket connect with it, with nothing left
+		// to stop it.
+		_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
 		s.reaped = true
 		s.mu.Unlock()
 	}
 	err := s.cmd.Wait()
-	dur := s.clock.Now().Sub(s.started)
+	if end.IsZero() {
+		end = s.clock.Now()
+	}
 	s.mu.Lock()
 	s.reaped = true
 	s.mu.Unlock()
@@ -332,32 +341,29 @@ func (s *Session) reap() {
 		signal.Stop(s.interrupt)
 		close(s.interrupt)
 	}
-	s.out = outcomeOf(err, dur)
+	s.out = outcomeOf(s.cmd.ProcessState, err, end.Sub(s.started))
 	close(s.done)
 }
 
-func outcomeOf(err error, dur time.Duration) Outcome {
+// outcomeOf reads how the client ended from its process state, which Wait
+// sets whenever it collected the client, whatever else it returns: an error
+// such as ErrWaitDelay, from a helper that kept the client's output open past
+// the launcher's WaitDelay, says nothing about the client's own exit. Only
+// with no state at all did the client fail to run.
+func outcomeOf(ps *os.ProcessState, err error, dur time.Duration) Outcome {
 	o := Outcome{Duration: dur}
-	// ErrWaitDelay means the client exited cleanly -- a failed exit is
-	// reported ahead of it -- but something it started kept its output open
-	// past the launcher's WaitDelay. That is not the client failing to start.
-	if errors.Is(err, exec.ErrWaitDelay) {
-		err = nil
-	}
-	if err == nil {
-		return o
-	}
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		ws, ok := ee.Sys().(syscall.WaitStatus)
-		if ok && ws.Signaled() {
-			o.Signaled = true
-			o.ExitCode = 128 + int(ws.Signal())
-			return o
+	if ps == nil {
+		if err == nil {
+			err = errors.New("client exited without a status")
 		}
-		o.ExitCode = ee.ExitCode()
+		o.StartErr = err
 		return o
 	}
-	o.StartErr = err
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		o.Signaled = true
+		o.ExitCode = 128 + int(ws.Signal())
+		return o
+	}
+	o.ExitCode = ps.ExitCode()
 	return o
 }

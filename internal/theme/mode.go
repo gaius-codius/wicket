@@ -152,15 +152,17 @@ func IsDark(bg color.Color) bool {
 	return contrast("#FFFFFF", h) >= contrast("#000000", h)
 }
 
-// readableTextOn lifts the body-text roles to the contrast floor against
-// surface and leaves every other role alone: an Omarchy theme's accents are
-// its identity, and Wicket's are chosen to clear the floor already.
+// readableTextOn lifts the roles that carry words to the contrast floor
+// against surface and leaves every other role alone: an Omarchy theme's
+// accents are its identity, and Wicket's are chosen to clear the floor
+// already. The status roles are text too, and the one that matters most: an
+// unreadable danger line is a failure the user never sees.
 func readableTextOn(p Palette, surface string) Palette {
 	hex := make(map[string]string, len(p.Hex))
 	for k, v := range p.Hex {
 		hex[k] = v
 	}
-	for _, role := range []string{"primary", "secondary", "muted"} {
+	for _, role := range []string{"primary", "secondary", "muted", "success", "warning", "danger"} {
 		hex[role] = readableOn(surface, hex[role])
 	}
 	return paletteFromHex(hex)

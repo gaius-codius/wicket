@@ -213,9 +213,6 @@ const sessionWaitDelay = 2 * time.Second
 type Session struct {
 	rdp    *rdp.Session
 	output *rdp.Tail
-	// warning is a problem from the start that did not stop it, reported
-	// with the result.
-	warning string
 }
 
 // Start launches the client for p and returns once it is running, so the
@@ -241,18 +238,25 @@ func (a *App) Start(p config.Profile, cred rdp.Credential) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The session is published before anything else can go wrong or wait,
+	// so that StopSession finds the client from the moment it exists. The
+	// last-used time is not recorded here: RecordUse takes a lock another
+	// Wicket may hold, and the TUI calls it off its update loop.
 	s := &Session{rdp: rs, output: out}
-	// The last-used time is recorded once the client has started, as it
-	// always was: a client that never ran was not used.
-	if a.State != nil {
-		if err := a.State.Record(p.Name); err != nil {
-			s.warning = "last_used: " + err.Error()
-		}
-	}
 	a.mu.Lock()
 	a.active = s
 	a.mu.Unlock()
 	return s, nil
+}
+
+// RecordUse records that p's client has started, as it always was once it
+// had: a client that never ran was not used. It can block for as long as
+// another process holds the state lock.
+func (a *App) RecordUse(name string) error {
+	if a.State == nil {
+		return nil
+	}
+	return a.State.Record(name)
 }
 
 // Wait blocks until s has ended and says how.
@@ -264,7 +268,7 @@ func (a *App) Wait(s *Session) ConnectResult {
 	}
 	a.mu.Unlock()
 	cl := rdp.Classify(out)
-	res := ConnectResult{Class: cl, Outcome: out, Warning: s.warning, Output: s.output.Bytes()}
+	res := ConnectResult{Class: cl, Outcome: out, Output: s.output.Bytes()}
 	switch cl {
 	case rdp.ClassStartError:
 		res.Status = "failed to start"
@@ -307,29 +311,39 @@ var (
 // clientNote picks the line of the client's output most likely to say why a
 // session failed: the last error, or failing that the last line. It is
 // cleaned of escape sequences and control characters, since it is client
-// output drawn on Wicket's screen, and dropped altogether if it contains the
-// password, which a client could only have echoed.
+// output drawn on Wicket's screen. A line that contains the password, which
+// a client could only have echoed, is never a candidate. It is looked for
+// both before and after cleaning, and cleaned as the line was: a password
+// with an escape sequence in it would otherwise be drawn, stripped of it, on
+// a line the raw check had passed and the cleaned check could not match.
 func clientNote(out []byte, cred rdp.Credential) string {
+	pw, _ := cred.(secret.Password)
 	var last, lastErr string
 	for _, ln := range bytes.Split(out, []byte("\n")) {
-		s := sanitize(ansiSequence.ReplaceAllString(string(ln), ""))
-		s = strings.TrimSpace(logPrefix.ReplaceAllString(strings.TrimSpace(s), ""))
+		raw := string(ln)
+		clean := cleanOutput(raw)
+		if pw.OccursIn(raw, cleanOutput) || pw.OccursIn(clean, cleanOutput) {
+			continue
+		}
+		s := strings.TrimSpace(logPrefix.ReplaceAllString(strings.TrimSpace(clean), ""))
 		if s == "" {
 			continue
 		}
 		last = s
-		if strings.Contains(string(ln), "ERROR") || strings.Contains(s, "ERRCONNECT") {
+		if strings.Contains(raw, "ERROR") || strings.Contains(s, "ERRCONNECT") {
 			lastErr = s
 		}
 	}
-	note := last
 	if lastErr != "" {
-		note = lastErr
+		return lastErr
 	}
-	if pw, ok := cred.(secret.Password); ok && pw.OccursIn(note) {
-		return ""
-	}
-	return note
+	return last
+}
+
+// cleanOutput removes the escape sequences and control characters from a
+// line of client output.
+func cleanOutput(s string) string {
+	return sanitize(ansiSequence.ReplaceAllString(s, ""))
 }
 
 // ProbeClient reports a missing or illegal client basename before any password prompt.

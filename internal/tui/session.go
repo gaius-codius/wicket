@@ -43,12 +43,23 @@ type sessionState struct {
 	// stopping is the last signal a stop sent the client, or 0 before the
 	// user has asked for one.
 	stopping syscall.Signal
+	// recorded is set once the last-used time has been written, or has
+	// failed to be; recordWarn says why it failed.
+	recorded   bool
+	recordWarn string
 }
 
 // sessionEndedMsg reports that session id's client has exited.
 type sessionEndedMsg struct {
 	id int
 	cr ConnectResult
+}
+
+// sessionRecordedMsg reports that session id's last-used time has been
+// recorded, or why it could not be.
+type sessionRecordedMsg struct {
+	id   int
+	warn string
 }
 
 // sessionTickMsg redraws the elapsed time of session id.
@@ -66,6 +77,16 @@ type signalMsg struct{ sig os.Signal }
 
 func waitSession(app *App, id int, s *Session) tea.Cmd {
 	return func() tea.Msg { return sessionEndedMsg{id: id, cr: app.Wait(s)} }
+}
+
+func recordUse(app *App, id int, name string) tea.Cmd {
+	return func() tea.Msg {
+		msg := sessionRecordedMsg{id: id}
+		if err := app.RecordUse(name); err != nil {
+			msg.warn = "last_used: " + err.Error()
+		}
+		return msg
+	}
 }
 
 func sessionTick(id int) tea.Cmd {
@@ -92,6 +113,27 @@ func (m Model) handleSessionTick(msg sessionTickMsg) (tea.Model, tea.Cmd) {
 	return m, sessionTick(msg.id)
 }
 
+// handleSessionRecorded takes the last-used time the session's start wrote.
+// A write that outlasted the session, held up by another Wicket's lock, still
+// refreshes the list, and its failure goes on the status line on its own.
+func (m Model) handleSessionRecorded(msg sessionRecordedMsg) (tea.Model, tea.Cmd) {
+	m.refreshUsed()
+	if m.current(msg.id) {
+		ss := *m.session
+		ss.recorded, ss.recordWarn = true, msg.warn
+		m.session = &ss
+		return m, nil
+	}
+	if msg.warn != "" {
+		status := msg.warn
+		if m.status != "" {
+			status = m.status + "; " + status
+		}
+		m.setStatus(status, statusError)
+	}
+	return m, nil
+}
+
 func (m Model) handleSessionEnded(msg sessionEndedMsg) (tea.Model, tea.Cmd) {
 	if !m.current(msg.id) {
 		return m, nil
@@ -100,6 +142,7 @@ func (m Model) handleSessionEnded(msg sessionEndedMsg) (tea.Model, tea.Cmd) {
 	m.session = nil
 	m.view = viewList
 	cr := msg.cr
+	cr.Warning = ss.recordWarn
 	if ss.stopping != 0 && cr.Class != rdp.ClassStartError {
 		// The user ended this session. However short it was, it is not a
 		// failure to offer a retry for.

@@ -50,6 +50,10 @@ type App struct {
 	State    *config.StateStore
 	Launcher *rdp.Launcher
 	Clock    rdp.Clock
+	// LookPath finds a client on PATH for the form's client choices, a new
+	// profile's default and the retry view's hints. nil means the launcher's
+	// runner, which is exec.LookPath unless a test says otherwise.
+	LookPath func(string) (string, error)
 
 	// active is the session running now, if any. It is kept here rather
 	// than only in the model so that Wicket can stop it on the way out,
@@ -543,6 +547,29 @@ func terminalNoise(line string) bool {
 // line of client output.
 func cleanOutput(s string) string {
 	return sanitize(ansiSequence.ReplaceAllString(s, ""))
+}
+
+// lookPath finds file on PATH the way the launcher would.
+func (a *App) lookPath(file string) (string, error) {
+	if a.LookPath != nil {
+		return a.LookPath(file)
+	}
+	if a.Launcher != nil && a.Launcher.Runner != nil {
+		return a.Launcher.Runner.LookPath(file)
+	}
+	return rdp.OSRunner{}.LookPath(file)
+}
+
+// InstalledClients lists the known FreeRDP clients on PATH, most preferred
+// first. It searches PATH, so callers ask once, not on every frame.
+func (a *App) InstalledClients() []rdp.KnownClient {
+	return rdp.InstalledClients(a.lookPath)
+}
+
+// Installed reports whether client can be found on PATH.
+func (a *App) Installed(client string) bool {
+	_, err := a.lookPath(client)
+	return err == nil
 }
 
 // ProbeClient reports a missing or illegal client basename before any password prompt.

@@ -15,7 +15,8 @@ go install github.com/gaius-codius/wicket/cmd/wicket@latest
 ```
 
 Or from a clone: `go build -o wicket ./cmd/wicket`, then put the binary on
-your `PATH`. Needs a FreeRDP 3 SDL client (`sdl-freerdp3` by default).
+your `PATH`. Needs a FreeRDP 3 client: `sdl-freerdp3` or `xfreerdp3`. New
+profiles use the first one installed, in that order.
 
 ## Run
 
@@ -74,7 +75,8 @@ theme = "auto"
 | `?` | Help |
 | `q`, Ctrl+C | Quit |
 
-Form: Ctrl+S saves, Esc cancels. Leave the password field empty to keep the
+Form: Ctrl+S saves, Esc cancels. ←/→ picks the scale and the client
+(`custom…` takes any binary name). Leave the password field empty to keep the
 stored one; use `forget password` when editing to clear it.
 
 ## Sessions

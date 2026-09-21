@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/gaius-codius/wicket/internal/config"
+	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
 
@@ -109,6 +110,55 @@ type formState struct {
 	// quitOnDiscard is set when ctrl+c raised the question, so a yes quits
 	// Wicket, as the ctrl+c meant, rather than going back to the list.
 	quitOnDiscard bool
+
+	// clients are the choices the client row cycles through, "custom…"
+	// aside: the known FreeRDP clients found on PATH when the form opened,
+	// in order of preference, then the configured client if it is not one
+	// of them, so that opening and saving a profile never changes it.
+	// clientAt is the current choice; len(clients) is "custom…", where the
+	// row is a text input. With no known client installed that is the
+	// only choice.
+	clients  []string
+	clientAt int
+	// detected is how many of clients were found on PATH.
+	detected int
+	// clientMissing is the configured client when PATH did not have it as
+	// the form opened. PATH is searched once, then, rather than per frame.
+	clientMissing string
+}
+
+// clientCustom reports whether the client row is the free-text input.
+func (f formState) clientCustom() bool { return f.clientAt >= len(f.clients) }
+
+// setClientChoice moves the client row to choice at, wrapping, and takes
+// the value that choice stands for. The custom text is kept while another
+// choice is shown, so coming back to "custom…" finds it as it was left.
+func (f *formState) setClientChoice(at int) {
+	n := len(f.clients) + 1
+	at = (at%n + n) % n
+	wasCustom := f.clientCustom()
+	f.clientAt = at
+	focused := f.field == fieldClient
+	if f.clientCustom() {
+		f.p.Client = f.inputs[fieldClient].Value()
+		if focused && !wasCustom {
+			f.inputs[fieldClient].Focus()
+			f.inputs[fieldClient].CursorEnd()
+		}
+		return
+	}
+	if focused && wasCustom {
+		f.inputs[fieldClient].Blur()
+	}
+	f.p.Client = f.clients[at]
+}
+
+// clientLeavesText reports whether key takes the client row out of its text
+// input and back to the choices: ← with the cursor already at the start,
+// where it would otherwise do nothing. Everywhere else ← moves in the text.
+func (f formState) clientLeavesText(key string) bool {
+	return f.field == fieldClient && f.clientCustom() && len(f.clients) > 0 &&
+		key == "left" && f.inputs[fieldClient].Position() == 0
 }
 
 // textValue returns a pointer to the string a text field edits.
@@ -123,7 +173,10 @@ func (f *formState) textValue(id int) *string {
 	case fieldDomain:
 		return &f.p.Domain
 	case fieldClient:
-		return &f.p.Client
+		// Only "custom…" is typed; the other choices are picked.
+		if f.clientCustom() {
+			return &f.p.Client
+		}
 	case fieldSize:
 		return &f.p.Size
 	case fieldPassword:
@@ -210,15 +263,45 @@ func (f formState) dirty() bool {
 }
 
 func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
+	// One PATH search per form: the row's choices, a new profile's client
+	// and the "not found" marker all come from it.
+	installed := m.app.InstalledClients()
 	if p.Client == "" {
-		p.Client = config.DefaultClient
+		p.Client = rdp.PreferredClient(installed)
 	}
 	if p.Scale == 0 {
 		p.Scale = config.DefaultScale
 	}
 	f := formState{oldName: oldName, p: p, orig: p, errField: fieldNone}
+	for _, c := range installed {
+		f.clients = append(f.clients, c.Name)
+	}
+	f.detected = len(f.clients)
+	custom := ""
+	if at := slices.Index(f.clients, p.Client); at >= 0 {
+		f.clientAt = at
+	} else {
+		if !m.app.Installed(p.Client) {
+			f.clientMissing = p.Client
+		}
+		// Something no choice stands for is shown as it is: as a choice of
+		// its own beside the installed clients, or in the text input when
+		// there are none.
+		custom = p.Client
+		if f.detected > 0 {
+			f.clients = append(f.clients, p.Client)
+			f.clientAt = f.detected
+		} else {
+			f.clientAt = len(f.clients)
+		}
+	}
 	for id := range fieldCount {
-		if v := f.textValue(id); v != nil {
+		v := f.textValue(id)
+		if id == fieldClient {
+			// The input exists whatever the choice, for "custom…".
+			v = &custom
+		}
+		if v != nil {
 			f.inputs[id] = m.newInput(*v, id == fieldPassword)
 			f.inputs[id].Placeholder = f.emptyHint(id)
 		}
@@ -232,8 +315,10 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 
 func (f formState) textFocused() bool {
 	switch f.field {
-	case fieldName, fieldHost, fieldUser, fieldDomain, fieldClient, fieldSize, fieldPassword:
+	case fieldName, fieldHost, fieldUser, fieldDomain, fieldSize, fieldPassword:
 		return true
+	case fieldClient:
+		return f.clientCustom()
 	default:
 		return false
 	}
@@ -273,6 +358,10 @@ func (m Model) handleFormKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 	case "down":
 		f.step(1, false)
 	default:
+		if f.clientLeavesText(key) {
+			f.setClientChoice(f.clientAt - 1)
+			break
+		}
 		if f.textFocused() {
 			if key == "enter" {
 				f.step(1, true)
@@ -287,12 +376,18 @@ func (m Model) handleFormKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 		case "enter", "space":
 			m.toggleFormField(&f)
 		case "left", "h":
-			if f.field == fieldScale {
+			switch f.field {
+			case fieldScale:
 				f.p.Scale = prevScale(f.p.Scale)
+			case fieldClient:
+				f.setClientChoice(f.clientAt - 1)
 			}
 		case "right", "l":
-			if f.field == fieldScale {
+			switch f.field {
+			case fieldScale:
 				f.p.Scale = nextScale(f.p.Scale)
+			case fieldClient:
+				f.setClientChoice(f.clientAt + 1)
 			}
 		}
 	}
@@ -341,8 +436,13 @@ func (f *formState) focus(id int) {
 // is stored.
 func (f formState) emptyHint(id int) string {
 	switch id {
-	case fieldName, fieldHost, fieldUser, fieldClient:
+	case fieldName, fieldHost, fieldUser:
 		return "required"
+	case fieldClient:
+		if f.detected == 0 {
+			return "no FreeRDP client found"
+		}
+		return "binary name"
 	case fieldDomain:
 		return "optional"
 	case fieldSize:
@@ -364,6 +464,8 @@ func (m *Model) toggleFormField(f *formState) {
 		f.p.DynamicResolution = !f.p.DynamicResolution
 	case fieldScale:
 		f.p.Scale = nextScale(f.p.Scale)
+	case fieldClient:
+		f.setClientChoice(f.clientAt + 1)
 	case fieldForget:
 		f.forget = !f.forget
 		if f.forget {

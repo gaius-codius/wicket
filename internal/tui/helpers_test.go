@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"testing"
 	"time"
 
@@ -298,6 +300,10 @@ func newHarness(t *testing.T, body string, store secret.Store) *harness {
 			Stderr: &h.stderr,
 		},
 	})
+	// Which FreeRDP clients the form offers must not depend on the machine
+	// running the tests. Both known clients are "installed" unless a test
+	// says otherwise; launching still goes through the launcher's runner.
+	m.app.LookPath = onPath(rdp.ClientSDL, rdp.ClientX11)
 	h.m = m
 	// A test that starts a client and then fails, or simply returns, must
 	// not leave it running: the app is shared by every copy of the model,
@@ -345,4 +351,14 @@ func focusField(t *testing.T, m Model, id int) Model {
 	}
 	t.Fatalf("could not reach field %d", id)
 	return m
+}
+
+// onPath is a LookPath that finds only names.
+func onPath(names ...string) func(string) (string, error) {
+	return func(file string) (string, error) {
+		if slices.Contains(names, file) {
+			return "/fake/bin/" + file, nil
+		}
+		return "", exec.ErrNotFound
+	}
 }

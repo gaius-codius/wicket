@@ -500,11 +500,12 @@ func (m Model) bodyNeeds(lo layout) (want, keep, core int) {
 			return 3 + note, 1, 1
 		}
 	case viewRetry:
-		// What happened, how the client exited and what it said outrank the
-		// spacing and the divider, and are worth the long footer; the hint
+		// What happened, how the client exited, what to do about a known
+		// fullscreen failure and what the client said outrank the spacing
+		// and the divider, and are worth the long footer; the password hint
 		// and the list row under the overlay only want them.
-		msg, detail, note, hint := m.retryBlocks(lo)
-		keep := len(msg) + len(detail) + len(note)
+		msg, detail, fullscreen, note, hint := m.retryBlocks(lo)
+		keep := len(msg) + len(detail) + len(fullscreen) + len(note)
 		return keep + len(hint) + 2, keep, len(msg)
 	}
 	return 1, 1, 1

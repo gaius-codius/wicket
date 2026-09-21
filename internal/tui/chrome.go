@@ -49,12 +49,30 @@ func (m Model) header(width int, context string) string {
 	return title + strings.Repeat(" ", gap) + right
 }
 
-// headerContext draws the context in room cells.
+// modifiedMark is the header's note that a form holds unsaved changes.
+const modifiedMark = "● modified"
+
+// headerContext draws the context in room cells. On a form with unsaved
+// changes it ends in "● modified", which outlasts the name before it: the
+// name is on the form below, while nothing else says an esc would ask
+// before throwing typing away.
 func (m Model) headerContext(context string, room int) string {
 	if room <= 0 {
 		return ""
 	}
-	return m.contextStyle().Render(truncate(context, room))
+	if m.view != viewForm || !m.form.dirty() {
+		return m.contextStyle().Render(truncate(context, room))
+	}
+	markW := lipgloss.Width(modifiedMark)
+	if room < markW {
+		return m.styles.warning.Render("●")
+	}
+	mark := m.styles.warning.Render("●") + m.styles.muted.Render(strings.TrimPrefix(modifiedMark, "●"))
+	// A name cut to a letter or two says nothing, so it goes entirely.
+	if nameW := room - markW - 3; nameW >= 4 {
+		return m.styles.muted.Render(truncate(context, nameW)) + m.styles.divider.Render(" · ") + mark
+	}
+	return mark
 }
 
 func (m Model) divider(width int) string {

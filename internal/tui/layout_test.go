@@ -81,31 +81,65 @@ func TestForm_LongValueStaysOnItsRow(t *testing.T) {
 	}
 }
 
-// Every form row occupies exactly one line. A row that wraps costs the panel a
-// line it never budgeted for; the size placeholder did that at narrow widths,
-// because the text input draws one cell more than the width it is given.
+// No form line is wider than the panel, the form never uses more lines than
+// it was given, and every field can be brought on screen by moving focus to
+// it -- at every size the overflow sweep covers, 80x14 among them. A line
+// wider than the panel wraps inside the frame, costing a line the budget
+// never counted; the size placeholder did that at narrow widths, because the
+// text input draws one cell more than the width it is given.
 func TestForm_RowsNeverWrap(t *testing.T) {
 	cfg := fixtureTOML("work", "host.invalid", "user")
-	for w := widthTiny; w <= 130; w++ {
-		for _, key := range []string{"n", "e"} {
-			m := sized(t, cfg, w, 30, key)
-			lo := m.panelLayout()
-			m.fitChrome(&lo)
-			rows := strings.Split(m.viewForm(lo), "\n")
-			if want := len(m.form.fields()); len(rows) != want {
-				t.Fatalf("width %d, %q: %d lines for %d rows:\n%s",
-					w, key, len(rows), want, stripANSI(m.render()))
-			}
-			for i, ln := range rows {
-				// A row wider than the panel wraps inside the frame, which
-				// the row count above cannot see.
-				if got := lipgloss.Width(ln); got > lo.Inner {
-					t.Fatalf("width %d, %q: row %d is %d cells in a %d-cell panel:\n%s",
-						w, key, i, got, lo.Inner, stripANSI(m.render()))
+	for _, key := range []string{"n", "e"} {
+		// One form, resized, rather than one harness per size: the sweep
+		// is large and the config on disk plays no part in it.
+		opened := sized(t, cfg, 80, 24, key)
+		// Past panelNormal the form's panel stops growing, so every wider
+		// window draws the same form; the wide layout and the sweep's
+		// widest size stand in for the rest.
+		widths := []int{widthWide, 130}
+		for w := widthTiny; w <= panelNormal; w++ {
+			widths = append(widths, w)
+		}
+		for _, w := range widths {
+			for h := heightTiny; h <= 30; h++ {
+				nm, _ := opened.Update(teaWin(w, h))
+				m := nm.(Model)
+				for _, id := range m.form.fields() {
+					m = focusField(t, m, id)
+					lo := m.panelLayout()
+					m.fitChrome(&lo)
+					body := strings.Split(m.viewForm(lo), "\n")
+					if len(body) > max(lo.Budget, 1) {
+						t.Fatalf("%dx%d %q, %s focused: %d lines for a %d-line budget:\n%s",
+							w, h, key, formLabels[id], len(body), lo.Budget, stripANSI(m.render()))
+					}
+					for i, ln := range body {
+						if got := lipgloss.Width(ln); got > lo.Inner {
+							t.Fatalf("%dx%d %q: line %d is %d cells in a %d-cell panel:\n%s",
+								w, h, key, i, got, lo.Inner, stripANSI(m.render()))
+						}
+					}
+					if !focusedRowShown(body, id, lo.Inner) {
+						t.Fatalf("%dx%d %q: focused field %q is not on screen:\n%s",
+							w, h, key, formLabels[id], stripANSI(m.render()))
+					}
 				}
 			}
 		}
 	}
+}
+
+// focusedRowShown reports whether body holds field id's row with the focus
+// bar on it.
+func focusedRowShown(body []string, id, inner int) bool {
+	labelW, _ := formColumns(inner)
+	want := "▌ " + truncate(formLabels[id]+":", labelW)
+	for _, ln := range body {
+		if strings.HasPrefix(stripANSI(ln), want) {
+			return true
+		}
+	}
+	return false
 }
 
 // A short terminal drops chrome rather than the body: the list must still be

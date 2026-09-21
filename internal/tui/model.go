@@ -28,16 +28,16 @@ const (
 )
 
 type Model struct {
-	app       *App
-	styles    styles
-	width     int
-	height    int
-	view      view
-	prev      view
-	cursor    int
-	status    string
-	statusErr bool
-	helpFor   view
+	app        *App
+	styles     styles
+	width      int
+	height     int
+	view       view
+	prev       view
+	cursor     int
+	status     string
+	statusKind statusKind
+	helpFor    view
 	// helpTop is the first help line shown, so a long key list stays
 	// reachable in a short terminal.
 	helpTop  int
@@ -53,8 +53,9 @@ type Model struct {
 	filtering bool
 	// filterErr holds the status message the filter replaced with its own
 	// error, so clearing the error restores it.
-	filterErr    string
-	filterErrSet bool
+	filterErr     string
+	filterErrKind statusKind
+	filterErrSet  bool
 
 	form        formState
 	delName     string
@@ -127,7 +128,7 @@ func New(opt Options) Model {
 		m.view = viewLoadErr
 		m.loadErr = err.Error()
 		if warn := m.chooseTheme(opt, home, nil); warn != "" {
-			m.status = warn
+			m.setStatus(warn, statusWarning)
 		}
 		return m
 	}
@@ -137,7 +138,7 @@ func New(opt Options) Model {
 		m.loadPath = cfgPath
 		m.loadErr = err.Error()
 		if warn := m.chooseTheme(opt, home, nil); warn != "" {
-			m.status = warn
+			m.setStatus(warn, statusWarning)
 		}
 		return m
 	}
@@ -146,12 +147,13 @@ func New(opt Options) Model {
 	m.app.State = st
 	m.loadPath = cfg.Path()
 	if warns := cfg.Warnings(); len(warns) > 0 {
-		m.status = strings.Join(warns, "; ")
+		m.setStatus(strings.Join(warns, "; "), statusInfo)
 	}
 	if warn := m.chooseTheme(opt, home, cfg); warn != "" {
-		// A theme setting that cannot be honoured does not stop Wicket,
-		// which still runs, in colours the user did not ask for.
-		m.status = strings.TrimPrefix(m.status+"; "+warn, "; ")
+		// A theme setting that cannot be honoured is a warning: Wicket
+		// still runs, in colours the user did not ask for. It outranks
+		// the config notes it is joined to.
+		m.setStatus(strings.TrimPrefix(m.status+"; "+warn, "; "), statusWarning)
 	}
 	return m
 }
@@ -354,14 +356,15 @@ func (c chromeParts) cost(statusLines, footLines int) int {
 func (m Model) bodyLines(lo layout) []string {
 	if m.view == viewRetry {
 		// The overlay is the point of this view, so it takes its lines first
-		// and the list underneath gets what is left.
-		rl := strings.Split(m.viewRetry(lo), "\n")
-		if len(rl) > lo.Budget-1 {
-			rl = rl[:max(lo.Budget-1, 0)]
+		// and the list underneath gets what is left: at least a row and the
+		// gap above the overlay, or nothing at all.
+		rl := m.viewRetry(lo, max(lo.Budget-2, 1))
+		if lo.Budget-len(rl) < 2 {
+			return clipLines(rl, lo.Budget)
 		}
 		listLo := lo
-		listLo.Budget = max(lo.Budget-len(rl)-1, 1)
-		out := strings.Split(m.viewList(listLo), "\n")
+		listLo.Budget = lo.Budget - len(rl) - 1
+		out := clipLines(strings.Split(m.viewList(listLo), "\n"), listLo.Budget)
 		out = append(out, "")
 		out = append(out, rl...)
 		return clipLines(out, lo.Budget)
@@ -409,37 +412,41 @@ func clipLines(lines []string, n int) []string {
 }
 
 // chrome returns the header context and footer keys for the current view.
-func (m Model) chrome() (string, []hint) {
+// Each key's intent is set here, by what it does in this view.
+func (m Model) chrome() (string, []keyHint) {
 	switch m.view {
 	case viewHelp:
-		return "keys", []hint{{"↑/↓", "scroll"}, {"esc", "close"}}
+		return "keys", []keyHint{{"↑/↓", "scroll", intentNormal}, {"esc", "close", intentNormal}}
 	case viewLoadErr:
-		return "config error", []hint{{"q", "quit"}, {"?", "help"}}
+		return "config error", []keyHint{{"q", "quit", intentNormal}, {"?", "help", intentNormal}}
 	case viewForm:
 		ctx := "new connection"
 		if m.form.oldName != "" {
 			ctx = "edit " + m.form.oldName
 		}
 		if m.form.confirmDiscard {
-			return ctx, []hint{{"y", "discard"}, {"n", "keep editing"}}
+			// Discarding an edit loses typing, not a saved profile, so y
+			// is not drawn as a danger.
+			return ctx, []keyHint{{"y", "discard", intentNormal}, {"n", "keep editing", intentNormal}}
 		}
-		hs := []hint{{"ctrl+s", "save"}, {"↑/↓", "move"}, {"esc", "cancel"}}
+		hs := []keyHint{{"ctrl+s", "save", intentPrimary}, {"↑/↓", "move", intentNormal}, {"esc", "cancel", intentNormal}}
 		if m.form.textFocused() {
 			// ? is text while a field has focus, so do not offer it here.
 			return ctx, hs
 		}
-		return ctx, append(hs, hint{"?", "help"})
+		return ctx, append(hs, keyHint{"?", "help", intentNormal})
 	case viewDelete:
-		return "delete connection", []hint{{"y", "confirm"}, {"n", "cancel"}, {"?", "help"}}
+		return "delete", []keyHint{{"y", "delete", intentDanger}, {"n", "cancel", intentNormal}, {"?", "help", intentNormal}}
 	case viewModal:
-		hs := []hint{{"enter", "connect once"}, {"ctrl+s", "save and connect"}, {"esc", "cancel"}}
+		hs := []keyHint{{"enter", "connect once", intentPrimary}, {"ctrl+s", "save and connect", intentNormal}, {"esc", "cancel", intentNormal}}
 		if m.modal.focused {
 			// ? belongs in the password, so help needs tab first.
-			return "password", append(hs, hint{"tab", "more keys"})
+			return "password", append(hs, keyHint{"tab", "more keys", intentNormal})
 		}
-		return "password", append(hs, hint{"?", "help"}, hint{"tab", "edit password"})
+		return "password", append(hs, keyHint{"?", "help", intentNormal}, keyHint{"tab", "edit password", intentNormal})
 	case viewRetry:
-		return m.listContext(), []hint{{"enter", "retry"}, {"n", "new password"}, {"esc", "dismiss"}, {"?", "help"}}
+		return m.listContext(), []keyHint{{"enter", "retry", intentPrimary}, {"n", "new password", intentNormal},
+			{"esc", "dismiss", intentNormal}, {"?", "help", intentNormal}}
 	default:
 		return m.listContext(), m.listHints()
 	}
@@ -488,9 +495,25 @@ func (m Model) openHelp() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) setStatus(msg string, isErr bool) {
+func (m *Model) setStatus(msg string, kind statusKind) {
 	m.status = msg
-	m.statusErr = isErr
+	m.statusKind = kind
+}
+
+// statusNameWidth caps a profile name quoted on the status line, so a long
+// name does not wrap the line on its own.
+const statusNameWidth = 32
+
+// outcome is the status after a save or delete of name. Success is claimed
+// only when nothing went wrong; otherwise the line says what did happen and
+// then what did not, with the error marker, since each warning is part of
+// the request that failed.
+func outcome(done, name string, warns []string) (string, statusKind) {
+	msg := done + " " + truncate(name, statusNameWidth)
+	if len(warns) == 0 {
+		return msg + ".", statusSuccess
+	}
+	return msg + ", but " + strings.Join(warns, "; "), statusError
 }
 
 func (m *Model) selectName(name string) {

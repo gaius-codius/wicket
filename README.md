@@ -137,7 +137,21 @@ spacing, the divider and then the footer keys before it gives up any of the
 list. The status line outlives the footer, since a warning you never see is
 lost while the keys are in the help view. Dialogs shed their explanatory note
 first, so the delete confirmation always names what it is about to delete and
-the password prompt always shows its field.
+the password prompt always shows its field. The first-run screen keeps its
+heading and the `n` key ahead of the config path, theme and shell hint.
+
+The status line marks what it reports: `•` a note, `✓` something that fully
+happened, `▲` a warning (such as a theme setting that could not be honoured)
+and `✗` something that did not happen. A save or delete is reported as
+`✓ Saved <name>.` or `✓ Deleted <name>.` only when every part of it worked;
+if the profile was written but, say, the password could not be stored, the
+line says so with `✗`. In the footer, the key each view is for is drawn in the
+accent colour, and only the `y` that confirms a delete is drawn in the danger
+colour.
+
+When a session ends within a few seconds, Wicket shows how the client exited
+and offers `Enter` to retry or `n` to type a new password; a short session is
+not always a wrong password, so nothing is changed until you choose.
 
 ## Contributing
 

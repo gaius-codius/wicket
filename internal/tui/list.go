@@ -267,16 +267,19 @@ func displayLine(p config.Profile) string {
 	return strings.Join(parts, " · ")
 }
 
-func (m Model) listHints() []hint {
+func (m Model) listHints() []keyHint {
 	switch {
 	case len(m.profiles()) == 0:
-		return []hint{{"n", "new"}, {"?", "help"}, {"q", "quit"}}
+		return []keyHint{{"n", "new", intentPrimary}, {"?", "help", intentNormal}, {"q", "quit", intentNormal}}
 	case m.filtering:
-		return []hint{{"↑/↓", "move"}, {"enter", "done"}, {"esc", "clear"}}
+		return []keyHint{{"↑/↓", "move", intentNormal}, {"enter", "done", intentPrimary}, {"esc", "clear", intentNormal}}
 	case m.filter.Value() != "":
-		return []hint{{"enter", "connect"}, {"/", "edit filter"}, {"esc", "clear filter"}, {"?", "help"}, {"q", "quit"}}
+		return []keyHint{{"enter", "connect", intentPrimary}, {"/", "edit filter", intentNormal},
+			{"esc", "clear filter", intentNormal}, {"?", "help", intentNormal}, {"q", "quit", intentNormal}}
 	}
-	return []hint{{"enter", "connect"}, {"n", "new"}, {"e", "edit"}, {"D", "delete"}, {"/", "filter"}, {"?", "help"}, {"q", "quit"}}
+	return []keyHint{{"enter", "connect", intentPrimary}, {"n", "new", intentNormal}, {"e", "edit", intentNormal},
+		{"D", "delete", intentNormal}, {"/", "filter", intentNormal},
+		{"?", "help", intentNormal}, {"q", "quit", intentNormal}}
 }
 
 func (m Model) listContext() string {

@@ -43,9 +43,13 @@ func (m *Model) clearFilter() {
 // setFilterErr and clearFilterErr keep a rejected filter paste from leaving a
 // stale error behind, and from wiping a warning the filter did not raise.
 func (m *Model) setFilterErr(msg string) {
-	m.filterErr = m.status
+	if !m.filterErrSet {
+		// A second rejection must not save the first one's error as the
+		// status to come back to.
+		m.filterErr, m.filterErrKind = m.status, m.statusKind
+	}
 	m.filterErrSet = true
-	m.setStatus(msg, true)
+	m.setStatus(msg, statusError)
 }
 
 func (m *Model) clearFilterErr() {
@@ -53,8 +57,10 @@ func (m *Model) clearFilterErr() {
 		return
 	}
 	m.filterErrSet = false
-	m.setStatus(m.filterErr, false)
-	m.filterErr = ""
+	// The kind comes back with the text: a restored error or warning that
+	// lost its marker would read as a routine note.
+	m.setStatus(m.filterErr, m.filterErrKind)
+	m.filterErr, m.filterErrKind = "", statusInfo
 }
 
 // handleFilterKey edits the filter while it has focus. Arrows move through

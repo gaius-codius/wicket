@@ -447,13 +447,13 @@ func TestStatus_SaveAndDeleteWarningsAreErrors(t *testing.T) {
 	if !strings.Contains(h.m.status, "could not save password") {
 		t.Fatalf("status %q", h.m.status)
 	}
-	if !h.m.statusErr || !strings.Contains(stripANSI(h.m.render()), "✗ could not save password") {
+	if h.m.statusKind != statusError || !strings.Contains(stripANSI(h.m.render()), "✗ Saved work, but could not save password") {
 		t.Fatalf("warning is not marked as an error:\n%s", stripANSI(h.m.render()))
 	}
 
 	h2 := newHarness(t, cfg, &wrapStore{inner: secret.NewMemory(), deleteErr: errors.New("boom")})
 	h2.m = press(h2.m, "D", "y")
-	if !h2.m.statusErr || !strings.Contains(stripANSI(h2.m.render()), "✗ a leftover secret") {
+	if h2.m.statusKind != statusError || !strings.Contains(stripANSI(h2.m.render()), "✗ Deleted work, but a leftover secret") {
 		t.Fatalf("delete warning is not marked as an error: %q\n%s", h2.m.status, stripANSI(h2.m.render()))
 	}
 }

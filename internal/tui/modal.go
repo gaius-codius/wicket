@@ -99,20 +99,27 @@ func (m Model) modalConnect(save bool) (tea.Model, tea.Cmd) {
 	return m.runConnect(p, pw, true, warn)
 }
 
+// subtitle explains why the dialog is asking. Each of the three ways
+// in says only what Wicket knows: a keyring that could not be read is not
+// the same as one with no password in it.
+func (md modalState) subtitle() string {
+	switch {
+	case md.lookupErr != nil:
+		return "The keyring is unavailable, so Wicket cannot tell whether a password is saved."
+	case md.replacing:
+		// Reached by pressing n after a session ended early, which is
+		// when a saved password may be the wrong one.
+		return "Type a new password; ctrl+s saves it over any saved one."
+	default:
+		return "No password is saved for this connection."
+	}
+}
+
 func (m Model) viewModal(lo layout) string {
 	md := m.modal
 	mark := "  "
 	if md.focused {
 		mark = m.styles.accent.Render("▌ ")
-	}
-	note := "No stored password for " + md.profile.Name + "."
-	switch {
-	case md.lookupErr != nil:
-		note = "Secret store unavailable; enter a password to continue."
-	case md.replacing:
-		// Reached by pressing n after a session failed, which is exactly when
-		// a password is stored and suspected of being wrong.
-		note = "Enter a new password for " + md.profile.Name + "."
 	}
 	// Wrapping here rather than letting the frame do it keeps the line count
 	// honest, so a long profile name cannot push the panel past the window.
@@ -123,10 +130,11 @@ func (m Model) viewModal(lo layout) string {
 	}
 	// The field is the dialog: without it there is nothing to answer with,
 	// and keystrokes reach it whether or not it is drawn. So it is kept
-	// first, then the error, then the note -- which only restates what the
-	// user can see. Clipping the whole view from the bottom instead lost the
-	// field at any height under ten, and keeping the error ahead of it lost
-	// the field again as soon as there was an error to show.
+	// first, then the error, then the title and subtitle -- which only
+	// restate what the header and footer already say. Clipping the whole
+	// view from the bottom instead lost the field at any height under ten,
+	// and keeping the error ahead of it lost the field again as soon as
+	// there was an error to show.
 	lines := []string{mark + m.styles.muted.Render(label+"  ") +
 		inputView(md.ti, max(lo.Inner-len(label)-4, 1))}
 	if md.err != "" {
@@ -140,6 +148,25 @@ func (m Model) viewModal(lo layout) string {
 			lines = append(lines, fit(errText, room)...)
 		}
 	}
-	head := append(strings.Split(m.styles.muted.Render(wrap.Render(note)), "\n"), "")
-	return strings.Join(append(fit(head, lo.Budget-len(lines)), lines...), "\n")
+	return strings.Join(append(m.modalHead(lo, lo.Budget-len(lines)), lines...), "\n")
+}
+
+// modalHead is the title, subtitle and gap above the field, in room lines.
+// The title names the connection, so it outlasts the subtitle; the subtitle
+// goes whole or not at all, and the gap goes first.
+func (m Model) modalHead(lo layout, room int) []string {
+	md := m.modal
+	if room < 1 {
+		return nil
+	}
+	title := m.styles.primary.Bold(true).Render(truncate("Connect to "+md.profile.Name, lo.Inner))
+	sub := strings.Split(m.styles.muted.Render(lipgloss.NewStyle().Width(lo.Inner).Render(md.subtitle())), "\n")
+	head := []string{title}
+	if room-1 >= len(sub) {
+		head = append(head, sub...)
+	}
+	if room > len(head) {
+		head = append(head, "")
+	}
+	return head
 }

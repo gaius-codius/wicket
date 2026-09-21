@@ -40,7 +40,7 @@ func TestModal_UseOnceDoesNotStore(t *testing.T) {
 		t.Fatalf("stdin %q", got.Stdin)
 	}
 	p, _ := h.m.app.Cfg.Profile("work")
-	if _, err := store.Lookup(secret.IdentityFor(h.m.app.Cfg.Path(), p)); err == nil {
+	if _, err := store.Lookup(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p)); err == nil {
 		t.Fatal("use-once must not create an item")
 	}
 	if strings.Contains(screen(h.m), sentinel) {
@@ -56,7 +56,7 @@ func TestModal_CtrlSCreatesItem(t *testing.T) {
 	h.m = typeInto(h.m, sentinel)
 	h.m = press(h.m, "ctrl+s")
 	p, _ := h.m.app.Cfg.Profile("work")
-	if _, err := store.Lookup(secret.IdentityFor(h.m.app.Cfg.Path(), p)); err != nil {
+	if _, err := store.Lookup(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -73,7 +73,7 @@ func TestModal_StoreFailureStillConnects(t *testing.T) {
 	if got.Stdin != sentinel+"\n" {
 		t.Fatalf("stdin %q", got.Stdin)
 	}
-	if !strings.Contains(h.m.status, "could not save password") {
+	if !strings.Contains(h.m.status, "password not saved") {
 		t.Fatalf("status %q", h.m.status)
 	}
 }

@@ -16,6 +16,14 @@ type formBlock struct {
 	gap   bool
 }
 
+// formValueMin is the narrowest value column the labels leave: room for a
+// short hostname or "‹ 100% ›". With six cells the scale read "‹ 1…".
+const formValueMin = 10
+
+// formLabelMin is the narrowest the label column gets, so a label still says
+// which field it is.
+const formLabelMin = 8
+
 // formColumns sizes the label and value columns for a panel inner cells
 // wide. The label column is sized to the panel, not the other way round: a
 // narrow terminal should truncate labels rather than render rows wider than
@@ -25,7 +33,7 @@ func formColumns(inner int) (labelW, valueW int) {
 	for _, l := range formLabels {
 		longest = max(longest, lipgloss.Width(l)+1)
 	}
-	labelW = min(longest, max(inner-2-6, 3))
+	labelW = min(longest, max(inner-2-2-formValueMin, formLabelMin), max(inner-2-2-1, 1))
 	valueW = max(inner-2-labelW-2, 1)
 	return labelW, valueW
 }
@@ -285,7 +293,15 @@ func (m Model) onOff(v bool, width int) string {
 // marks it without colour.
 func (m Model) scaleValue(cur, width int) string {
 	if width < scaleChoices {
-		return m.styles.primary.Render(truncate("‹ "+strconv.Itoa(cur)+"% ›", width))
+		// Tighter forms of the current choice before any cut: "‹ 1…" did
+		// not say which scale it was.
+		pct := strconv.Itoa(cur) + "%"
+		for _, s := range []string{"‹ " + pct + " ›", "‹" + pct + "›", pct} {
+			if lipgloss.Width(s) <= width {
+				return m.styles.primary.Render(s)
+			}
+		}
+		return m.styles.primary.Render(truncate(pct, width))
 	}
 	parts := make([]string, 0, 3)
 	for _, s := range []int{100, 140, 180} {

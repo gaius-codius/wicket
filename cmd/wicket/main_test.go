@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/gaius-codius/wicket/internal/testutil"
+	"github.com/gaius-codius/wicket/internal/tui"
 )
 
 type runResult struct {
@@ -47,6 +49,20 @@ func TestNoArgsStartsTUI(t *testing.T) {
 	}
 	if got.tuiCalls != 1 {
 		t.Fatalf("TUI calls = %d, want 1", got.tuiCalls)
+	}
+}
+
+// A TUI ended by SIGTERM or SIGHUP exits 128 plus the signal's number, as
+// wicket connect does, and says nothing: it used to exit 0, so a script that
+// stopped it could not tell.
+func TestTUIStoppedBySignalExitsAsKilled(t *testing.T) {
+	t.Parallel()
+	for sig, want := range map[syscall.Signal]int{syscall.SIGTERM: 143, syscall.SIGHUP: 129} {
+		var stdout, stderr bytes.Buffer
+		code := run(nil, &stdout, &stderr, func() error { return &tui.StoppedError{Signal: sig} })
+		if code != want || stderr.Len() != 0 {
+			t.Errorf("%v: exit %d stderr %q, want %d and nothing said", sig, code, stderr.String(), want)
+		}
 	}
 }
 

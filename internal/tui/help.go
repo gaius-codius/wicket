@@ -67,9 +67,9 @@ func helpKeys(v view) []hint {
 			{"space, enter", "switch on/off"},
 			{"←/→, h/l", "change scale"},
 			{"ctrl+s", "save"},
-			{"esc", "cancel to list"},
+			{"esc", "cancel; asks first if changed"},
 			{"?", "help (off a text field)"},
-			{"ctrl+c", "quit without saving"},
+			{"ctrl+c", "quit; asks first if changed"},
 		}
 	case viewModal:
 		return []hint{

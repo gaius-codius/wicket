@@ -229,3 +229,15 @@ func positiveInt(s string) bool {
 func fmtIndex(i int) string {
 	return fmt.Sprintf("profiles[%d]", i)
 }
+
+// validateHostForSave holds a host being saved to rules a loaded config is
+// not held to. No host name or address has a space in it, and FreeRDP would
+// get "/v:bad host" as one argument and fail on it at connect time; but a
+// config that already has one must still open, or one bad profile would lock
+// the user out of every other.
+func validateHostForSave(host string) error {
+	if strings.ContainsFunc(strings.TrimSpace(host), unicode.IsSpace) {
+		return &FieldError{Field: "host", Msg: "must not contain spaces"}
+	}
+	return nil
+}

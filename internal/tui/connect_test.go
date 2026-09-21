@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ func TestConnect_StoredSecretNoModal(t *testing.T) {
 	store := secret.NewMemory()
 	h := newHarness(t, fixtureTOML("work", "192.168.1.20", "jdoe"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
+	_ = store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
 	h.m = press(h.m, "enter")
 	if h.m.view == viewModal {
 		t.Fatal("modal should be skipped")
@@ -100,7 +101,7 @@ func TestConnect_MissingClientNoLastUsed(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = h.store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
+	_ = h.store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
 	h.m = press(h.m, "enter")
 	if h.m.view != viewList {
 		t.Fatalf("view %v", h.m.view)
@@ -122,7 +123,7 @@ func TestConnect_ClientOutputNeverReachesTheTerminal(t *testing.T) {
 	store := secret.NewMemory()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
+	_ = store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
 	h.m = press(h.m, "enter")
 	if h.stdout.Len() != 0 || h.stderr.Len() != 0 {
 		t.Fatalf("client wrote to the terminal: stdout %q stderr %q", h.stdout.String(), h.stderr.String())
@@ -136,38 +137,37 @@ func TestConnect_ClientOutputNeverReachesTheTerminal(t *testing.T) {
 	}
 }
 
-func TestConnect_UserChangeShowsModal(t *testing.T) {
-	_ = withFakeRDP(t)
-	store := secret.NewMemory()
-	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
-	p, _ := h.m.app.Cfg.Profile("work")
-	_ = store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
-	p.User = "other"
-	h.m.form = formState{oldName: "work", p: p}
-	h.m.view = viewForm
-	h.m = press(h.m, "ctrl+s")
-	h.m = press(h.m, "enter")
-	if h.m.view != viewModal {
-		t.Fatalf("view %v status=%s", h.m.view, h.m.status)
-	}
-}
-
-func TestConnect_DomainChangeShowsModal(t *testing.T) {
-	_ = withFakeRDP(t)
-	store := secret.NewMemory()
-	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
-	p, _ := h.m.app.Cfg.Profile("work")
-	_ = store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
-	p.Domain = "CORP"
-	h.m.form = formState{oldName: "work", p: p}
-	h.m.view = viewForm
-	h.m = press(h.m, "ctrl+s")
-	if h.m.view != viewList {
-		t.Fatalf("after save view=%v err=%s", h.m.view, h.m.form.err)
-	}
-	h.m = press(h.m, "enter")
-	if h.m.view != viewModal {
-		t.Fatalf("view %v status=%s", h.m.view, h.m.status)
+// A new user or domain keeps the saved password, which goes with the
+// profile to its new keyring identity, so connecting does not ask again.
+func TestConnect_AccountChangeKeepsThePassword(t *testing.T) {
+	for name, edit := range map[string]func(*config.Profile){
+		"user":   func(p *config.Profile) { p.User = "other" },
+		"domain": func(p *config.Profile) { p.Domain = "CORP" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := withFakeRDP(t)
+			store := secret.NewMemory()
+			h := newHarness(t, fixtureTOML("work", "h", "u"), store)
+			p, _ := h.m.app.Cfg.Profile("work")
+			_ = store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
+			edit(&p)
+			h.m.form = formState{oldName: "work", p: p}
+			h.m.view = viewForm
+			h.m = press(h.m, "ctrl+s")
+			if h.m.view != viewList || h.m.statusKind != statusSuccess {
+				t.Fatalf("after save view=%v status=%q err=%s", h.m.view, h.m.status, h.m.form.err)
+			}
+			if !strings.Contains(h.m.status, "saved password moved with it") {
+				t.Fatalf("status %q, want it to say the password moved", h.m.status)
+			}
+			h.m = press(h.m, "enter")
+			if h.m.view == viewModal {
+				t.Fatal("asked for a password the edit should have kept")
+			}
+			if got := testutil.ReadRecord(t, rec); got.Stdin != sentinel+"\n" {
+				t.Fatalf("stdin %q", got.Stdin)
+			}
+		})
 	}
 }
 
@@ -190,7 +190,7 @@ func TestConnect_LongSessionNoRetryOverlay(t *testing.T) {
 	store := secret.NewMemory()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
+	_ = store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
 	h.m.app.Launcher.Clock = &jumpClock{
 		times: []time.Time{time.Unix(0, 0), time.Unix(4, 0)},
 	}
@@ -241,8 +241,8 @@ type multiStore struct {
 	secret.Store
 }
 
-func (s multiStore) Lookup(id secret.Identity) (secret.LookupResult, error) {
-	res, err := s.Store.Lookup(id)
+func (s multiStore) Lookup(ctx context.Context, id secret.Identity) (secret.LookupResult, error) {
+	res, err := s.Store.Lookup(ctx, id)
 	if err == nil {
 		res.Multiple = true
 	}
@@ -254,7 +254,7 @@ func TestConnect_MultipleWarningSurvives(t *testing.T) {
 	inner := secret.NewMemory()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), multiStore{inner})
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = inner.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
+	_ = inner.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
 	h.m.app.Launcher.Clock = &jumpClock{
 		times: []time.Time{time.Unix(0, 0), time.Unix(4, 0)},
 	}
@@ -272,7 +272,7 @@ func TestRetry_NewPasswordDoesNotClaimThereIsNone(t *testing.T) {
 	store := secret.NewMemory()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	if err := store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, "secret")); err != nil {
+	if err := store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, "secret")); err != nil {
 		t.Fatal(err)
 	}
 	h.m = press(h.m, "enter")

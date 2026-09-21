@@ -193,3 +193,29 @@ func TestValidateSize_RejectsASignedNumber(t *testing.T) {
 		}
 	}
 }
+
+// A host with a space in it is no host FreeRDP can reach, and "bad host"
+// used to be saved all the same. A config that already has one still opens,
+// so one bad profile cannot lock the user out of the rest.
+func TestHost_SpacesRejectedOnSaveNotOnLoad(t *testing.T) {
+	for _, bad := range []string{"bad host", "a b:3389", "[::1] :3389", "host\u00a0name"} {
+		if err := validateHostForSave(bad); err == nil {
+			t.Errorf("host %q accepted for save", bad)
+		}
+	}
+	path := writeTOML(t, `
+[[profiles]]
+name = "work"
+host = "bad host"
+user = "u"
+`)
+	cfg, err := Open(path)
+	if err != nil {
+		t.Fatalf("config with a spaced host did not open: %v", err)
+	}
+	p, _ := cfg.Profile("work")
+	p.Host = "other host"
+	if err := cfg.Upsert(p, "work"); err == nil {
+		t.Fatal("spaced host saved")
+	}
+}

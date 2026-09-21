@@ -30,6 +30,8 @@ const (
 type presenceEntry struct {
 	state presenceState
 	seq   int
+	// at is when the answer came.
+	at time.Time
 }
 
 // presenceMsg carries a finished check back to Update.
@@ -39,6 +41,14 @@ type presenceMsg struct {
 	got secret.Presence
 	err error
 }
+
+// presenceRetryAfter is how long "keyring unavailable" stands before the
+// next update asks again. It used to stand for good: a profile checked while
+// the keyring was stalled said so long after the keyring had recovered, while
+// every other profile showed the truth. The list's poll for last-used times
+// updates the model every few seconds, so the answer is refreshed even when
+// nothing is pressed.
+const presenceRetryAfter = 5 * time.Second
 
 // presenceTimeout bounds a check. A wedged bus then reads as "keyring
 // unavailable" rather than "checking…" for as long as the list is open.
@@ -68,7 +78,7 @@ func (m Model) ensurePresence() (Model, tea.Cmd) {
 		return m, nil
 	}
 	id := m.identity(p)
-	if _, known := m.presence[id]; known {
+	if e, known := m.presence[id]; known && !(e.state == presenceUnavailable && m.clock().Sub(e.at) >= presenceRetryAfter) {
 		return m, nil
 	}
 	m.presenceSeq++
@@ -100,7 +110,7 @@ func (m Model) handlePresence(msg presenceMsg) (tea.Model, tea.Cmd) {
 	default:
 		state = presenceNotSaved
 	}
-	m.setPresence(msg.id, presenceEntry{state: state, seq: msg.seq})
+	m.setPresence(msg.id, presenceEntry{state: state, seq: msg.seq, at: m.clock()})
 	return m, nil
 }
 

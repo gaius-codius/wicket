@@ -196,11 +196,22 @@ func (m Model) handleEscalate(msg sessionEscalateMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleSignal deals with a signal sent to Wicket itself. SIGINT is Ctrl+C
-// by another route: it stops a running session and otherwise quits. SIGTERM
-// and SIGHUP quit, and Run stops any session on the way out.
+// by another route: it stops a running session or a wait on the keyring, and
+// otherwise quits. SIGTERM and SIGHUP quit whatever is going on, and Run
+// stops any session on the way out.
 func (m Model) handleSignal(msg signalMsg) (tea.Model, tea.Cmd) {
 	if msg.sig == os.Interrupt && m.session != nil {
 		return m.stopSession()
+	}
+	if m.keyring != nil {
+		if msg.sig == os.Interrupt {
+			return m.stopKeyring("ctrl+c")
+		}
+		m.keyring.cancel()
+		m.keyring = nil
+	}
+	if sig, ok := msg.sig.(syscall.Signal); ok && msg.sig != os.Interrupt {
+		m.stoppedBy = sig
 	}
 	return m.interrupt()
 }
@@ -222,11 +233,15 @@ func (m Model) sessionHints() []keyHint {
 	return []keyHint{{"ctrl+c", "stop session", intentDanger}}
 }
 
-const sessionNote = "The session runs in its own window. Wicket comes back here when it closes."
+// sessionNote says what Wicket can and cannot see. It knows the client is
+// running, not whether it has connected: FreeRDP can spend a quarter of a
+// minute failing to reach a host, and this view once said "Connected" all
+// the while.
+const sessionNote = "FreeRDP connects in its own window. Wicket comes back here when it closes, and says so if it failed."
 
 // viewSession renders the running session in at most lo.Budget lines. The
-// first line says a session is open and stays; the details come next, and
-// the explanation, which never changes, is shed first.
+// first line says the client is running and stays; the details come next,
+// and the explanation, which never changes, is shed first.
 func (m Model) viewSession(lo layout) []string {
 	ss := m.session
 	if ss == nil {
@@ -234,7 +249,7 @@ func (m Model) viewSession(lo layout) []string {
 	}
 	width := max(lo.Inner, 1)
 	head := m.styles.success.Render("● ") +
-		m.styles.primary.Bold(true).Render(truncate("Connected to "+ss.profile.Name, max(width-2, 1)))
+		m.styles.primary.Bold(true).Render(truncate("FreeRDP running for "+ss.profile.Name, max(width-2, 1)))
 	lines := []string{head}
 	room := max(lo.Budget, 1)
 	if room >= 2 {
@@ -250,16 +265,19 @@ func (m Model) viewSession(lo layout) []string {
 	return lines
 }
 
-// sessionDetail is "user@host · opened 14:02 · elapsed 00:12:31" in width
-// cells. The opening time goes first when it does not fit, then the target
-// is cut: the ticking elapsed time is what shows the session is alive.
+// sessionDetail is "DOMAIN\user@host · started 14:02 · elapsed 00:12:31" in
+// width cells. The start time goes first when it does not fit, then the
+// target is cut: the ticking elapsed time is what shows the client is alive.
 func (m Model) sessionDetail(width int) string {
 	ss := m.session
 	target := ss.profile.Host
-	if ss.profile.User != "" {
-		target = ss.profile.User + "@" + target
+	if user := ss.profile.User; user != "" {
+		if ss.profile.Domain != "" {
+			user = ss.profile.Domain + `\` + user
+		}
+		target = user + "@" + target
 	}
-	opened := "opened " + ss.opened.Format("15:04")
+	opened := "started " + ss.opened.Format("15:04")
 	elapsed := "elapsed " + clockDuration(m.clock().Sub(ss.opened))
 	full := target + " · " + opened + " · " + elapsed
 	if lipgloss.Width(full) <= width {

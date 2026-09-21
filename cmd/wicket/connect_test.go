@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,6 +13,9 @@ import (
 	"github.com/gaius-codius/wicket/internal/secret"
 	"github.com/gaius-codius/wicket/internal/testutil"
 )
+
+// bg is the context tests hand the keyring.
+var bg = context.Background()
 
 func TestConnect_UnknownProfile(t *testing.T) {
 	cfg := writeConnectConfig(t, validTOML())
@@ -94,7 +98,7 @@ func TestConnect_StoredSecret(t *testing.T) {
 	p, _ := cfg.Profile("work")
 	mem := secret.NewMemory()
 	pw, _ := secret.NewPassword("s3cret")
-	if err := mem.Upsert(secret.IdentityFor(cfg.Path(), p), pw); err != nil {
+	if err := mem.Upsert(bg, secret.IdentityFor(cfg.Path(), p), pw); err != nil {
 		t.Fatal(err)
 	}
 	oldStore := openStore

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -35,6 +37,10 @@ func (m Model) handleModalKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 	case "esc":
 		return m.cancelModal()
 	case "ctrl+s":
+		if !md.canSave() {
+			md.err = "the keyring is not answering, so the password cannot be saved; enter connects once"
+			break
+		}
 		return m.modalConnect(true)
 	case "enter":
 		return m.modalConnect(false)
@@ -83,15 +89,27 @@ func (m Model) modalConnect(save bool) (tea.Model, tea.Cmd) {
 		m.modal.err = "password required"
 		return m, nil
 	}
-	p := m.modal.profile
-	m.modal.input = ""
-	warn := ""
 	if save {
-		if err := m.app.StoreSecret(p, pw); err != nil {
-			warn = "could not save password: " + err.Error()
-		}
-		m.forgetPresence(m.identity(p))
+		// The keyring may take a while, or wait on an unlock prompt, so
+		// the store runs off the loop and the dialog stays up until it has
+		// answered; see keyring.go.
+		return m.storeAndConnect(m.modal.profile, pw)
 	}
+	return m.modalStart("")
+}
+
+// modalStart closes the dialog and connects with the password typed into it,
+// kept for a retry as a use-once password. warn is anything to report beside
+// the session.
+func (m Model) modalStart(warn string) (tea.Model, tea.Cmd) {
+	p := m.modal.profile
+	pw, err := secret.NewPassword(m.modal.input)
+	if err != nil || pw.Empty() {
+		// modalConnect checked the input and nothing can change it while
+		// the keyring is busy, so this is not reached.
+		return m.cancelModal()
+	}
+	m.modal.input = ""
 	m.modal = modalState{}
 	m.view = viewList
 	cp := pw
@@ -100,11 +118,20 @@ func (m Model) modalConnect(save bool) (tea.Model, tea.Cmd) {
 	return m.runConnect(p, pw, true, warn)
 }
 
+// canSave reports whether ctrl+s is worth offering. When the keyring could
+// not be read, a save would only fail the same way -- or wait on it again --
+// so the dialog offers to connect once and no more.
+func (md modalState) canSave() bool { return md.lookupErr == nil }
+
 // subtitle explains why the dialog is asking. Each of the three ways
 // in says only what Wicket knows: a keyring that could not be read is not
 // the same as one with no password in it.
 func (md modalState) subtitle() string {
 	switch {
+	case errors.Is(md.lookupErr, context.Canceled):
+		return "Wicket stopped waiting for the keyring, so it cannot tell whether a password is saved."
+	case errors.Is(md.lookupErr, context.DeadlineExceeded):
+		return "The keyring did not answer, so Wicket cannot tell whether a password is saved."
 	case md.lookupErr != nil:
 		return "The keyring is unavailable, so Wicket cannot tell whether a password is saved."
 	case md.replacing:

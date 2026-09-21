@@ -30,10 +30,14 @@ func (p Presence) String() string {
 }
 
 // Store is the primitive secret API. Rename/identity transactions live in tui/actions.go.
+//
+// Every method takes a context, and gives up with an error wrapping
+// ErrUnavailable once it is done. Lookup, Upsert and Delete may wait on a
+// person answering a keyring prompt, so they can take minutes; see OpTimeout.
 type Store interface {
-	Lookup(Identity) (LookupResult, error)
-	Upsert(Identity, Password) error
-	Delete(Identity) error
+	Lookup(context.Context, Identity) (LookupResult, error)
+	Upsert(context.Context, Identity, Password) error
+	Delete(context.Context, Identity) error
 	// Presence checks for a stored password from metadata alone. It never
 	// reads the secret and never prompts, so it may run on every selection
 	// change; ctx bounds how long a slow keyring can hold it up. A keyring
@@ -58,7 +62,10 @@ func NewMemory() *Memory {
 	return &Memory{clock: time.Now}
 }
 
-func (m *Memory) Lookup(id Identity) (LookupResult, error) {
+func (m *Memory) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
+	if err := ctx.Err(); err != nil {
+		return LookupResult{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var hits []memItem
@@ -93,7 +100,10 @@ func (m *Memory) Presence(ctx context.Context, id Identity) (Presence, error) {
 	return NotSaved, nil
 }
 
-func (m *Memory) Upsert(id Identity, pw Password) error {
+func (m *Memory) Upsert(ctx context.Context, id Identity, pw Password) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.clock()
@@ -108,7 +118,10 @@ func (m *Memory) Upsert(id Identity, pw Password) error {
 	return nil
 }
 
-func (m *Memory) Delete(id Identity) error {
+func (m *Memory) Delete(ctx context.Context, id Identity) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := m.items[:0]

@@ -41,6 +41,35 @@ func TestPaste_DropsOneLineEndAndRejectsTheRest(t *testing.T) {
 	}
 }
 
+// A paste holding a tab, an escape or another control character is refused,
+// like a multi-line one. The input used to drop or rewrite them -- a tab
+// became a space -- so the value saved, or the password sent to FreeRDP, was
+// not the one pasted.
+func TestPaste_RefusesControlCharacters(t *testing.T) {
+	m := sized(t, fixtureTOML("work", "h", "u"), 80, 24)
+	for _, password := range []bool{false, true} {
+		for _, in := range []string{"X\x1b[31mRED", "CO\tRP", "a\x7fb", "a\x00b", "Zq9\x1b[2JPW\n", "a\u0085b"} {
+			ti := m.newInput("kept", password)
+			ti.Focus()
+			got, err := updateInput(ti, tea.PasteMsg{Content: in}, password)
+			if !errors.Is(err, errControlPaste) {
+				t.Errorf("password %v, paste %q: err = %v, want a control-character rejection", password, in, err)
+			}
+			if got.Value() != "kept" {
+				t.Errorf("password %v, paste %q: value became %q", password, in, got.Value())
+			}
+		}
+	}
+	// The form says why, under the field, and keeps what was there.
+	h := newHarness(t, "", nil)
+	h.m = press(h.m, "n")
+	h.m = typeInto(h.m, "lab")
+	h.m = paste(h.m, "\x1b[31mRED")
+	if h.m.form.p.Name != "lab" || !strings.Contains(h.m.form.err, "control character") {
+		t.Fatalf("name %q, err %q", h.m.form.p.Name, h.m.form.err)
+	}
+}
+
 // A rejected filter paste must not leave its error behind once the filter is
 // usable again, nor discard a warning it did not raise.
 func TestFilter_RejectedPasteErrorClearsAndRestores(t *testing.T) {

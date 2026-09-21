@@ -95,11 +95,10 @@ func waitStopped(t *testing.T, pid int) {
 func startSession(t *testing.T, h *harness) (Model, tea.Cmd) {
 	t.Helper()
 	p, _ := h.m.app.Cfg.Profile("work")
-	if err := h.store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel)); err != nil {
+	if err := h.store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel)); err != nil {
 		t.Fatal(err)
 	}
-	nm, cmd := h.m.Update(keyMsg("enter"))
-	m := nm.(Model)
+	m, cmd := act(h.m, keyMsg("enter"))
 	if m.session == nil || m.view != viewSession {
 		t.Fatalf("no session: view %v status %q", m.view, m.status)
 	}
@@ -126,9 +125,9 @@ func TestSession_ViewShowsTheSessionAndTicks(t *testing.T) {
 	out := screen(m)
 	for _, want := range []string{
 		"session open",
-		"● Connected to work",
-		"jdoe@192.168.1.20 · opened 14:02 · elapsed 00:00:00",
-		"The session runs in its own window.",
+		"● FreeRDP running for work",
+		"jdoe@192.168.1.20 · started 14:02 · elapsed 00:00:00",
+		"FreeRDP connects in its own window.",
 		"ctrl+c stop session",
 	} {
 		if !strings.Contains(out, want) {
@@ -140,6 +139,11 @@ func TestSession_ViewShowsTheSessionAndTicks(t *testing.T) {
 		if strings.Contains(out, gone) {
 			t.Fatalf("session footer offers %q:\n%s", gone, out)
 		}
+	}
+	// Wicket sees the client start, not the connection: it must not claim
+	// one while FreeRDP may still be failing to reach the host.
+	if strings.Contains(out, "Connected") {
+		t.Fatalf("the session view claims a connection Wicket cannot see:\n%s", out)
 	}
 
 	now = opened.Add(time.Hour + 65*time.Second)
@@ -276,7 +280,7 @@ func TestSession_StartErrorOffersRetry(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	h.m.app.Launcher.Runner = brokenRunner{}
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = h.store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
+	_ = h.store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
 	h.m = press(h.m, "enter")
 	if h.m.view != viewRetry || h.m.retry.class != rdp.ClassStartError {
 		t.Fatalf("view %v class %v, want the retry offer for a start error", h.m.view, h.m.retry.class)
@@ -297,16 +301,15 @@ func (brokenRunner) Command(string, ...string) *exec.Cmd {
 	return exec.Command(filepath.Join(os.TempDir(), "wicket-no-such-client"))
 }
 
-// A session that ends within seconds goes to the retry offer, and shows
-// what the client said.
-func TestSession_ShortSessionOffersRetry(t *testing.T) {
+// A client that fails goes to the retry offer, and shows what it said.
+func TestSession_FailureOffersRetry(t *testing.T) {
 	_ = withFakeRDP(t)
 	t.Setenv("FAKERDP_EXIT", "131")
 	t.Setenv("FAKERDP_OUTPUT", "\x1b[31m[12:00:00:000] [1:2] [ERROR][com.freerdp.core] - ERRCONNECT_CONNECT_FAILED\x1b[0m\x07")
 	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	m, cmd := startSession(t, h)
 	m = settle(m, cmd)
-	if m.view != viewRetry || m.retry.class != rdp.ClassShortSession {
+	if m.view != viewRetry || m.retry.class != rdp.ClassFailed {
 		t.Fatalf("view %v class %v", m.view, m.retry.class)
 	}
 	out := m.View().Content
@@ -315,6 +318,46 @@ func TestSession_ShortSessionOffersRetry(t *testing.T) {
 	}
 	if strings.Contains(out, "\x07") || strings.Contains(out, "[31m") {
 		t.Fatalf("client control characters reached the screen: %q", out)
+	}
+}
+
+// A failure is a failure however long it takes. FreeRDP spends about fifteen
+// seconds giving up on a host it cannot reach, and that used to come back as
+// a plain "session ended", with no exit status and no error, looking like a
+// session that had worked.
+func TestSession_SlowFailureOffersRetry(t *testing.T) {
+	_ = withFakeRDP(t)
+	t.Setenv("FAKERDP_EXIT", "131")
+	t.Setenv("FAKERDP_OUTPUT", "[12:00:16:000] [1:2] [ERROR][com.freerdp.core] - ERRCONNECT_CONNECT_FAILED [0x00020006]")
+	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	h.m.app.Launcher.Clock = &jumpClock{times: []time.Time{time.Unix(0, 0), time.Unix(16, 0)}}
+	m, cmd := startSession(t, h)
+	m = settle(m, cmd)
+	if m.view != viewRetry || m.retry.class != rdp.ClassFailed {
+		t.Fatalf("view %v class %v status %q, want the retry offer for a failure", m.view, m.retry.class, m.status)
+	}
+	out := screen(m)
+	for _, want := range []string{"exited with status 131 after 16s", "client: ERRCONNECT_CONNECT_FAILED"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// A session the user stopped is not a failure, however the client exited.
+func TestSession_StoppedIsNotAFailure(t *testing.T) {
+	log, _ := trapClient(t)
+	t.Setenv("FAKERDP_STUBBORN", "1")
+	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	m, cmd := startSession(t, h)
+	waitFile(t, os.Getenv("FAKERDP_TRAP_READY"))
+	for range 3 {
+		m, _ = updateKey(m, "ctrl+c")
+	}
+	waitLog(t, log, "client:terminated")
+	m = settle(m, cmd)
+	if m.view != viewList || !strings.Contains(m.status, "session stopped") {
+		t.Fatalf("view %v status %q, want a plain stop for a killed client", m.view, m.status)
 	}
 }
 
@@ -345,11 +388,11 @@ func TestSession_EchoedEscapedPasswordNeverDrawn(t *testing.T) {
 	escaped := sentinel[:3] + "\x1b[31m" + sentinel[3:]
 	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	p, _ := h.m.app.Cfg.Profile("work")
-	if err := h.store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, escaped)); err != nil {
+	if err := h.store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, escaped)); err != nil {
 		t.Fatal(err)
 	}
-	nm, cmd := h.m.Update(keyMsg("enter"))
-	m := settle(nm.(Model), cmd)
+	m, cmd := act(h.m, keyMsg("enter"))
+	m = settle(m, cmd)
 	if m.view != viewRetry {
 		t.Fatalf("view %v", m.view)
 	}
@@ -381,7 +424,7 @@ func TestRun_QuitStopsTheSessionAndKeepsItsOutput(t *testing.T) {
 	t.Setenv("FAKERDP_ECHO_STDIN", "1")
 	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = h.store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
+	_ = h.store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
 
 	inR, inW := io.Pipe()
 	defer inW.Close()
@@ -397,7 +440,7 @@ func TestRun_QuitStopsTheSessionAndKeepsItsOutput(t *testing.T) {
 	pid, _ := strconv.Atoi(waitFile(t, helperPID))
 	// Let the session view draw before quitting.
 	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(stripANSI(out.String()), "Connected to work") {
+	for !strings.Contains(stripANSI(out.String()), "FreeRDP running for work") {
 		if time.Now().After(deadline) {
 			t.Fatalf("session view never drawn:\n%q", out.String())
 		}
@@ -409,9 +452,7 @@ func TestRun_QuitStopsTheSessionAndKeepsItsOutput(t *testing.T) {
 	}
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("run: %v", err)
-		}
+		wantStopped(t, err, syscall.SIGTERM)
 	case <-time.After(10 * time.Second):
 		t.Fatal("Wicket did not quit on SIGTERM")
 	}
@@ -436,7 +477,7 @@ func TestRun_SessionRunsWhileTheStateLockIsHeld(t *testing.T) {
 	t.Setenv("FAKERDP_SIGINT_HOLD", "1")
 	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = h.store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
+	_ = h.store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
 	app := h.m.app
 	t.Cleanup(func() { app.StopSession(time.Second) })
 
@@ -475,7 +516,7 @@ func TestRun_SessionRunsWhileTheStateLockIsHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 	pid, _ := strconv.Atoi(waitFile(t, pidFile))
-	waitOutput("Connected to work")
+	waitOutput("FreeRDP running for work")
 
 	if _, err := inW.Write([]byte{0x03}); err != nil {
 		t.Fatal(err)
@@ -559,4 +600,94 @@ func withSession(m Model, p config.Profile, stopping bool) Model {
 		m.setStatus(stoppingStatus(syscall.SIGINT), statusInfo)
 	}
 	return m
+}
+
+// FreeRDP's exit code says how a session ended. A logoff or a closed window
+// exits non-zero, and is a session that ended, not an error with a password
+// hint; a failure says what failed, and only an authentication failure
+// suggests the password.
+func TestSession_FreeRDPExitCodes(t *testing.T) {
+	for _, tc := range []struct {
+		code   string
+		view   view
+		status string
+		hint   bool
+	}{
+		{"2", viewList, "session ended: logged off", false},
+		{"11", viewList, "session ended: disconnected by the user", false},
+		{"141", viewRetry, "FreeRDP failed: could not connect", false},
+		{"132", viewRetry, "FreeRDP failed: authentication failed", true},
+		{"134", viewRetry, "FreeRDP failed: logon failed", true},
+		{"99", viewRetry, "FreeRDP exited with an error", true},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			_ = withFakeRDP(t)
+			t.Setenv("FAKERDP_EXIT", tc.code)
+			h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+			h.m.app.Launcher.Clock = &jumpClock{times: []time.Time{time.Unix(0, 0), time.Unix(60, 0)}}
+			m, cmd := startSession(t, h)
+			m = settle(m, cmd)
+			out := screen(m)
+			if m.view != tc.view || !strings.Contains(out, tc.status) {
+				t.Fatalf("view %v, want %v with %q:\n%s", m.view, tc.view, tc.status, out)
+			}
+			if tc.view == viewList && m.statusKind != statusInfo {
+				t.Fatalf("status kind %v for a session that ended", m.statusKind)
+			}
+			if tc.view == viewRetry && !strings.Contains(out, "exited with status "+tc.code) {
+				t.Fatalf("exit status missing:\n%s", out)
+			}
+			if got := strings.Contains(out, "If the password may be wrong"); got != tc.hint {
+				t.Fatalf("password hint shown %v, want %v:\n%s", got, tc.hint, out)
+			}
+		})
+	}
+}
+
+// Another client's exit codes mean something else, so they are not read
+// through FreeRDP's table: exit 2 from it is a failure, as any non-zero
+// status is.
+func TestSession_OtherClientsExitCodesAreNotFreeRDPs(t *testing.T) {
+	_ = withFakeRDP(t)
+	t.Setenv("FAKERDP_EXIT", "2")
+	h := newHarness(t, strings.Replace(fixtureTOML("work", "h", "u"), `client = "sdl-freerdp3"`, `client = "myrdp"`, 1), secret.NewMemory())
+	m, cmd := startSession(t, h)
+	m = settle(m, cmd)
+	if m.view != viewRetry || m.retry.class != rdp.ClassFailed || strings.Contains(screen(m), "logged off") {
+		t.Fatalf("view %v class %v:\n%s", m.view, m.retry.class, screen(m))
+	}
+}
+
+// The line picked from the client's output is the one that names the error.
+// FreeRDP's password reader logs a tcsetattr failure as an ERROR on the way
+// out, after the real error, because its stdin is a pipe; it used to be what
+// the retry view showed for every real failure.
+func TestClientNote_PrefersTheErrorCodeOverTerminalNoise(t *testing.T) {
+	out := strings.Join([]string{
+		"Password: [00:44:58:825] [1:2] [ERROR][com.freerdp.utils.passphrase] - [set_termianl_nonblock]: tcsetattr(TCSANOW) failed with Inappropriate ioctl for device",
+		"[00:45:13:961] [1:3] [ERROR][com.freerdp.core] - [get_next_addrinfo]: ERRCONNECT_CONNECT_FAILED [0x00020006]",
+		"[00:45:13:961] [1:3] [ERROR][com.freerdp.core.nego] - [nego_connect]: Failed to connect",
+		"[00:45:13:966] [1:2] [ERROR][com.freerdp.client.SDL] - [handleShow]: ERRCONNECT_CONNECT_FAILED [0x00020006]",
+		"The connection failed.",
+		"[00:45:13:970] [1:2] [ERROR][com.freerdp.core.transport] - [transport_default_write]: BIO_should_retry returned a system error 32: Broken pipe",
+		"[00:45:14:001] [1:2] [ERROR][com.freerdp.utils.passphrase] - [restore_terminal]: tcsetattr(TCSANOW) failed with Inappropriate ioctl for device",
+		"",
+	}, "\n")
+	if got := clientNote([]byte(out), nil); got != "ERRCONNECT_CONNECT_FAILED [0x00020006]" {
+		t.Fatalf("clientNote = %q", got)
+	}
+	noise := "[1] [ERROR][com.freerdp.utils.passphrase] - [x]: tcsetattr(TCSANOW) failed\nsome last line\n"
+	if got := clientNote([]byte(noise), nil); got != "some last line" {
+		t.Fatalf("clientNote = %q, want the last line that is not terminal noise", got)
+	}
+}
+
+// wantStopped checks that Run reported being ended by sig, so that Wicket
+// exits 128 plus its number, as wicket connect does, rather than 0.
+func wantStopped(t *testing.T, err error, sig syscall.Signal) {
+	t.Helper()
+	var stopped *StoppedError
+	if !errors.As(err, &stopped) || stopped.Signal != sig || stopped.ExitStatus() != 128+int(sig) {
+		t.Fatalf("run returned %v, want it stopped by %v", err, sig)
+	}
 }

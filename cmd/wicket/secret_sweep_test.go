@@ -165,10 +165,10 @@ func TestAC017_IsolatedSecretService(t *testing.T) {
 	}
 	idA := secret.IdentityFor("/tmp/a.toml", p)
 	idB := secret.IdentityFor("/tmp/b.toml", p)
-	if err := store.Upsert(idA, pw); err != nil {
+	if err := store.Upsert(bg, idA, pw); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Lookup(idB); !errors.Is(err, secret.ErrNotFound) {
+	if _, err := store.Lookup(bg, idB); !errors.Is(err, secret.ErrNotFound) {
 		t.Fatalf("shared item: %v", err)
 	}
 }

@@ -153,20 +153,70 @@ func IsDark(bg color.Color) bool {
 }
 
 // readableTextOn lifts the roles that carry words to the contrast floor
-// against surface and leaves every other role alone: an Omarchy theme's
-// accents are its identity, and Wicket's are chosen to clear the floor
-// already. The status roles are text too, and the one that matters most: an
-// unreadable danger line is a failure the user never sees.
+// against surface and leaves the rest alone. The status roles are text, and
+// the ones that matter most: an unreadable danger line is a failure the user
+// never sees. The accent and brand are text too -- the footer's keys, the
+// header mark, the focus and selection bars -- so they are lifted when, and
+// only when, the real background makes them unreadable: an Omarchy theme's
+// accents are its identity, and a dark theme on a light terminal left its
+// accent at 2.5:1. The border is a surface, not text, and is never touched.
+//
+// Roles are lifted by as little as reaches the floor, keeping their hue, and
+// body text that has to move goes further than the rest, to the AAA ratio:
+// snapping everything to black left body and muted text the same colour.
+//
+// The selection background is a surface too, and is kept while the selected
+// row's text reads on it. Once that text has been lifted for a background
+// the theme was not made for, it may not: a dark theme's selection on a light
+// terminal left the selected name at 1.7:1. The selection is then made
+// again, as a tint of the real background towards the accent, and the row's
+// text lifted to read on it as well.
 func readableTextOn(p Palette, surface string) Palette {
 	hex := make(map[string]string, len(p.Hex))
 	for k, v := range p.Hex {
 		hex[k] = v
 	}
-	for _, role := range []string{"primary", "secondary", "muted", "success", "warning", "danger"} {
-		hex[role] = readableOn(surface, hex[role])
+	for _, role := range []string{"secondary", "muted", "success", "warning", "danger", "accent", "brand"} {
+		hex[role] = liftTo(surface, hex[role], minTextContrast)
+	}
+	if contrast(hex["primary"], surface) < minTextContrast {
+		hex["primary"] = liftTo(surface, hex["primary"], bodyLiftContrast)
+	}
+	if !readsOn(hex, hex["selection"]) {
+		hex["selection"] = mix(surface, hex["accent"], selectionTint)
+		for _, role := range selectedRowRoles {
+			hex[role] = liftTo(hex["selection"], hex[role], minTextContrast)
+		}
 	}
 	return paletteFromHex(hex)
 }
+
+// selectedRowRoles are the colours drawn on the selection background: the
+// name, the host and last-used time, and the accent bar and filter match.
+var selectedRowRoles = []string{"primary", "secondary", "muted", "accent"}
+
+// selectionTint is how far a made selection moves from the background
+// towards the accent: about what Verdigris's own light selection is.
+const selectionTint = 0.15
+
+// readsOn reports whether every colour of the selected row reaches the
+// contrast floor on bg.
+func readsOn(hex map[string]string, bg string) bool {
+	if bg == "" {
+		return false
+	}
+	for _, role := range selectedRowRoles {
+		if contrast(hex[role], bg) < minTextContrast {
+			return false
+		}
+	}
+	return true
+}
+
+// bodyLiftContrast is the WCAG AAA ratio, which body text is lifted to when
+// it has to be lifted at all, so it stays apart from muted text at the AA
+// floor.
+const bodyLiftContrast = 7
 
 func hexOf(c color.Color) string {
 	r, g, b, _ := c.RGBA()

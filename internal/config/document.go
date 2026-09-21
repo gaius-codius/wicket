@@ -222,9 +222,17 @@ func applyProfile(table map[string]any, p Profile) map[string]any {
 	out["name"] = p.Name
 	out["host"] = p.Host
 	out["user"] = p.User
-	out["domain"] = p.Domain
 	out["client"] = p.Client
-	out["size"] = p.Size
+	// Optional keys left empty are left out, rather than written as
+	// `size = ""`: an empty value means the same as no key, and a hand-edited
+	// file reads better without them. Unknown keys are still kept.
+	for key, v := range map[string]string{"domain": p.Domain, "size": p.Size} {
+		if v == "" {
+			delete(out, key)
+		} else {
+			out[key] = v
+		}
+	}
 	out["fullscreen"] = p.Fullscreen
 	out["dynamic_resolution"] = p.DynamicResolution
 	out["scale"] = int64(p.Scale)

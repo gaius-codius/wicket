@@ -76,54 +76,103 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 	}
 }
 
+// listKeepRows is how many rows the list holds on to before its own details
+// or the footer get a line: enough to see the selection among its
+// neighbours, and to see that there are neighbours at all.
+const listKeepRows = 4
+
+// listPlan is how the list spends its budget: which rows are on screen, how
+// many of the selected card's details fit, and whether the filter line gets
+// its gap. viewList draws it, and the header reports the window from it.
+type listPlan struct {
+	vis          []int
+	start, end   int
+	details      []detail
+	detailBudget int
+	cols         columns
+	sel          config.Profile
+	hasSel       bool
+	filterGap    bool
+	// room is the lines left for rows and details once the filter has
+	// taken its own.
+	room int
+}
+
+// planList lays the list out in lo.Budget lines. The rows come first, up to
+// listKeepRows, then the selected card's details, then the rest of the rows:
+// a card that took every line left a short terminal showing one profile and
+// no sign that there were others.
+func (m Model) planList(lo layout) listPlan {
+	ps := m.profiles()
+	pl := listPlan{vis: m.visible()}
+	pl.sel, pl.hasSel = m.selected()
+	budget := max(lo.Budget, 1)
+	if m.filterActive() {
+		// The filter line is what the user is typing into, so it is the
+		// first line the list keeps; its gap is the first it gives up.
+		budget = max(budget-1, 1)
+	}
+	keep := min(len(pl.vis), listKeepRows)
+	if lo.Wide {
+		pl.cols = columnWidths(ps, lo.Inner/2, m.timeWidth(ps))
+	} else {
+		pl.cols = columnWidths(ps, lo.Inner, m.timeWidth(ps))
+		// A detail repeats nothing the row already shows: the host and
+		// last-used time come back only when the row had no room for them.
+		if pl.hasSel && !lo.Compact {
+			pl.details = m.details(pl.sel, pl.cols.host == 0, pl.cols.time == 0)
+		}
+	}
+	if m.filterActive() && budget-1 >= max(keep, 1)+len(pl.details) {
+		pl.filterGap = true
+		budget--
+	}
+	// The password line comes last in the card, so it is the first to go.
+	pl.room = budget
+	pl.detailBudget = min(len(pl.details), max(budget-max(keep, 1), 0))
+	pl.start, pl.end = listWindow(len(pl.vis), max(slices.Index(pl.vis, m.cursor), 0), budget, pl.detailBudget+1)
+	return pl
+}
+
+// windowed reports whether the list shows fewer rows than match.
+func (pl listPlan) windowed() bool {
+	return pl.end-pl.start < len(pl.vis)
+}
+
 func (m Model) viewList(lo layout) string {
 	ps := m.profiles()
 	if len(ps) == 0 {
 		return m.viewEmpty(lo)
 	}
+	pl := m.planList(lo)
 	var head string
 	if m.filterActive() {
-		head = m.viewFilter(lo) + "\n\n"
-		lo.Budget = max(lo.Budget-2, 1)
+		head = m.viewFilter(lo) + "\n"
+		if pl.filterGap {
+			head += "\n"
+		}
 	}
-	vis := m.visible()
-	if len(vis) == 0 {
+	if len(pl.vis) == 0 {
 		return head + m.styles.muted.Render("No matches.")
 	}
-	sel, hasSel := m.selected()
 	if lo.Wide {
-		return head + m.viewListWide(lo, ps, vis, sel, hasSel)
+		return head + m.viewListWide(lo, ps, pl)
 	}
-	cols := columnWidths(ps, lo.Inner, m.timeWidth(ps))
-	// A detail repeats nothing the row already shows: the host and last-used
-	// time come back only when the row had no room for them.
-	var details []detail
-	if hasSel {
-		details = m.details(sel, cols.host == 0, cols.time == 0)
-	}
-	// The selected card's details are trimmed to what is left of the budget,
-	// so the footer and frame stay on screen in a short terminal. The
-	// password line comes last, so it is the first to go.
-	detailBudget := 0
-	if hasSel && !lo.Compact {
-		detailBudget = min(len(details), max(lo.Budget-1, 0))
-	}
-	start, end := listWindow(len(vis), max(slices.Index(vis, m.cursor), 0), lo.Budget, detailBudget+1)
 	q := m.query()
 	var lines []string
-	for _, i := range vis[start:end] {
+	for _, i := range pl.vis[pl.start:pl.end] {
 		p := ps[i]
 		switch {
 		case i == m.cursor:
-			lines = append(lines, m.row(p, true, cols, lo.Inner))
-			for _, d := range details[:detailBudget] {
+			lines = append(lines, m.row(p, true, pl.cols, lo.Inner))
+			for _, d := range pl.details[:pl.detailBudget] {
 				lines = append(lines, "    "+m.detailLine(d, lo.Inner-4))
 			}
 		case lo.Compact:
 			// Compact shows only names on unselected rows (UX-001).
 			lines = append(lines, "  "+m.highlight(p.Name, lo.Inner-2, q, m.styles.muted, m.styles.accent.Underline(true)))
 		default:
-			lines = append(lines, m.row(p, false, cols, lo.Inner))
+			lines = append(lines, m.row(p, false, pl.cols, lo.Inner))
 		}
 	}
 	return head + strings.Join(lines, "\n")
@@ -131,17 +180,16 @@ func (m Model) viewList(lo layout) string {
 
 // viewListWide shows profiles on the left and the selected profile's details
 // on the right, so moving the cursor does not reflow the list.
-func (m Model) viewListWide(lo layout, ps []config.Profile, vis []int, sel config.Profile, hasSel bool) string {
-	cols := columnWidths(ps, lo.Inner/2, m.timeWidth(ps))
+func (m Model) viewListWide(lo layout, ps []config.Profile, pl listPlan) string {
+	cols, sel := pl.cols, pl.sel
 	leftW := cols.width()
 	rightW := lo.Inner - leftW - 3
-	start, end := listWindow(len(vis), max(slices.Index(vis, m.cursor), 0), lo.Budget, 1)
 	var left []string
-	for _, i := range vis[start:end] {
+	for _, i := range pl.vis[pl.start:pl.end] {
 		left = append(left, m.row(ps[i], i == m.cursor, cols, leftW))
 	}
 	var right []string
-	if hasSel {
+	if pl.hasSel {
 		right = []string{m.styles.primary.Bold(true).Render(truncate(sel.Name, rightW)), ""}
 		for _, d := range m.details(sel, true, cols.time == 0) {
 			right = append(right, m.detailLine(d, rightW))
@@ -150,8 +198,8 @@ func (m Model) viewListWide(lo layout, ps []config.Profile, vis []int, sel confi
 			right = append(right, "", cmd)
 		}
 	}
-	if len(right) > lo.Budget {
-		right = right[:max(lo.Budget, 1)]
+	if len(right) > pl.room {
+		right = right[:pl.room]
 	}
 	sep := m.styles.divider.Render("│")
 	lines := make([]string, max(len(left), len(right)))
@@ -448,8 +496,16 @@ func (m Model) listHints() []keyHint {
 	case len(m.profiles()) == 0:
 		return []keyHint{{"n", "new", intentPrimary}, {"?", "help", intentNormal}, {"q", "quit", intentNormal}}
 	case m.filtering:
+		// With nothing matched there is nothing to move to.
+		if len(m.visible()) == 0 {
+			return []keyHint{{"enter", "done", intentPrimary}, {"esc", "clear", intentNormal}}
+		}
 		return []keyHint{{"↑/↓", "move", intentNormal}, {"enter", "done", intentPrimary}, {"esc", "clear", intentNormal}}
 	case m.filter.Value() != "":
+		if len(m.visible()) == 0 {
+			return []keyHint{{"/", "edit filter", intentPrimary}, {"esc", "clear filter", intentNormal},
+				{"?", "help", intentNormal}, {"q", "quit", intentNormal}}
+		}
 		return []keyHint{{"enter", "connect", intentPrimary}, {"/", "edit filter", intentNormal},
 			{"esc", "clear filter", intentNormal}, {"?", "help", intentNormal}, {"q", "quit", intentNormal}}
 	}
@@ -474,9 +530,43 @@ func (m Model) listContext() string {
 		ctx = fmt.Sprintf("%d %s", n, noun)
 	}
 	if m.sortRecent {
-		ctx += " · recent first"
+		ctx += sortNote
 	}
 	return ctx
+}
+
+// sortNote is the header's note that the list is sorted by last use.
+const sortNote = " · recent first"
+
+// listContextFit is the header context for the list as drawn in lo, in room
+// cells. When the list is windowed it says which rows are on screen, "2–5 of
+// 8 connections": a short terminal otherwise showed a few profiles with
+// nothing to say there were more. It costs no line of its own, and it
+// shortens rather than lose the span, which is the part the screen cannot
+// show any other way.
+func (m Model) listContextFit(lo layout, room int) string {
+	pl := m.planList(lo)
+	if len(m.profiles()) == 0 || !pl.windowed() {
+		return m.listContext()
+	}
+	var sort string
+	if m.sortRecent {
+		sort = sortNote
+	}
+	noun := "connections"
+	if m.query() != "" {
+		noun = "matches"
+	}
+	span := fmt.Sprintf("%d–%d of %d", pl.start+1, pl.end, len(pl.vis))
+	if pl.end-pl.start == 1 {
+		span = fmt.Sprintf("%d of %d", pl.start+1, len(pl.vis))
+	}
+	for _, c := range []string{span + " " + noun + sort, span + sort, span} {
+		if lipgloss.Width(c) <= room {
+			return c
+		}
+	}
+	return span
 }
 
 // sortByRecent orders idx, which is in file order, most recently used

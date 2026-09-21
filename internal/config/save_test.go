@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -208,5 +209,45 @@ func TestUpsert_RecreatesAConfigDeletedUnderIt(t *testing.T) {
 	}
 	if _, ok := after.Profile("a"); !ok {
 		t.Fatal("profile not written after the file was recreated")
+	}
+}
+
+// An optional key left empty is left out of the file rather than written as
+// `size = ""`, and one that is set again comes back; the profile reads the
+// same either way.
+func TestUpsert_OmitsEmptyOptionalKeys(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	c, err := OpenOrCreate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := Profile{Name: "work", Host: "h", User: "u", Domain: "CORP", Size: "100%", Client: "sdl-freerdp3", Scale: 100}
+	if err := c.Upsert(p, ""); err != nil {
+		t.Fatal(err)
+	}
+	cleared := p
+	cleared.Domain, cleared.Size = "", ""
+	if err := c.Upsert(cleared, "work"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	for _, key := range []string{"domain", "size"} {
+		if strings.Contains(string(raw), key+" =") {
+			t.Errorf("empty %s written:\n%s", key, raw)
+		}
+	}
+	c2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := c2.Profile("work"); got != cleared {
+		t.Fatalf("got %+v want %+v", got, cleared)
+	}
+	if err := c2.Upsert(p, "work"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(path); !strings.Contains(string(raw), `size = "100%"`) || !strings.Contains(string(raw), `domain = "CORP"`) {
+		t.Fatalf("set keys not written:\n%s", raw)
 	}
 }

@@ -138,15 +138,16 @@ func TestAdapt_ForcedModesIgnoreTheReply(t *testing.T) {
 }
 
 // An Omarchy file does not prove the terminal uses it. Once the real
-// background is known, body text must read on it, but the theme's accents are
-// left as the theme chose them.
+// background is known, everything drawn as text must read on it -- the
+// accent and brand included, since they colour the footer keys and the
+// header mark -- while the surfaces are left as the theme chose them.
 func TestAdapt_OmarchyTextIsReadableOnTheRealBackground(t *testing.T) {
 	home := t.TempDir()
 	writeTheme(t, home, `mode = "dark"
 background = "#101010"
 foreground = "#F0F0F0"
 muted = "#A0A0A0"
-accent = "#ABCDEF"
+accent = "#7AA2F7"
 green = "#B0F0B0"
 yellow = "#F0F0A0"
 red = "#F0B0B0"
@@ -157,14 +158,52 @@ selection = "#202020"
 	if got.Kind != KindOmarchy {
 		t.Fatalf("kind %d, want Omarchy", got.Kind)
 	}
-	for _, role := range []string{"primary", "secondary", "muted", "success", "warning", "danger"} {
+	for _, role := range []string{"primary", "secondary", "muted", "success", "warning", "danger", "accent", "brand"} {
 		if c := contrast(got.Palette.Hex[role], "#FFFFFF"); c < minTextContrast {
 			t.Errorf("%s %s on white: contrast %.2f", role, got.Palette.Hex[role], c)
 		}
 	}
-	for role, want := range map[string]string{"accent": "#ABCDEF", "brand": "#ABCDEF", "border": "#A0A0A0", "selection": "#202020"} {
-		if got.Palette.Hex[role] != want {
-			t.Errorf("%s rewritten to %s, want %s", role, got.Palette.Hex[role], want)
+	if got.Palette.Hex["border"] != "#A0A0A0" {
+		t.Errorf("border rewritten to %s", got.Palette.Hex["border"])
+	}
+	// The dark selection is no surface for text lifted against white: the
+	// selected row's name once read at 1.7:1 on it. Every colour of that row
+	// reads on the selection that replaces it.
+	sel := got.Palette.Hex["selection"]
+	for _, role := range []string{"primary", "secondary", "muted", "accent"} {
+		if c := contrast(got.Palette.Hex[role], sel); c < minTextContrast {
+			t.Errorf("%s %s on the selection %s: contrast %.2f", role, got.Palette.Hex[role], sel, c)
+		}
+	}
+	// Lifted, the accent is still a blue rather than black, and body text
+	// stays apart from muted text instead of both becoming black.
+	if r, _, b, _ := got.Palette.Accent.RGBA(); b <= r {
+		t.Errorf("accent lifted to %s, which has lost its hue", got.Palette.Hex["accent"])
+	}
+	if got.Palette.Hex["primary"] == got.Palette.Hex["muted"] {
+		t.Errorf("primary and muted are both %s", got.Palette.Hex["primary"])
+	}
+	// On the background the theme was made for, nothing moves.
+	dark := s.Adapt(color.RGBA{0x10, 0x10, 0x10, 0xFF})
+	for _, role := range []string{"primary", "muted", "accent", "brand", "selection"} {
+		if dark.Palette.Hex[role] != s.Look.Palette.Hex[role] {
+			t.Errorf("%s moved from %s to %s on the theme's own background", role, s.Look.Palette.Hex[role], dark.Palette.Hex[role])
+		}
+	}
+}
+
+// liftTo moves a colour only as far as the floor needs, and the result must
+// clear it after rounding to hex.
+func TestLiftTo_ReachesTheFloor(t *testing.T) {
+	for _, bg := range []string{"#FFFFFF", "#000000", "#777777", "#F7F8F6", "#161C1B"} {
+		for _, want := range []string{"#7AA2F7", "#D9956A", "#FFFFFF", "#000000", "#808080"} {
+			got := liftTo(bg, want, minTextContrast)
+			if c := contrast(got, bg); c < minTextContrast {
+				t.Errorf("liftTo(%s, %s) = %s, contrast %.2f", bg, want, got, c)
+			}
+			if contrast(want, bg) >= minTextContrast && got != want {
+				t.Errorf("liftTo(%s, %s) moved a readable colour to %s", bg, want, got)
+			}
 		}
 	}
 }

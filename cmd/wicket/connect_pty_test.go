@@ -33,7 +33,7 @@ func TestConnect_PTY_SaveChoices(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("exit %d", code)
 		}
-		if _, err := mem.Lookup(id); !errors.Is(err, secret.ErrNotFound) {
+		if _, err := mem.Lookup(bg, id); !errors.Is(err, secret.ErrNotFound) {
 			t.Fatalf("stored on N: %v", err)
 		}
 	})
@@ -43,7 +43,7 @@ func TestConnect_PTY_SaveChoices(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("exit %d", code)
 		}
-		if _, err := mem.Lookup(id); err != nil {
+		if _, err := mem.Lookup(bg, id); err != nil {
 			t.Fatalf("not stored on y: %v", err)
 		}
 	})

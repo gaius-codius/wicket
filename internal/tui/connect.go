@@ -42,15 +42,12 @@ func (m Model) connectProfile(p config.Profile, typed *secret.Password) (tea.Mod
 		m.view = viewList
 		return m, nil
 	}
-	res := m.app.ResolveCredential(p, typed)
-	if res.NeedModal {
-		return m.openModal(p, res.Err, false)
+	if typed != nil {
+		return m.runConnect(p, *typed, true, "")
 	}
-	extra := ""
-	if res.Multiple {
-		extra = "multiple matching secrets; using the most recently modified"
-	}
-	return m.runConnect(p, res.Cred, typed != nil, extra)
+	// The keyring is asked off the loop: it may be waiting on an unlock
+	// prompt, or not answering at all. See keyring.go.
+	return m.resolveCredential(p)
 }
 
 // runConnect starts the client and puts the session view up while it runs.
@@ -100,7 +97,7 @@ func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce b
 		status += warn
 	}
 	switch cr.Class {
-	case rdp.ClassStartError, rdp.ClassShortSession:
+	case rdp.ClassStartError, rdp.ClassShortSession, rdp.ClassFailed:
 		if keepUseOnce {
 			if pw, ok := cred.(secret.Password); ok {
 				cp := pw
@@ -177,8 +174,35 @@ func (m Model) handleRetryKey(key string) (tea.Model, tea.Cmd) {
 }
 
 // retryHint does not claim the password was wrong: a session also ends
-// early when the host is unreachable or the window is closed.
+// early when the host is unreachable or the window is closed. It is offered
+// only when the password may be to blame (see rdp.Outcome.MaybeCredentials):
+// under "could not connect" or a logoff it pointed at the wrong culprit.
 const retryHint = "If the password may be wrong, press n for a new password."
+
+// retryBlocks are the overlay's parts, most important first: what happened,
+// how the client exited, what it last said, and the hint.
+func (m Model) retryBlocks(lo layout) (msg, detail, note, hint []string) {
+	wrap := lipgloss.NewStyle().Width(max(lo.Inner-2, 1))
+	msg = strings.Split(wrap.Render(m.retry.status), "\n")
+	for i := range msg {
+		msg[i] = strings.TrimRight(msg[i], " ")
+	}
+	block := func(text string) []string {
+		return strings.Split(m.styles.muted.Render(lipgloss.NewStyle().Width(lo.Inner).Render(text)), "\n")
+	}
+	if d := retryDetail(m.retry); d != "" {
+		detail = block(d)
+	}
+	if m.retry.note != "" {
+		// One line only: a client's log line can be long, and the hint
+		// below it matters more than its tail.
+		note = block(truncate("client: "+m.retry.note, lo.Inner))
+	}
+	if m.retry.class != rdp.ClassStartError && m.retry.outcome.MaybeCredentials() {
+		hint = block(retryHint)
+	}
+	return msg, detail, note, hint
+}
 
 // viewRetry renders the overlay in at most room lines. The message is what
 // happened and always stays; how the client exited comes next, since it is
@@ -186,11 +210,7 @@ const retryHint = "If the password may be wrong, press n for a new password."
 // said; the hint repeats a footer key and goes first.
 func (m Model) viewRetry(lo layout, room int) []string {
 	room = max(room, 1)
-	wrap := lipgloss.NewStyle().Width(max(lo.Inner-2, 1))
-	msg := strings.Split(wrap.Render(m.retry.status), "\n")
-	for i := range msg {
-		msg[i] = strings.TrimRight(msg[i], " ")
-	}
+	msg, detail, note, hint := m.retryBlocks(lo)
 	if len(msg) > room {
 		// Cut the message itself rather than let clipLines swap its last
 		// line for a bare "…": at one line that took the ▲ marker and every
@@ -206,34 +226,32 @@ func (m Model) viewRetry(lo layout, room int) []string {
 		}
 		lines = append(lines, prefix+m.styles.primary.Bold(true).Render(ln))
 	}
-	more := func(text string) {
-		block := strings.Split(m.styles.muted.Render(lipgloss.NewStyle().Width(lo.Inner).Render(text)), "\n")
-		if room-len(lines) >= len(block) {
+	for _, block := range [][]string{detail, note, hint} {
+		if len(block) > 0 && room-len(lines) >= len(block) {
 			lines = append(lines, block...)
 		}
 	}
-	if detail := retryDetail(m.retry); detail != "" {
-		more(detail)
-	}
-	if m.retry.note != "" {
-		// One line only: a client's log line can be long, and the hint
-		// below it matters more than its tail.
-		more(truncate("client: "+m.retry.note, lo.Inner))
-	}
-	more(retryHint)
 	return lines
 }
 
 // retryDetail says how long the session lasted and how the client exited,
 // when the client ran at all. A start error has no outcome to report.
 func retryDetail(r retryState) string {
-	if r.class != rdp.ClassShortSession {
+	if r.class != rdp.ClassShortSession && r.class != rdp.ClassFailed {
 		return ""
 	}
 	o := r.outcome
-	d := o.Duration.Round(100 * time.Millisecond)
-	if o.Signaled {
-		return fmt.Sprintf("The client was stopped by signal %d after %s.", o.ExitCode-128, d)
+	d := "after " + o.Duration.Round(100*time.Millisecond).String()
+	switch {
+	case o.Duration < time.Second:
+		// Rounded, the shortest runs read "after 0s", as if the client had
+		// not run at all.
+		d = "within a second"
+	case o.Duration >= time.Minute:
+		d = "after " + o.Duration.Round(time.Second).String()
 	}
-	return fmt.Sprintf("The client exited with status %d after %s.", o.ExitCode, d)
+	if o.Signaled {
+		return fmt.Sprintf("The client was stopped by signal %d %s.", o.ExitCode-128, d)
+	}
+	return fmt.Sprintf("The client exited with status %d %s.", o.ExitCode, d)
 }

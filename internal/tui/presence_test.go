@@ -76,7 +76,7 @@ func TestPresence_ShowsSavedAndNotSaved(t *testing.T) {
 	store := secret.NewMemory()
 	h := newHarness(t, twoProfiles(), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	if err := store.Upsert(h.m.identity(p), mustPassword(t, "pw")); err != nil {
+	if err := store.Upsert(bg, h.m.identity(p), mustPassword(t, "pw")); err != nil {
 		t.Fatal(err)
 	}
 	m, cmd := update(h.m, teaWin(80, 24))
@@ -152,7 +152,7 @@ func savePassword(t *testing.T, m Model, pw string) (Model, tea.Cmd) {
 	m = press(m, "e")
 	m = focusField(t, m, fieldPassword)
 	m = typeInto(m, pw)
-	return update(m, keyMsg("ctrl+s"))
+	return act(m, keyMsg("ctrl+s"))
 }
 
 // A save can put a password where the list had seen none, so what the list
@@ -198,7 +198,7 @@ func TestPresence_ForgetRenameAndDeleteInvalidate(t *testing.T) {
 	store := secret.NewMemory()
 	h := newHarness(t, twoProfiles(), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = store.Upsert(h.m.identity(p), mustPassword(t, "pw"))
+	_ = store.Upsert(bg, h.m.identity(p), mustPassword(t, "pw"))
 	m, cmd := update(h.m, teaWin(80, 24))
 	m, _ = update(m, onlyReply(t, cmd))
 
@@ -206,19 +206,19 @@ func TestPresence_ForgetRenameAndDeleteInvalidate(t *testing.T) {
 	m = press(m, "e")
 	m = focusField(t, m, fieldForget)
 	m = press(m, "space")
-	m, cmd = update(m, keyMsg("ctrl+s"))
+	m, cmd = act(m, keyMsg("ctrl+s"))
 	m, _ = update(m, onlyReply(t, cmd))
 	if out := screen(m); !strings.Contains(out, "asks when connecting") {
 		t.Fatalf("after forget:\n%s", out)
 	}
 
 	// Rename: a new identity, which is not known yet.
-	_ = store.Upsert(m.identity(p), mustPassword(t, "pw"))
+	_ = store.Upsert(bg, m.identity(p), mustPassword(t, "pw"))
 	m = press(m, "e")
 	m = focusField(t, m, fieldName)
 	m = press(m, "ctrl+u")
 	m = typeInto(m, "renamed")
-	m, cmd = update(m, keyMsg("ctrl+s"))
+	m, cmd = act(m, keyMsg("ctrl+s"))
 	if name := selectedName(t, m); name != "renamed" {
 		t.Fatalf("selected %q after rename", name)
 	}
@@ -254,5 +254,51 @@ func TestPresence_CompactDoesNotCheck(t *testing.T) {
 	_, cmd := update(h.m, teaWin(50, 20))
 	if cmd != nil {
 		t.Fatal("compact layout scheduled a check it has nowhere to show")
+	}
+}
+
+// recoveringStore is a keyring that cannot answer presence checks until it
+// is told it has recovered.
+type recoveringStore struct {
+	*secret.Memory
+	down bool
+}
+
+func (r *recoveringStore) Presence(ctx context.Context, id secret.Identity) (secret.Presence, error) {
+	if r.down {
+		return secret.NotSaved, fmt.Errorf("%w: stalled", secret.ErrUnavailable)
+	}
+	return r.Memory.Presence(ctx, id)
+}
+
+// "keyring unavailable" is not the last word on a profile: once it has stood
+// for a while, the next update asks again, and a keyring that has recovered
+// says what it holds. It used to stand until something else cleared it.
+func TestPresence_UnavailableIsAskedAgain(t *testing.T) {
+	store := &recoveringStore{Memory: secret.NewMemory(), down: true}
+	h := newHarness(t, twoProfiles(), store)
+	p, _ := h.m.app.Cfg.Profile("work")
+	if err := store.Memory.Upsert(bg, h.m.identity(p), mustPassword(t, "pw")); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1000, 0)
+	h.m.now = func() time.Time { return now }
+	m, cmd := update(h.m, teaWin(80, 24))
+	m, _ = update(m, onlyReply(t, cmd))
+	if !strings.Contains(screen(m), "keyring unavailable") {
+		t.Fatalf("setup: want keyring unavailable:\n%s", screen(m))
+	}
+	store.down = false
+	// Soon after, the answer stands: a keyring that is down is not asked
+	// on every keypress.
+	now = now.Add(time.Second)
+	if _, cmd := update(m, teaWin(80, 24)); len(presenceReplies(cmd)) != 0 {
+		t.Fatal("asked again at once")
+	}
+	now = now.Add(presenceRetryAfter)
+	m, cmd = update(m, teaWin(80, 24))
+	m, _ = update(m, onlyReply(t, cmd))
+	if out := screen(m); !strings.Contains(out, "saved in keyring") {
+		t.Fatalf("a recovered keyring is still drawn as unavailable:\n%s", out)
 	}
 }

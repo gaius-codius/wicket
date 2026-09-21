@@ -25,6 +25,12 @@ Commands:
 Options:
   -h, --help          Show this help
   -v, --version       Show the version
+
+Environment:
+  WICKET_CONFIG       Config file path
+  WICKET_STATE        State file path
+  WICKET_THEME        TUI theme: auto, wicket, wicket-dark, wicket-light,
+                      omarchy or terminal (overrides [ui] theme)
 `
 
 // version is set at build time with -ldflags "-X main.version=0.1.0". A build
@@ -58,6 +64,9 @@ func startTUI() error {
 	return tui.Run(tui.Options{
 		Store:    secret.NewDBus(),
 		Launcher: &rdp.Launcher{Stdout: os.Stdout, Stderr: os.Stderr},
+		// The TUI asks the terminal for its background colour only when
+		// there is a terminal to answer.
+		StdoutIsTerminal: func() bool { return isTerminal(int(os.Stdout.Fd())) },
 	})
 }
 

@@ -38,5 +38,10 @@ func Sandbox(m *testing.M) int {
 			panic(fmt.Sprintf("sandbox %s: %v", k, err))
 		}
 	}
+	// A theme picked in the developer's shell would change what the TUI
+	// tests render.
+	if err := os.Unsetenv("WICKET_THEME"); err != nil {
+		panic(fmt.Sprintf("sandbox WICKET_THEME: %v", err))
+	}
 	return m.Run()
 }

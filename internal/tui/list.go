@@ -158,7 +158,7 @@ func (m Model) row(p config.Profile, selected bool, nameW, hostW, width int) str
 		return padRight("  "+m.styles.primary.Render(name)+"  "+m.styles.muted.Render(host), width)
 	}
 	st := m.styles
-	text := st.onSelection(st.accent).Render("▌ ") +
+	text := st.selectionMark().Render("▌ ") +
 		st.onSelection(st.primary.Bold(true)).Render(name) +
 		st.onSelection(st.primary).Render("  ") +
 		st.onSelection(st.muted).Render(host)

@@ -18,6 +18,7 @@ type Palette struct {
 	Secondary color.Color
 	Muted     color.Color
 	Accent    color.Color
+	Brand     color.Color
 	Success   color.Color
 	Danger    color.Color
 	Warning   color.Color
@@ -46,39 +47,53 @@ type fileColors struct {
 	Selection       string `toml:"selection"`
 }
 
-func darkFallback() map[string]string {
+// wicketDark and wicketLight are Verdigris, Wicket's own theme. They are
+// what Wicket paints with when no Omarchy theme applies, and they fill any
+// role an Omarchy file leaves out or gets wrong.
+//
+// The text roles (primary, muted and the status colours) clear
+// minTextContrast against the common terminal backgrounds of their mode, not
+// only against their own surface: Wicket never paints the surface, so the
+// terminal's background is what the text actually sits on.
+func wicketDark() map[string]string {
 	return map[string]string{
-		"surface":   "#1B1D27",
-		"border":    "#3A3D4A",
-		"primary":   "#EDE6DA",
-		"secondary": "#8A8494",
-		"muted":     "#8A8494",
-		"accent":    "#6FA3D8",
-		"success":   "#7FB069",
-		"danger":    "#D45D5D",
-		"warning":   "#D4A017",
-		"selection": "#2C3144",
+		"surface":   "#161C1B",
+		"border":    "#3C4A48", // decorative only
+		"primary":   "#E4E7E1",
+		"secondary": "#9AA5A0",
+		"muted":     "#9AA5A0",
+		"accent":    "#5EC4AE",
+		"brand":     "#D9956A",
+		"success":   "#8CC47A",
+		"danger":    "#EE7B6E",
+		"warning":   "#E3B45A",
+		"selection": "#1F3833",
 	}
 }
 
-func lightFallback() map[string]string {
+func wicketLight() map[string]string {
 	return map[string]string{
-		"surface":   "#F4F1EA",
-		"border":    "#C9C2B6",
-		"primary":   "#2A2A32",
-		"secondary": "#6E6878",
-		"muted":     "#6E6878",
-		"accent":    "#3D6FA8",
-		"success":   "#3F7A3A",
-		"danger":    "#B04040",
-		"warning":   "#A07A10",
-		"selection": "#D9E2F2",
+		"surface":   "#F7F8F6",
+		"border":    "#BCC7C3", // decorative only
+		"primary":   "#1E2624",
+		"secondary": "#56625E",
+		"muted":     "#56625E",
+		"accent":    "#0F7564",
+		"brand":     "#A0532A",
+		"success":   "#336B27",
+		"danger":    "#B3362B",
+		"warning":   "#8A5D00",
+		"selection": "#D6ECE6",
 	}
 }
+
+// WicketDark and WicketLight return Verdigris as a Palette.
+func WicketDark() Palette  { return paletteFromHex(wicketDark()) }
+func WicketLight() Palette { return paletteFromHex(wicketLight()) }
 
 // Load is total: a broken theme never fails the TUI.
 func Load(home string) (Palette, Report) {
-	fb := darkFallback()
+	fb := wicketDark()
 	path := filepath.Join(home, ".local", "state", "omarchy", "current", "theme", "colors.toml")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -93,7 +108,7 @@ func Load(home string) (Palette, Report) {
 		return paletteFromHex(fb), Report{InvalidTOML: true, FallbackRoles: allRoles()}
 	}
 	if modeIsLight(raw) {
-		fb = lightFallback()
+		fb = wicketLight()
 	}
 	var fc fileColors
 	if _, err := toml.Decode(string(data), &fc); err != nil {
@@ -128,6 +143,10 @@ func Load(home string) (Palette, Report) {
 	hex["muted"] = text
 	hex["secondary"] = text
 	put("accent", fc.Accent)
+	// An Omarchy theme has no token meant for a logo, and borrowing one of
+	// the ANSI colours would clash with some themes. Accent is the theme's
+	// own highlight, so the header mark matches the rest of the chrome.
+	hex["brand"] = hex["accent"]
 	put("success", fc.Green)
 	put("danger", fc.Red)
 	put("warning", fc.Yellow)
@@ -189,7 +208,7 @@ func luminance(hex string) float64 {
 }
 
 func allRoles() []string {
-	return []string{"surface", "border", "primary", "secondary", "muted", "accent", "success", "danger", "warning", "selection"}
+	return []string{"surface", "border", "primary", "secondary", "muted", "accent", "brand", "success", "danger", "warning", "selection"}
 }
 
 func parseHex(s string) (string, bool) {
@@ -213,6 +232,7 @@ func paletteFromHex(hex map[string]string) Palette {
 	p.Secondary = mustRGBA(hex["secondary"])
 	p.Muted = mustRGBA(hex["muted"])
 	p.Accent = mustRGBA(hex["accent"])
+	p.Brand = mustRGBA(hex["brand"])
 	p.Success = mustRGBA(hex["success"])
 	p.Danger = mustRGBA(hex["danger"])
 	p.Warning = mustRGBA(hex["warning"])

@@ -48,6 +48,7 @@ wicket --version       # or -v, or: wicket version
 
 - Config: `WICKET_CONFIG`, else `$XDG_CONFIG_HOME/wicket/config.toml`, else `~/.config/wicket/config.toml`
 - Last-used timestamps: `WICKET_STATE`, else `$XDG_STATE_HOME/wicket/state.toml`, else `~/.local/state/wicket/state.toml`
+- Theme: `WICKET_THEME`, else `theme` under `[ui]` in `config.toml`, else `auto` (see [Theme](#theme))
 
 Passwords are never stored in TOML. They live in libsecret (Secret Service / `org.freedesktop.secrets`).
 
@@ -65,11 +66,38 @@ host or a name would otherwise reach the terminal and the FreeRDP command line.
 
 ## Theme
 
-At start, Wicket reads `$HOME/.local/state/omarchy/current/theme/colors.toml` and maps Omarchy tokens onto its chrome. A missing or broken theme file falls back per role and does not block the TUI.
+Wicket's own theme is Verdigris, a quiet green-grey with a copper mark, in a
+dark and a light variant. Pick a theme in `config.toml`:
 
-Text is held to the WCAG AA contrast ratio against the theme's own background.
-A theme whose foreground would be unreadable there is overridden, so the UI is
-legible on every installed theme rather than only on most of them.
+```toml
+[ui]
+theme = "auto"
+```
+
+or for one run with `WICKET_THEME=wicket-light wicket`. A non-empty
+`WICKET_THEME` wins over `[ui] theme`, and with neither set the theme is `auto`.
+
+| Value | What you get |
+|-------|--------------|
+| `auto` | The Omarchy theme when `~/.local/state/omarchy/current/theme/colors.toml` is readable, otherwise Verdigris in your terminal's light or dark |
+| `wicket` | Verdigris, light or dark to match the terminal, ignoring Omarchy |
+| `wicket-dark`, `wicket-light` | That Verdigris variant, whatever the terminal |
+| `omarchy` | The Omarchy theme; without a readable theme file, terminal colours and a warning |
+| `terminal` | Your terminal's own ANSI colours, with the selected row in reverse video |
+
+To match the terminal, Wicket asks it for its background colour when the TUI
+starts, without waiting for the answer. Until one arrives, or if the terminal
+never replies, Wicket draws in terminal colours, which read on any background.
+`wicket connect` never asks.
+
+An unknown value is treated as `auto` and reported on the status line; a bad
+setting never stops Wicket from starting.
+
+Text is held to the WCAG AA contrast ratio. For an Omarchy theme that is
+checked against the theme's own background and, once the terminal has said
+what its background really is, against that too, so the UI stays legible even
+when the terminal is not using the theme. A missing or broken role in an
+Omarchy theme falls back to Verdigris.
 
 ## Keys (list)
 

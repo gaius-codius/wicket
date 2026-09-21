@@ -63,6 +63,14 @@ type Model struct {
 	useOnce     *secret.Password
 	useOnceName string
 	connecting  bool
+
+	// theme is the start-up theme decision and look what is drawn now; a
+	// background colour reply from the terminal can replace look.
+	theme theme.Setup
+	look  theme.Look
+	// queryBackground is set when Init asks the terminal for its
+	// background, and gates the reply.
+	queryBackground bool
 }
 
 type Options struct {
@@ -74,6 +82,12 @@ type Options struct {
 	Term       TerminalController
 	Width      int
 	Height     int
+	// Getenv reads WICKET_THEME; nil means os.Getenv.
+	Getenv func(string) string
+	// StdoutIsTerminal reports whether the output is a terminal that can be
+	// asked for its background colour. nil means it cannot, so nothing is
+	// asked unless the caller knows better.
+	StdoutIsTerminal func() bool
 }
 
 func New(opt Options) Model {
@@ -87,9 +101,7 @@ func New(opt Options) Model {
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	pal, _ := theme.Load(home)
 	m := Model{
-		styles: newStyles(pal),
 		width:  opt.Width,
 		height: opt.Height,
 		app: &App{
@@ -114,6 +126,9 @@ func New(opt Options) Model {
 	if err != nil && opt.ConfigPath == "" {
 		m.view = viewLoadErr
 		m.loadErr = err.Error()
+		if warn := m.chooseTheme(opt, home, nil); warn != "" {
+			m.status = warn
+		}
 		return m
 	}
 	cfg, err := config.OpenOrCreate(cfgPath)
@@ -121,6 +136,9 @@ func New(opt Options) Model {
 		m.view = viewLoadErr
 		m.loadPath = cfgPath
 		m.loadErr = err.Error()
+		if warn := m.chooseTheme(opt, home, nil); warn != "" {
+			m.status = warn
+		}
 		return m
 	}
 	st, _ := config.OpenState(stPath, nil)
@@ -130,16 +148,23 @@ func New(opt Options) Model {
 	if warns := cfg.Warnings(); len(warns) > 0 {
 		m.status = strings.Join(warns, "; ")
 	}
+	if warn := m.chooseTheme(opt, home, cfg); warn != "" {
+		// A theme setting that cannot be honoured does not stop Wicket,
+		// which still runs, in colours the user did not ask for.
+		m.status = strings.TrimPrefix(m.status+"; "+warn, "; ")
+	}
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd { return m.initTheme() }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
+	case tea.BackgroundColorMsg:
+		return m.handleBackground(msg)
 	case connectDoneMsg:
 		return m.handleConnectDone(msg)
 	case tea.KeyPressMsg:

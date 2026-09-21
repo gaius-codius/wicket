@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -278,10 +279,28 @@ func TestList_PanelCappedAndCentered(t *testing.T) {
 }
 
 func TestList_SelectedRowUsesSelectionBackground(t *testing.T) {
+	t.Setenv("WICKET_THEME", "wicket-dark")
 	h := newHarness(t, fixtureTOML("work", "h", "u"), panicStore{})
 	raw := h.m.View().Content
 	if !strings.Contains(raw, "48;") {
 		t.Fatal("selected row should carry a background color")
+	}
+}
+
+// With the background unknown, no colour of Wicket's choosing can be trusted
+// to read on it, so the selected row is reverse video instead.
+func TestList_TerminalModeSelectsWithReverseVideo(t *testing.T) {
+	t.Setenv("WICKET_THEME", "terminal")
+	h := newHarness(t, fixtureTOML("work", "h", "u"), panicStore{})
+	raw := h.m.View().Content
+	if strings.Contains(raw, "48;") {
+		t.Fatalf("terminal mode must not paint a background:\n%q", raw)
+	}
+	if !regexp.MustCompile(`\x1b\[(?:[0-9;]*;)?7(?:;[0-9;]*)?m[^\x1b]*work`).MatchString(raw) {
+		t.Fatalf("selected row should be reverse video:\n%q", raw)
+	}
+	if strings.Contains(raw, "38;2;") {
+		t.Fatalf("terminal mode must not use RGB colours:\n%q", raw)
 	}
 }
 

@@ -122,6 +122,11 @@ func spawnHelper() {
 	// The helper shares the client's output, as a real one would, so it
 	// can hold the pipe open after the client has gone.
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	// FAKERDP_SPAWN_DETACHED puts the helper in a process group of its own,
+	// out of reach of anything aimed at the client's group.
+	if os.Getenv("FAKERDP_SPAWN_DETACHED") != "" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	if err := cmd.Start(); err != nil {
 		os.Exit(3)
 	}

@@ -172,15 +172,27 @@ func (m Model) viewListWide(lo layout, ps []config.Profile, vis []int, sel confi
 // TUI, so the wide pane teaches the CLI in passing.
 const shellLabel = "from a shell"
 
+// shellPlaceholder stands in for a command too long to show whole.
+const shellPlaceholder = "wicket connect <profile>"
+
 // shellLine renders "from a shell  wicket connect <name>" in width cells, or
-// nothing when a command cut to a few letters would say nothing.
+// nothing when not even the placeholder fits.
+//
+// The command is never cut. A cut one either leaves a quote open, so a paste
+// sits at the shell's continuation prompt, or quotes a prefix of the name, so
+// a paste connects to some other argument. When the whole command does not
+// fit, the placeholder still teaches the form, the name is on the card above
+// it, and a paste of it is a syntax error that runs nothing.
 func (m Model) shellLine(p config.Profile, width int) string {
 	room := width - lipgloss.Width(shellLabel) - 2
-	if room < len("wicket connect")+2 {
+	cmd := "wicket connect " + shellQuote(p.Name)
+	if lipgloss.Width(cmd) > room {
+		cmd = shellPlaceholder
+	}
+	if lipgloss.Width(cmd) > room {
 		return ""
 	}
-	return m.styles.muted.Render(shellLabel) + "  " +
-		m.styles.primary.Render(truncate("wicket connect "+shellQuote(p.Name), room))
+	return m.styles.muted.Render(shellLabel) + "  " + m.styles.primary.Render(cmd)
 }
 
 // shellQuote quotes s for a POSIX shell when it holds anything a shell would

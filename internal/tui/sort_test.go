@@ -423,3 +423,33 @@ func TestList_LastUsedPollResumesOnReturn(t *testing.T) {
 		t.Fatal("poll not restarted on return to the list")
 	}
 }
+
+// A command cut to fit could leave a quote open, so a paste waits at the
+// shell's continuation prompt, or quote a prefix of the name, so it connects
+// to something else. At every width the line is the whole command, the
+// placeholder, or nothing.
+func TestList_ShellLineIsNeverCut(t *testing.T) {
+	h := newHarness(t, profilesTOML("it's a box"), panicStore{})
+	p := h.m.profiles()[0]
+	full := `wicket connect 'it'\''s a box'`
+	prefix := shellLabel + "  "
+	var sawFull, sawPlaceholder bool
+	for w := 0; w <= len(prefix)+len(full)+2; w++ {
+		got := stripANSI(h.m.shellLine(p, w))
+		switch got {
+		case "":
+		case prefix + full:
+			sawFull = true
+		case prefix + shellPlaceholder:
+			sawPlaceholder = true
+		default:
+			t.Errorf("width %d: %q is a cut command", w, got)
+		}
+		if lipgloss.Width(got) > w {
+			t.Errorf("width %d: %q overflows", w, got)
+		}
+	}
+	if !sawFull || !sawPlaceholder {
+		t.Fatalf("full shown %v, placeholder shown %v", sawFull, sawPlaceholder)
+	}
+}

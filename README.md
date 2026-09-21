@@ -121,9 +121,10 @@ first, with profiles never used at the end in file order, and the header says
 `recent first` while it is on; the selection stays on the same profile. A
 filter underlines the part of the name or host it matched. The selected
 profile's details say whether a password is saved in the keyring (`● saved in
-keyring`, `asks when connecting`, or `keyring unavailable`); Wicket finds out
-from the keyring's metadata alone, so this never unlocks the keyring or asks
-for anything. In a wide terminal the details also show the `wicket connect`
+keyring`, `asks when connecting`, or `keyring unavailable`), and `checking…`
+while Wicket is still asking; a keyring that has not answered within two
+seconds counts as unavailable. Wicket finds out from the keyring's metadata
+alone, so this never unlocks the keyring or asks for anything. In a wide terminal the details also show the `wicket connect`
 command for the profile, quoted for the shell where it needs to be.
 
 The form groups its fields under CONNECTION (name, host, user, domain),
@@ -173,7 +174,8 @@ colour.
 `Enter` starts FreeRDP and Wicket stays on screen while the session runs:
 `● Connected to <name>`, the user and host, when it opened and how long it has
 been open. The session itself is in FreeRDP's own window; Wicket comes back to
-the list when that window closes. Whatever FreeRDP logs is kept (the last
+the list when that window closes, and anything FreeRDP left running in its
+process group is stopped then too. Whatever FreeRDP logs is kept (the last
 64 KiB) rather than written over the TUI.
 
 While a session runs the only key is `Ctrl+C`, which stops it: the first sends
@@ -183,8 +185,9 @@ press `Ctrl+C` again, it is asked to terminate, and after that it is killed.
 Anything FreeRDP started goes with it. Ending Wicket another way while a
 session runs, such as closing the terminal or sending it SIGTERM, stops the
 session the same way before Wicket exits; only a SIGKILL, which no program can
-act on, would leave FreeRDP running. `wicket connect` is unchanged: it waits
-for FreeRDP in the foreground and passes Ctrl+C on to it.
+act on, would leave FreeRDP running. `wicket connect` waits for FreeRDP in the
+foreground and passes Ctrl+C on to it, and it too stops whatever FreeRDP left
+in its process group once FreeRDP exits.
 
 When a session ends within a few seconds, Wicket shows how the client exited
 and the last error FreeRDP logged, and offers `Enter` to retry or `n` to type

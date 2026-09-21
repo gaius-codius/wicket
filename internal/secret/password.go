@@ -77,6 +77,22 @@ func (p Password) Empty() bool { return p.v == "" }
 // OccursIn reports whether the password appears in s, so text from outside
 // Wicket -- a client's log, say -- can be kept off the screen if it repeats
 // the password. An empty password occurs nowhere.
-func (p Password) OccursIn(s string) bool {
-	return p.v != "" && strings.Contains(s, p.v)
+//
+// Text is often cleaned before it is shown, and cleaning can turn a password
+// into something else: stripping escape sequences leaves "abcdef" of
+// "abc\x1b[31mdef". Each of forms is such a cleaning, and the password as it
+// would leave it is looked for too, unless that is empty.
+func (p Password) OccursIn(s string, forms ...func(string) string) bool {
+	if p.v == "" {
+		return false
+	}
+	if strings.Contains(s, p.v) {
+		return true
+	}
+	for _, form := range forms {
+		if f := form(p.v); f != "" && strings.Contains(s, f) {
+			return true
+		}
+	}
+	return false
 }

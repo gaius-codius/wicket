@@ -323,3 +323,24 @@ func TestRetry_MessageSurvivesShortTerminals(t *testing.T) {
 		}
 	}
 }
+
+// A status that wraps, in a panel with one line to spare for it, is cut to
+// that line rather than replaced by a bare "…": the ▲ marker and the start of
+// the status are what tell the user the session failed.
+func TestRetry_WrappedMessageSurvivesTinyHeights(t *testing.T) {
+	m := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory()).m
+	p, _ := m.app.Cfg.Profile("work")
+	m.view = viewRetry
+	m.retry = retryState{profile: p, class: rdp.ClassShortSession,
+		status: "session ended quickly: the client could not reach the host"}
+	for h := heightTiny; h <= 8; h++ {
+		nm, _ := m.Update(teaWin(20, h))
+		out := stripANSI(nm.(Model).render())
+		if !strings.Contains(out, "▲ session") {
+			t.Errorf("20x%d lost the warning:\n%s", h, out)
+		}
+		if w, gotH := measure(out); gotH > h || w > 20 {
+			t.Errorf("20x%d rendered %dx%d", h, w, gotH)
+		}
+	}
+}

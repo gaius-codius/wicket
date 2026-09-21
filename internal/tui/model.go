@@ -208,6 +208,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleBackground(msg)
 	case sessionEndedMsg:
 		return m.handleSessionEnded(msg)
+	case sessionRecordedMsg:
+		return m.handleSessionRecorded(msg)
 	case sessionTickMsg:
 		return m.handleSessionTick(msg)
 	case sessionEscalateMsg:

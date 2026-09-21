@@ -91,8 +91,9 @@ func press(m Model, keys ...string) Model {
 }
 
 // settle runs cmd the way Bubble Tea would and feeds the model the end of
-// the session it started. Ticks and other replies are dropped, as press has
-// always dropped them.
+// the session it started, after the last-used time it recorded as it began,
+// the order they arrive in unless another Wicket holds the state lock. Ticks
+// and other replies are dropped, as press has always dropped them.
 func settle(m Model, cmd tea.Cmd) Model {
 	msgs := make(chan tea.Msg, 64)
 	stop := make(chan struct{})
@@ -118,10 +119,24 @@ func settle(m Model, cmd tea.Cmd) Model {
 	}
 	run(cmd)
 	timeout := time.After(10 * time.Second)
+	var ended tea.Msg
 	for m.session != nil {
 		select {
 		case msg := <-msgs:
-			if _, ok := msg.(sessionEndedMsg); !ok {
+			switch msg.(type) {
+			case sessionRecordedMsg:
+				nm, _ := m.Update(msg)
+				m = nm.(Model)
+				if ended == nil {
+					continue
+				}
+				msg = ended
+			case sessionEndedMsg:
+				if !m.session.recorded {
+					ended = msg
+					continue
+				}
+			default:
 				continue
 			}
 			nm, next := m.Update(msg)

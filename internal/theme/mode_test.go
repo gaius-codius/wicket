@@ -147,19 +147,25 @@ background = "#101010"
 foreground = "#F0F0F0"
 muted = "#A0A0A0"
 accent = "#ABCDEF"
+green = "#B0F0B0"
+yellow = "#F0F0A0"
+red = "#F0B0B0"
+selection = "#202020"
 `)
 	s := Choose(ModeAuto, home)
 	got := s.Adapt(color.RGBA{0xFF, 0xFF, 0xFF, 0xFF})
 	if got.Kind != KindOmarchy {
 		t.Fatalf("kind %d, want Omarchy", got.Kind)
 	}
-	for _, role := range []string{"primary", "secondary", "muted"} {
+	for _, role := range []string{"primary", "secondary", "muted", "success", "warning", "danger"} {
 		if c := contrast(got.Palette.Hex[role], "#FFFFFF"); c < minTextContrast {
 			t.Errorf("%s %s on white: contrast %.2f", role, got.Palette.Hex[role], c)
 		}
 	}
-	if got.Palette.Hex["accent"] != "#ABCDEF" {
-		t.Errorf("accent rewritten to %s", got.Palette.Hex["accent"])
+	for role, want := range map[string]string{"accent": "#ABCDEF", "brand": "#ABCDEF", "border": "#A0A0A0", "selection": "#202020"} {
+		if got.Palette.Hex[role] != want {
+			t.Errorf("%s rewritten to %s, want %s", role, got.Palette.Hex[role], want)
+		}
 	}
 }
 

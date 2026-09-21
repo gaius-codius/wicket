@@ -54,14 +54,15 @@ func (m Model) connectProfile(p config.Profile, typed *secret.Password) (tea.Mod
 }
 
 // runConnect starts the client and puts the session view up while it runs.
-// Wicket keeps the terminal throughout: see session.go.
+// Wicket keeps the terminal throughout: see session.go. Starting returns as
+// soon as the client is running; recording the last-used time waits on a
+// lock another Wicket may hold, so it happens off the update loop, where it
+// cannot keep the session from being drawn or stopped.
 func (m Model) runConnect(p config.Profile, cred rdp.Credential, keepUseOnce bool, extra string) (tea.Model, tea.Cmd) {
 	s, err := m.app.Start(p, cred)
 	if err != nil {
 		return m.applyConnect(p, cred, keepUseOnce, extra, startFailed(err))
 	}
-	// A client that started has changed the last-used time.
-	m.refreshUsed()
 	m.sessionSeq++
 	held, _ := cred.(secret.Password)
 	m.session = &sessionState{
@@ -70,7 +71,8 @@ func (m Model) runConnect(p config.Profile, cred rdp.Credential, keepUseOnce boo
 	}
 	m.view = viewSession
 	m.setStatus("", statusInfo)
-	return m, tea.Batch(waitSession(m.app, m.session.id, s), sessionTick(m.session.id))
+	id := m.session.id
+	return m, tea.Batch(waitSession(m.app, id, s), sessionTick(id), recordUse(m.app, id, p.Name))
 }
 
 func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce bool, extra string, cr ConnectResult) (tea.Model, tea.Cmd) {
@@ -186,15 +188,24 @@ func (m Model) viewRetry(lo layout, room int) []string {
 	room = max(room, 1)
 	wrap := lipgloss.NewStyle().Width(max(lo.Inner-2, 1))
 	msg := strings.Split(wrap.Render(m.retry.status), "\n")
+	for i := range msg {
+		msg[i] = strings.TrimRight(msg[i], " ")
+	}
+	if len(msg) > room {
+		// Cut the message itself rather than let clipLines swap its last
+		// line for a bare "…": at one line that took the ▲ marker and every
+		// word of the status with it.
+		rest := strings.Join(msg[room-1:], " ")
+		msg = append(msg[:room-1], truncate(rest, max(lo.Inner-2, 1)))
+	}
 	lines := make([]string, 0, room)
 	for i, ln := range msg {
 		prefix := "  "
 		if i == 0 {
 			prefix = m.styles.warning.Render("▲ ")
 		}
-		lines = append(lines, prefix+m.styles.primary.Bold(true).Render(strings.TrimRight(ln, " ")))
+		lines = append(lines, prefix+m.styles.primary.Bold(true).Render(ln))
 	}
-	lines = clipLines(lines, room)
 	more := func(text string) {
 		block := strings.Split(m.styles.muted.Render(lipgloss.NewStyle().Width(lo.Inner).Render(text)), "\n")
 		if room-len(lines) >= len(block) {

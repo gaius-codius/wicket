@@ -69,26 +69,57 @@ func TestList_CompactShowsNameAndHost(t *testing.T) {
 	}
 }
 
+// At compact width an unselected row is its name and nothing else: no host,
+// no user and no last-used time, even when it has one to show (UX-001).
 func TestList_UnselectedStayCompact(t *testing.T) {
-	body := fixtureTOML("work", "h1", "u1") + `
+	body := `
+[general]
+[[profiles]]
+name = "work"
+host = "host-work"
+user = "user-work"
 [[profiles]]
 name = "lab"
-host = "h2"
-user = "u2"
+host = "host-lab"
+user = "user-lab"
+[[profiles]]
+name = "home"
+host = "host-home"
+user = "user-home"
 `
 	h := newHarness(t, body, panicStore{})
-	out := screen(h.m)
-	if !strings.Contains(out, "lab") {
-		t.Fatal(out)
-	}
-	if strings.Count(out, "h2") != 0 && strings.Contains(out, "last-used") && strings.Contains(out, "h2") {
-		// unselected lab must not show host details
-		lines := strings.Split(out, "\n")
-		for _, ln := range lines {
-			if strings.Contains(ln, "lab") && strings.Contains(ln, "h2") && strings.Contains(ln, "last-used") {
-				t.Fatalf("unselected expanded:\n%s", out)
-			}
+	for _, n := range []string{"work", "lab", "home"} {
+		if err := h.m.app.State.Record(n); err != nil {
+			t.Fatal(err)
 		}
+	}
+	h.m.refreshUsed()
+	nm, _ := h.m.Update(teaWin(50, 20))
+	h.m = nm.(Model)
+	if lo := h.m.panelLayout(); !lo.Compact || lo.Tiny {
+		t.Fatalf("setup: 50 columns is not the compact layout: %+v", lo)
+	}
+	out := screen(h.m)
+	sel, _ := h.m.selected()
+	if !strings.Contains(lineWith(out, "▌ "+sel.Name), "just now") {
+		t.Fatalf("setup: the selected row should show its last-used time:\n%s", out)
+	}
+	rows := 0
+	for _, n := range []string{"work", "lab", "home"} {
+		if n == sel.Name {
+			continue
+		}
+		ln := lineWith(out, " "+n)
+		if ln == "" {
+			t.Fatalf("row %q not drawn:\n%s", n, out)
+		}
+		rows++
+		if got := strings.Trim(ln, "│ "); got != n {
+			t.Errorf("compact unselected row %q shows more than its name: %q\n%s", n, got, out)
+		}
+	}
+	if rows != 2 {
+		t.Fatalf("checked %d unselected rows, want 2", rows)
 	}
 }
 

@@ -335,6 +335,43 @@ func TestSession_EchoedPasswordNeverDrawn(t *testing.T) {
 	assertNoSentinel(t, h.stdout.Bytes(), "terminal")
 }
 
+// A password with an escape sequence in it is not drawn once the sequence
+// has been stripped from the line that echoed it: the check against the
+// cleaned line used to look for the password as stored, which cleaning had
+// already changed.
+func TestSession_EchoedEscapedPasswordNeverDrawn(t *testing.T) {
+	_ = withFakeRDP(t)
+	t.Setenv("FAKERDP_ECHO_STDIN", "1")
+	escaped := sentinel[:3] + "\x1b[31m" + sentinel[3:]
+	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	p, _ := h.m.app.Cfg.Profile("work")
+	if err := h.store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, escaped)); err != nil {
+		t.Fatal(err)
+	}
+	nm, cmd := h.m.Update(keyMsg("enter"))
+	m := settle(nm.(Model), cmd)
+	if m.view != viewRetry {
+		t.Fatalf("view %v", m.view)
+	}
+	assertNoSentinel(t, []byte(stripANSI(m.View().Content)), "screen")
+	assertNoSentinel(t, []byte(m.retry.note), "retry note")
+}
+
+// clientNote drops a line that carries the password before or after
+// cleaning, and still finds the client's reason among the lines left.
+func TestClientNote_DropsEveryFormOfThePassword(t *testing.T) {
+	pw := mustPassword(t, "abc\x1b[31mdef")
+	for _, out := range []string{
+		"[ERROR] - ERRCONNECT_X\nechoed abc\x1b[31mdef\n",
+		"[ERROR] - ERRCONNECT_X\nechoed abcdef\n",
+		"[ERROR] - ERRCONNECT_X\n[ERROR] - failed for abc\x1b[31mdef\n",
+	} {
+		if got := clientNote([]byte(out), pw); got != "ERRCONNECT_X" {
+			t.Errorf("clientNote(%q) = %q, want the line without the password", out, got)
+		}
+	}
+}
+
 // Quitting Wicket while a session runs stops the client and its helpers,
 // and nothing the client writes reaches Wicket's output. This runs the real
 // program loop, headless, and delivers a real SIGTERM to the process.
@@ -384,6 +421,93 @@ func TestRun_QuitStopsTheSessionAndKeepsItsOutput(t *testing.T) {
 		t.Fatalf("client output reached Wicket's screen:\n%q", got)
 	}
 	assertNoSentinel(t, []byte(got), "program output")
+}
+
+// Another Wicket holding the state lock cannot freeze a session: recording
+// the last-used time waits for the lock, but drawing the session and
+// stopping it with Ctrl+C do not. The time is recorded once the lock is free.
+// This runs the real program loop, headless: starting used to record the
+// time inside Update, so the loop blocked before the session was drawn or
+// published for StopSession to find.
+func TestRun_SessionRunsWhileTheStateLockIsHeld(t *testing.T) {
+	_ = withFakeRDP(t)
+	pidFile := filepath.Join(t.TempDir(), "client.pid")
+	t.Setenv("FAKERDP_PID", pidFile)
+	t.Setenv("FAKERDP_SIGINT_HOLD", "1")
+	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	p, _ := h.m.app.Cfg.Profile("work")
+	_ = h.store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
+	app := h.m.app
+	t.Cleanup(func() { app.StopSession(time.Second) })
+
+	lock, err := os.OpenFile(app.State.Path()+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	release := func() { once.Do(func() { _ = lock.Close() }) }
+	// Registered after StopSession, so it runs first: a test that fails
+	// with the loop wedged on the lock must not hang there.
+	t.Cleanup(release)
+
+	inR, inW := io.Pipe()
+	t.Cleanup(func() { _ = inW.Close() })
+	var out lockedBuffer
+	done := make(chan error, 1)
+	go func() {
+		done <- runProgram(h.m, tea.WithInput(inR), tea.WithOutput(&out), tea.WithWindowSize(80, 24))
+	}()
+	waitOutput := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !strings.Contains(stripANSI(out.String()), want) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%q never drawn with the state lock held:\n%s", want, stripANSI(out.String()))
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
+	if _, err := inW.Write([]byte("\r")); err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(waitFile(t, pidFile))
+	waitOutput("Connected to work")
+
+	if _, err := inW.Write([]byte{0x03}); err != nil {
+		t.Fatal(err)
+	}
+	waitStopped(t, pid)
+	waitOutput("session stopped")
+	if _, ok := app.State.LastUsed("work"); ok {
+		t.Fatal("last-used written through a lock another process holds")
+	}
+
+	release()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := app.State.LastUsed("work"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("last-used never recorded once the lock was free")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := inW.Write([]byte("q")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Wicket did not quit")
+	}
 }
 
 type lockedBuffer struct {

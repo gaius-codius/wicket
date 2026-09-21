@@ -50,3 +50,34 @@ func TestNewPassword_RejectsOneTooLongToWriteInOneGo(t *testing.T) {
 		t.Fatalf("limit %d is not below the 64 KiB pipe buffer", maxPasswordLen)
 	}
 }
+
+// OccursIn finds the password as a cleaning would leave it, not only as it
+// was stored, and a cleaning that leaves nothing matches nothing.
+func TestPassword_OccursInCleanedForms(t *testing.T) {
+	strip := func(s string) string { return strings.ReplaceAll(s, "\x1b[31m", "") }
+	p, err := NewPassword("abc\x1b[31mdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		s     string
+		forms []func(string) string
+		want  bool
+	}{
+		{"x abc\x1b[31mdef y", nil, true},
+		{"x abcdef y", nil, false},
+		{"x abcdef y", []func(string) string{strip}, true},
+		{"x abc y", []func(string) string{strip}, false},
+	} {
+		if got := p.OccursIn(c.s, c.forms...); got != c.want {
+			t.Errorf("OccursIn(%q, %d forms) = %v, want %v", c.s, len(c.forms), got, c.want)
+		}
+	}
+	all, _ := NewPassword("\x1b[31m")
+	if all.OccursIn("anything", strip) {
+		t.Error("a password its cleaning erases matched everything")
+	}
+	if (Password{}).OccursIn("anything", strip) {
+		t.Error("an empty password occurred")
+	}
+}

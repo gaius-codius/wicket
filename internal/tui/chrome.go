@@ -6,34 +6,75 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// hint is one footer entry: a key and what it does.
+// hint is a key and what it does: a help entry or a detail row.
 type hint struct{ key, label string }
 
-// header renders "WICKET" on the left and a muted context string on the right.
+// intent says how a footer key is drawn. It is set where the key is offered,
+// never guessed from the key text: y deletes in one dialog and merely
+// discards an edit in another.
+type intent int
+
+const (
+	intentNormal intent = iota
+	// intentPrimary marks the key that does what the view is for.
+	intentPrimary
+	// intentDanger marks a key that destroys something that cannot be
+	// brought back.
+	intentDanger
+)
+
+// keyHint is one footer entry.
+type keyHint struct {
+	key, label string
+	intent     intent
+}
+
+// brandMark is the header's name. The mark carries the brand colour, which
+// no other element uses, so the header is recognisable in any theme.
+const brandMark = "◧ wicket"
+
+// header renders the brand on the left and the context on the right.
 func (m Model) header(width int, context string) string {
-	title := m.styles.title.Render(truncate("WICKET", width))
+	title := m.styles.brand.Render(truncate(brandMark, width))
 	titleW := lipgloss.Width(title)
 	if context == "" {
 		return title
 	}
-	right := m.styles.muted.Render(truncate(context, width-titleW-2))
+	right := m.headerContext(context, width-titleW-2)
 	gap := width - titleW - lipgloss.Width(right)
-	if gap < 1 {
+	if right == "" || gap < 1 {
 		// No room for both. The context is the expendable half.
 		return title
 	}
 	return title + strings.Repeat(" ", gap) + right
 }
 
+// headerContext draws the context in room cells.
+func (m Model) headerContext(context string, room int) string {
+	if room <= 0 {
+		return ""
+	}
+	return m.contextStyle().Render(truncate(context, room))
+}
+
 func (m Model) divider(width int) string {
 	return m.styles.divider.Render(strings.Repeat("─", width))
 }
 
+// contextStyle colours the header context: a pending delete says so in the
+// danger colour, since it is the one view whose answer cannot be undone.
+func (m Model) contextStyle() lipgloss.Style {
+	if m.view == viewDelete {
+		return m.styles.danger
+	}
+	return m.styles.muted
+}
+
 // hints renders footer entries as "key label · key label", wrapping between
 // entries so no entry is split across lines.
-func (m Model) hints(width int, hs ...hint) []string {
+func (m Model) hints(width int, hs ...keyHint) []string {
 	width = max(width, 1)
-	sep := m.styles.muted.Render(" · ")
+	sep := m.styles.divider.Render(" · ")
 	sepW := lipgloss.Width(sep)
 	var lines []string
 	var cur string
@@ -47,9 +88,10 @@ func (m Model) hints(width int, hs ...hint) []string {
 			key = truncate(key, width)
 			label = truncate(label, max(width-lipgloss.Width(key)-1, 0))
 		}
-		entry := m.styles.key.Render(key)
+		keyStyle, labelStyle := m.hintStyles(h.intent)
+		entry := keyStyle.Render(key)
 		if label != "" {
-			entry += " " + m.styles.muted.Render(label)
+			entry += " " + labelStyle.Render(label)
 		}
 		w := lipgloss.Width(entry)
 		switch {
@@ -69,16 +111,56 @@ func (m Model) hints(width int, hs ...hint) []string {
 	return lines
 }
 
-// statusLines renders the status message with an error or info marker,
-// wrapped to width.
+// hintStyles returns the key and label styles for a footer entry. The
+// primary and danger labels are in the text colour rather than muted, so the
+// key the view is for reads first.
+func (m Model) hintStyles(in intent) (key, label lipgloss.Style) {
+	switch in {
+	case intentPrimary:
+		return m.styles.accent.Bold(true), m.styles.primary
+	case intentDanger:
+		return m.styles.danger.Bold(true), m.styles.primary
+	default:
+		return m.styles.key, m.styles.muted
+	}
+}
+
+// statusKind is what the status line reports, and picks its marker.
+type statusKind int
+
+const (
+	// statusInfo is a routine note.
+	statusInfo statusKind = iota
+	// statusSuccess reports something that fully happened. It is never
+	// used when any part of the work failed.
+	statusSuccess
+	// statusWarning is a setting or condition worth fixing that did not
+	// stop anything.
+	statusWarning
+	// statusError is something that did not happen.
+	statusError
+)
+
+// statusMark returns the marker and style for a status of kind k.
+func (m Model) statusMark(k statusKind) (string, lipgloss.Style) {
+	switch k {
+	case statusSuccess:
+		return "✓", m.styles.success
+	case statusWarning:
+		return "▲", m.styles.warning
+	case statusError:
+		return "✗", m.styles.danger
+	default:
+		return "•", m.styles.muted
+	}
+}
+
+// statusLines renders the status message with its marker, wrapped to width.
 func (m Model) statusLines(width int) []string {
 	if m.status == "" {
 		return nil
 	}
-	mark, st := "•", m.styles.muted
-	if m.statusErr {
-		mark, st = "✗", m.styles.danger
-	}
+	mark, st := m.statusMark(m.statusKind)
 	wrapped := lipgloss.NewStyle().Width(max(width-2, 1)).Render(m.status)
 	var out []string
 	for i, ln := range strings.Split(wrapped, "\n") {

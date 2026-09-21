@@ -9,8 +9,8 @@ func TestStyles_Chrome(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "h", "u"), panicStore{})
 	raw := h.m.View().Content
 	plain := stripANSI(raw)
-	if !strings.Contains(plain, "WICKET") {
-		t.Fatal("title")
+	if !strings.Contains(plain, "◧ wicket") || strings.Contains(plain, "WICKET") {
+		t.Fatalf("title:\n%s", plain)
 	}
 	if !strings.ContainsAny(raw, "╭╮╯╰┌┐┘└") {
 		t.Fatalf("want rounded/box border in %q", raw)

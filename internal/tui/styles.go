@@ -10,7 +10,6 @@ import (
 
 type styles struct {
 	frame   lipgloss.Style
-	title   lipgloss.Style
 	muted   lipgloss.Style
 	primary lipgloss.Style
 	accent  lipgloss.Style
@@ -84,7 +83,6 @@ func baseStyles(c colours) styles {
 	}
 	return styles{
 		frame:   frame,
-		title:   fg(c.accent).Bold(true),
 		muted:   fg(c.muted),
 		primary: fg(c.text),
 		accent:  fg(c.accent),

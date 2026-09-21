@@ -17,7 +17,7 @@ func TestList_SelectedCardDetailsAndLastUsed(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := screen(h.m)
-	for _, want := range []string{"WICKET", "work", "192.168.1.20", "jdoe", "last used", "just now"} {
+	for _, want := range []string{"◧ wicket", "work", "192.168.1.20", "jdoe", "last used", "just now"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
@@ -314,7 +314,7 @@ func TestList_FitsShortTerminal(t *testing.T) {
 		h := newHarness(t, b.String(), panicStore{})
 		nm, _ := h.m.Update(teaWin(size[0], size[1]))
 		h.m = nm.(Model)
-		h.m.setStatus("session ended", false)
+		h.m.setStatus("session ended", statusInfo)
 		out := screen(h.m)
 		if n := len(strings.Split(out, "\n")); n > size[1] {
 			t.Fatalf("%dx%d: %d lines:\n%s", size[0], size[1], n, out)

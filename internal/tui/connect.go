@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"fmt"
 	"io"
+	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -16,6 +19,8 @@ type retryState struct {
 	useOnce bool
 	status  string
 	class   rdp.Class
+	// outcome is how the client exited, when it started at all.
+	outcome rdp.Outcome
 }
 
 type connectDoneMsg struct {
@@ -57,7 +62,7 @@ func (m Model) beginConnect() (tea.Model, tea.Cmd) {
 
 func (m Model) connectProfile(p config.Profile, typed *secret.Password) (tea.Model, tea.Cmd) {
 	if err := m.app.ProbeClient(p); err != nil {
-		m.setStatus(err.Error(), true)
+		m.setStatus(err.Error(), statusError)
 		m.view = viewList
 		return m, nil
 	}
@@ -97,7 +102,7 @@ func (m Model) handleConnectDone(msg connectDoneMsg) (tea.Model, tea.Cmd) {
 		m.clearUseOnce()
 		m.retry = retryState{}
 		m.view = viewList
-		m.setStatus(msg.execErr.Error(), true)
+		m.setStatus(msg.execErr.Error(), statusError)
 		return m, nil
 	}
 	return m.applyConnect(msg.profile, msg.cred, msg.keepUseOnce, msg.extra, msg.cr)
@@ -138,14 +143,24 @@ func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce b
 		}
 		held, _ := cred.(secret.Password)
 		hp := held
-		m.retry = retryState{profile: p, held: &hp, useOnce: keepUseOnce, status: cr.Status, class: cr.Class}
+		m.retry = retryState{profile: p, held: &hp, useOnce: keepUseOnce, status: cr.Status, class: cr.Class, outcome: cr.Outcome}
 		m.view = viewRetry
-		m.setStatus(warn, warn != "")
+		// The overlay carries the session's own message; only the other
+		// warnings stay on the status line.
+		kind := statusInfo
+		if warn != "" {
+			kind = statusError
+		}
+		m.setStatus(warn, kind)
 	default:
 		m.retry = retryState{}
 		m.view = viewList
 		m.clearUseOnce()
-		m.setStatus(status, cr.IsError || warn != "")
+		kind := statusInfo
+		if cr.IsError || warn != "" {
+			kind = statusError
+		}
+		m.setStatus(status, kind)
 	}
 	return m, nil
 }
@@ -191,11 +206,50 @@ func (m Model) handleRetryKey(key string) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m Model) viewRetry(lo layout) string {
-	_ = lo
-	hint := "If the password may be wrong, press n for a new password."
-	width := newLayout(m.width, m.height).Inner
-	wrap := lipgloss.NewStyle().Width(width)
-	return m.styles.warning.Render("▲ ") + m.styles.primary.Render(m.retry.status) + "\n" +
-		m.styles.muted.Render(wrap.Render(hint))
+// retryHint does not claim the password was wrong: a session also ends
+// early when the host is unreachable or the window is closed.
+const retryHint = "If the password may be wrong, press n for a new password."
+
+// viewRetry renders the overlay in at most room lines. The message is what
+// happened and always stays; how the client exited comes next, since it is
+// a fact the user cannot see anywhere else; the hint repeats a footer key and
+// goes first.
+func (m Model) viewRetry(lo layout, room int) []string {
+	room = max(room, 1)
+	wrap := lipgloss.NewStyle().Width(max(lo.Inner-2, 1))
+	msg := strings.Split(wrap.Render(m.retry.status), "\n")
+	lines := make([]string, 0, room)
+	for i, ln := range msg {
+		prefix := "  "
+		if i == 0 {
+			prefix = m.styles.warning.Render("▲ ")
+		}
+		lines = append(lines, prefix+m.styles.primary.Bold(true).Render(strings.TrimRight(ln, " ")))
+	}
+	lines = clipLines(lines, room)
+	more := func(text string) {
+		block := strings.Split(m.styles.muted.Render(lipgloss.NewStyle().Width(lo.Inner).Render(text)), "\n")
+		if room-len(lines) >= len(block) {
+			lines = append(lines, block...)
+		}
+	}
+	if detail := retryDetail(m.retry); detail != "" {
+		more(detail)
+	}
+	more(retryHint)
+	return lines
+}
+
+// retryDetail says how long the session lasted and how the client exited,
+// when the client ran at all. A start error has no outcome to report.
+func retryDetail(r retryState) string {
+	if r.class != rdp.ClassShortSession {
+		return ""
+	}
+	o := r.outcome
+	d := o.Duration.Round(100 * time.Millisecond)
+	if o.Signaled {
+		return fmt.Sprintf("The client was stopped by signal %d after %s.", o.ExitCode-128, d)
+	}
+	return fmt.Sprintf("The client exited with status %d after %s.", o.ExitCode, d)
 }

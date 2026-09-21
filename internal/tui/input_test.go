@@ -45,18 +45,20 @@ func TestPaste_DropsOneLineEndAndRejectsTheRest(t *testing.T) {
 // usable again, nor discard a warning it did not raise.
 func TestFilter_RejectedPasteErrorClearsAndRestores(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "host.invalid", "u"), secret.NewMemory())
-	h.m.setStatus("saved, but the password could not be stored", false)
+	h.m.setStatus("saved, but the password could not be stored", statusWarning)
 
 	h.m = press(h.m, "/")
 	nm, _ := h.m.Update(tea.PasteMsg{Content: "a\nb"})
 	h.m = nm.(Model)
-	if !h.m.statusErr || !strings.Contains(h.m.status, "line break") {
-		t.Fatalf("status = %q errored=%v, want the paste rejection", h.m.status, h.m.statusErr)
+	if h.m.statusKind != statusError || !strings.Contains(h.m.status, "line break") {
+		t.Fatalf("status = %q kind=%v, want the paste rejection", h.m.status, h.m.statusKind)
 	}
 
 	h.m = typeInto(h.m, "work")
-	if h.m.statusErr {
-		t.Fatalf("status still errored after a valid edit: %q", h.m.status)
+	// The warning comes back as a warning: restoring it as a routine note
+	// would hide that something still needs fixing.
+	if h.m.statusKind != statusWarning {
+		t.Fatalf("status kind %v after a valid edit, want the warning back: %q", h.m.statusKind, h.m.status)
 	}
 	if h.m.status != "saved, but the password could not be stored" {
 		t.Fatalf("status = %q, want the earlier warning restored", h.m.status)
@@ -67,12 +69,12 @@ func TestFilter_RejectedPasteErrorClearsAndRestores(t *testing.T) {
 // warning.
 func TestFilter_EscRestoresTheEarlierStatus(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "host.invalid", "u"), secret.NewMemory())
-	h.m.setStatus("warning worth keeping", false)
+	h.m.setStatus("warning worth keeping", statusWarning)
 	h.m = press(h.m, "/")
 	nm, _ := h.m.Update(tea.PasteMsg{Content: "a\nb"})
 	h.m = nm.(Model)
 	h.m = press(h.m, "esc")
-	if h.m.status != "warning worth keeping" || h.m.statusErr {
-		t.Fatalf("status = %q errored=%v", h.m.status, h.m.statusErr)
+	if h.m.status != "warning worth keeping" || h.m.statusKind != statusWarning {
+		t.Fatalf("status = %q kind=%v", h.m.status, h.m.statusKind)
 	}
 }

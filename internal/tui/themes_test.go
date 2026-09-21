@@ -136,8 +136,8 @@ func TestTheme_BadSettingWarnsOnTheStatusLine(t *testing.T) {
 				t.Fatalf("view %d, want the list", m.view)
 			}
 			out := screen(m)
-			if !strings.Contains(out, tc.want) {
-				t.Fatalf("want a status containing %q:\n%s", tc.want, out)
+			if !strings.Contains(out, tc.want) || !strings.Contains(out, "▲") || m.statusKind != statusWarning {
+				t.Fatalf("want an error status containing %q:\n%s", tc.want, out)
 			}
 			if !strings.Contains(out, "work") {
 				t.Fatalf("list missing:\n%s", out)

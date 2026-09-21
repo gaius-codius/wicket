@@ -44,7 +44,7 @@ func TestConnect_StoredSecretNoModal(t *testing.T) {
 	if strings.Contains(out, "never") {
 		t.Fatal("last-used should be written")
 	}
-	if h.m.statusErr {
+	if h.m.statusKind == statusError {
 		t.Fatalf("error status %q", h.m.status)
 	}
 	got := testutil.ReadRecord(t, rec)
@@ -105,7 +105,7 @@ func TestConnect_MissingClientNoLastUsed(t *testing.T) {
 	if h.m.view != viewList {
 		t.Fatalf("view %v", h.m.view)
 	}
-	if !h.m.statusErr || !strings.Contains(h.m.status, "sdl-freerdp3") {
+	if h.m.statusKind != statusError || !strings.Contains(h.m.status, "sdl-freerdp3") {
 		t.Fatalf("status %q", h.m.status)
 	}
 	if _, ok := h.m.app.State.LastUsed("work"); ok {
@@ -187,7 +187,7 @@ func TestConnect_LongSessionNoRetryOverlay(t *testing.T) {
 	if h.m.view != viewList {
 		t.Fatalf("view %v want list, status=%s", h.m.view, h.m.status)
 	}
-	if h.m.statusErr || !strings.Contains(h.m.status, "session ended") {
+	if h.m.statusKind == statusError || !strings.Contains(h.m.status, "session ended") {
 		t.Fatalf("status %q", h.m.status)
 	}
 	if h.m.useOnce != nil {
@@ -273,10 +273,10 @@ func TestRetry_NewPasswordDoesNotClaimThereIsNone(t *testing.T) {
 		t.Fatalf("view %v, want the password modal", h.m.view)
 	}
 	out := stripANSI(screen(h.m))
-	if strings.Contains(out, "No stored password") {
+	if strings.Contains(out, "No stored password") || strings.Contains(out, "No password is saved") {
 		t.Fatalf("the modal denies the stored password:\n%s", out)
 	}
-	if !strings.Contains(out, "Enter a new password for work") {
+	if !strings.Contains(out, "Connect to work") || !strings.Contains(out, "Type a new password") {
 		t.Fatalf("%s", out)
 	}
 }

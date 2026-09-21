@@ -178,7 +178,7 @@ func TestForm_DoesNotAdvertiseHelpWhileTyping(t *testing.T) {
 	}
 }
 
-func slicesHasKey(hs []hint, key string) bool {
+func slicesHasKey(hs []keyHint, key string) bool {
 	for _, h := range hs {
 		if h.key == key {
 			return true
@@ -226,7 +226,7 @@ func TestDialogs_KeepWhatMatters(t *testing.T) {
 // is simply lost.
 func TestRender_ShortTerminalKeepsTheStatus(t *testing.T) {
 	m := sized(t, fixtureTOML("work", "h", "u"), 80, 24)
-	m.setStatus("could not save password", true)
+	m.setStatus("could not save password", statusError)
 	for h := heightTiny; h <= 12; h++ {
 		nm, _ := m.Update(teaWin(80, h))
 		out := stripANSI(nm.(Model).render())

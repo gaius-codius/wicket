@@ -125,8 +125,7 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 	f.focus(fieldName)
 	m.form = f
 	m.view = viewForm
-	m.status = ""
-	m.statusErr = false
+	m.setStatus("", statusInfo)
 	return m, nil
 }
 
@@ -324,8 +323,8 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	m.clearFilter()
 	m.selectName(name)
 	// Every warning SaveProfile returns is something that did not happen, so
-	// they carry the error marker rather than the informational one.
-	m.setStatus(strings.Join(warns, "; "), len(warns) > 0)
+	// a save with any of them is not reported as a success.
+	m.setStatus(outcome("Saved", name, warns))
 	return m, nil
 }
 

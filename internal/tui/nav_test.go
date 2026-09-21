@@ -332,7 +332,7 @@ func TestModal_LeavesDialogBeforeConnecting(t *testing.T) {
 	if m.view != viewList {
 		t.Fatalf("view = %v while connecting, want viewList", m.view)
 	}
-	if out := stripANSI(m.View().Content); strings.Contains(out, "No stored password") {
+	if out := stripANSI(m.View().Content); strings.Contains(out, "Connect to") {
 		t.Fatalf("cleared dialog drawn while connecting:\n%s", out)
 	}
 }

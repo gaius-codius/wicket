@@ -106,6 +106,9 @@ type formState struct {
 	orig config.Profile
 	// confirmDiscard is set while asking whether to drop unsaved changes.
 	confirmDiscard bool
+	// quitOnDiscard is set when ctrl+c raised the question, so a yes quits
+	// Wicket, as the ctrl+c meant, rather than going back to the list.
+	quitOnDiscard bool
 }
 
 // textValue returns a pointer to the string a text field edits.
@@ -223,7 +226,7 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 	f.focus(fieldName)
 	m.form = f
 	m.view = viewForm
-	m.setStatus("", statusInfo)
+	// A stale note is cleared by Update as the form opens; a warning stays.
 	return m, nil
 }
 
@@ -241,9 +244,12 @@ func (m Model) handleFormKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 	if f.confirmDiscard {
 		switch key {
 		case "y", "Y":
+			if f.quitOnDiscard {
+				return m.interrupt()
+			}
 			return m.cancelForm()
 		case "n", "N", "esc":
-			f.confirmDiscard = false
+			f.confirmDiscard, f.quitOnDiscard = false, false
 		}
 		m.form = f
 		return m, nil
@@ -423,36 +429,6 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	case f.forget:
 		intent = PasswordIntent{Action: PasswordForget}
 	}
-	var oldID secret.Identity
-	if old, ok := m.app.Cfg.Profile(f.oldName); ok {
-		oldID = m.identity(old)
-	}
-	warns, err := m.app.SaveProfile(f.oldName, f.p, intent)
-	// A save can move, replace or delete a password, and a rename or a new
-	// host, user or domain is a new identity, so what the list knew about
-	// either is checked again. Even a failed save may have touched the
-	// keyring on its way to failing.
-	m.forgetPresence(oldID, m.identity(f.p))
-	m.refreshUsed()
-	if err != nil {
-		f.setError(err)
-		// The invalid field may be scrolled out of a short panel, so focus
-		// goes to it: the viewport follows focus, and the fix is typed
-		// there anyway.
-		if f.errField != fieldNone {
-			f.focus(f.errField)
-		}
-		m.form = f
-		return m, nil
-	}
-	name := f.p.Name
-	m.form.password = ""
-	m.form = formState{}
-	m.view = viewList
-	m.clearFilter()
-	m.selectName(name)
-	// Every warning SaveProfile returns is something that did not happen, so
-	// a save with any of them is not reported as a success.
-	m.setStatus(outcome("Saved", name, warns))
-	return m, nil
+	// The save's keyring steps run off the update loop; see keyring.go.
+	return m.beginSave(f, intent)
 }

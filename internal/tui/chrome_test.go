@@ -344,3 +344,86 @@ func TestRetry_WrappedMessageSurvivesTinyHeights(t *testing.T) {
 		}
 	}
 }
+
+// A note about something already done does not follow the user into a form
+// or dialog, where it reads as an answer to the question on screen. A
+// warning or error is still to act on, so it stays.
+func TestStatus_StaleNoteIsDroppedWhenADialogOpens(t *testing.T) {
+	for _, keys := range [][]string{{"D"}, {"n"}, {"e"}} {
+		for kind, keep := range map[statusKind]bool{statusSuccess: false, statusInfo: false, statusWarning: true, statusError: true} {
+			h := newHarness(t, fixtureTOML("work", "h", "u"), panicStore{})
+			h.m.setStatus("Deleted never-used.", kind)
+			h.m = press(h.m, keys...)
+			if got := h.m.status != ""; got != keep {
+				t.Errorf("after %v, kind %d: status %q, want kept=%v", keys, kind, h.m.status, keep)
+			}
+		}
+	}
+	// Help is not a dialog, and coming back from it opens nothing.
+	h := newHarness(t, fixtureTOML("work", "h", "u"), panicStore{})
+	h.m.setStatus("session ended", statusInfo)
+	h.m = press(h.m, "?", "esc")
+	if h.m.status != "session ended" {
+		t.Fatalf("help cleared the status: %q", h.m.status)
+	}
+}
+
+// At small heights the retry overlay keeps how the client exited and what it
+// said, and gives up its spacing first: it used to drop the exit status and
+// the client's error while the divider and a blank line stayed.
+func TestRetry_ShedsSpacingBeforeTheExitDetails(t *testing.T) {
+	m := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory()).m
+	p, _ := m.app.Cfg.Profile("work")
+	m.view = viewRetry
+	m.retry = retryState{profile: p, status: "FreeRDP failed: could not connect", class: rdp.ClassFailed,
+		outcome: rdp.Outcome{Client: "sdl-freerdp3", ExitCode: 141, Duration: 15 * time.Second},
+		note:    "ERRCONNECT_CONNECT_FAILED"}
+	for _, size := range [][2]int{{40, 8}, {60, 8}, {80, 8}} {
+		nm, _ := m.Update(teaWin(size[0], size[1]))
+		out := stripANSI(nm.(Model).render())
+		for _, want := range []string{"could not connect", "status 141", "client: ERRCONNECT"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%dx%d lost %q:\n%s", size[0], size[1], want, out)
+			}
+		}
+		if _, h := measure(out); h > size[1] {
+			t.Errorf("%dx%d rendered %d lines", size[0], size[1], h)
+		}
+	}
+}
+
+// An error left from an earlier action is kept when a dialog opens, but the
+// dialog's own question, host and keys outrank it: at 40x7 it once took three
+// lines and left "Delete work?" with neither its host nor its y/n.
+func TestStatus_CarriedErrorYieldsToTheDialog(t *testing.T) {
+	h := newHarness(t, fixtureTOML("work", "work.example.com", "u"), panicStore{})
+	h.m.setStatus("Deleted testnet, but stopped waiting for the keyring; any saved password was left in place", statusError)
+	h.m = press(h.m, "D")
+	if h.m.view != viewDelete || h.m.status == "" {
+		t.Fatalf("setup: view %v status %q", h.m.view, h.m.status)
+	}
+	for _, size := range [][2]int{{40, 7}, {40, 8}, {40, 10}} {
+		nm, _ := h.m.Update(teaWin(size[0], size[1]))
+		out := stripANSI(nm.(Model).render())
+		for _, want := range []string{"Delete work?", "work.example.com", "y delete"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%dx%d lost %q:\n%s", size[0], size[1], want, out)
+			}
+		}
+		if n := strings.Count(out, "stopped waiting"); n > 1 {
+			t.Errorf("%dx%d gave the old error %d lines:\n%s", size[0], size[1], n, out)
+		}
+	}
+	// With room to spare the error is still there to read, on one line.
+	nm, _ := h.m.Update(teaWin(40, 20))
+	if out := stripANSI(nm.(Model).render()); !strings.Contains(out, "✗ Deleted testnet") {
+		t.Fatalf("the carried error was dropped with room for it:\n%s", out)
+	}
+	// A status the dialog sets itself is its own, and wraps as usual.
+	m := h.m
+	m.setStatus("a status of the dialog's own that is long enough to wrap onto a second line", statusError)
+	nm, _ = m.Update(teaWin(40, 20))
+	if out := stripANSI(nm.(Model).render()); !strings.Contains(out, "second line") {
+		t.Fatalf("the dialog's own status was cut:\n%s", out)
+	}
+}

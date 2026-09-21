@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -35,10 +34,10 @@ func TestDBus_CRUDAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Upsert(idA, pw); err != nil {
+	if err := store.Upsert(bg, idA, pw); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.Lookup(idA)
+	got, err := store.Lookup(bg, idA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,13 +48,13 @@ func TestDBus_CRUDAndIsolation(t *testing.T) {
 	if buf.String() != "s3cret\n" {
 		t.Fatalf("lookup %q", buf.String())
 	}
-	if _, err := store.Lookup(idB); !errors.Is(err, ErrNotFound) {
+	if _, err := store.Lookup(bg, idB); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("isolation: %v", err)
 	}
-	if err := store.Delete(idA); err != nil {
+	if err := store.Delete(bg, idA); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Lookup(idA); !errors.Is(err, ErrNotFound) {
+	if _, err := store.Lookup(bg, idA); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted: %v", err)
 	}
 }
@@ -78,7 +77,7 @@ func TestDBus_WritesWaitForTheKeyringPrompt(t *testing.T) {
 	}
 
 	srv.SetPrompt(fakesecret.PromptDismiss)
-	if err := store.Upsert(id, pw); err == nil {
+	if err := store.Upsert(bg, id, pw); err == nil {
 		t.Fatal("Upsert reported success although the prompt was dismissed")
 	} else if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want it to wrap ErrUnavailable", err)
@@ -86,12 +85,12 @@ func TestDBus_WritesWaitForTheKeyringPrompt(t *testing.T) {
 	if n := srv.Stored(); n != 0 {
 		t.Fatalf("%d items stored after a dismissed prompt", n)
 	}
-	if _, err := store.Lookup(id); !errors.Is(err, ErrNotFound) {
+	if _, err := store.Lookup(bg, id); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Lookup err = %v, want ErrNotFound", err)
 	}
 
 	srv.SetPrompt(fakesecret.PromptAccept)
-	if err := store.Upsert(id, pw); err != nil {
+	if err := store.Upsert(bg, id, pw); err != nil {
 		t.Fatalf("Upsert with an accepted prompt: %v", err)
 	}
 	if n := srv.Stored(); n != 1 {
@@ -99,7 +98,7 @@ func TestDBus_WritesWaitForTheKeyringPrompt(t *testing.T) {
 	}
 
 	srv.SetPrompt(fakesecret.PromptDismiss)
-	if err := store.Delete(id); err == nil {
+	if err := store.Delete(bg, id); err == nil {
 		t.Fatal("Delete reported success although the prompt was dismissed")
 	}
 	if n := srv.Stored(); n != 1 {
@@ -107,7 +106,7 @@ func TestDBus_WritesWaitForTheKeyringPrompt(t *testing.T) {
 	}
 
 	srv.SetPrompt(fakesecret.PromptAccept)
-	if err := store.Delete(id); err != nil {
+	if err := store.Delete(bg, id); err != nil {
 		t.Fatalf("Delete with an accepted prompt: %v", err)
 	}
 	if n := srv.Stored(); n != 0 {
@@ -129,18 +128,18 @@ func TestDBus_LookupUnlocksALockedKeyring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Upsert(id, pw); err != nil {
+	if err := store.Upsert(bg, id, pw); err != nil {
 		t.Fatal(err)
 	}
 
 	srv.SetLocked(true)
 	srv.SetPrompt(fakesecret.PromptDismiss)
-	if _, err := store.Lookup(id); !errors.Is(err, ErrNotFound) {
+	if _, err := store.Lookup(bg, id); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("dismissed unlock: err = %v, want ErrNotFound", err)
 	}
 
 	srv.SetPrompt(fakesecret.PromptAccept)
-	got, err := store.Lookup(id)
+	got, err := store.Lookup(bg, id)
 	if err != nil {
 		t.Fatalf("accepted unlock: %v", err)
 	}
@@ -164,7 +163,7 @@ func TestDBus_LookupPrefersTheNewestOfSeveralMatches(t *testing.T) {
 	srv.Seed(id.Attrs(), "older", 1000)
 	srv.Seed(id.Attrs(), "newer", 2000)
 
-	got, err := NewDBus().Lookup(id)
+	got, err := NewDBus().Lookup(bg, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,11 +195,11 @@ func TestDBus_UnansweredPromptTimesOutAndDismisses(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.SetPrompt(fakesecret.PromptStall)
-	err = NewDBus().Upsert(id, pw)
+	err = NewDBus().Upsert(bg, id, pw)
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want it to wrap ErrUnavailable", err)
 	}
-	if !strings.Contains(err.Error(), "timed out") {
+	if !errors.Is(err, ErrPromptTimeout) {
 		t.Fatalf("err = %v, want it to say it timed out", err)
 	}
 	if n := srv.Dismissed(); n != 1 {
@@ -293,5 +292,70 @@ func TestDBus_PresenceWithoutAServiceIsUnavailable(t *testing.T) {
 	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
 	if _, err := NewDBus().Presence(context.Background(), id); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want it to wrap ErrUnavailable", err)
+	}
+}
+
+// A keyring daemon that stops answering must not hold a read, a write or a
+// delete past the caller's deadline. Before these took a context, a wedged
+// keyring froze the TUI for good: its connect ran Lookup on the update loop,
+// and nothing could end the wait.
+func TestDBus_OperationsHonourTheContext(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+	srv.StallEverything()
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewDBus()
+	for name, op := range map[string]func(context.Context) error{
+		"Lookup": func(ctx context.Context) error { _, err := store.Lookup(ctx, id); return err },
+		"Upsert": func(ctx context.Context) error { return store.Upsert(ctx, id, pw) },
+		"Delete": func(ctx context.Context) error { return store.Delete(ctx, id) },
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		start := time.Now()
+		err := op(ctx)
+		cancel()
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Fatalf("%s took %v against a 150ms deadline", name, elapsed)
+		}
+		if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%s: err = %v, want ErrUnavailable and the deadline", name, err)
+		}
+	}
+}
+
+// A caller that stops waiting for a prompt -- the user pressed esc -- is not
+// the user refusing it, and the dialog must not be left on screen.
+func TestDBus_CancelledPromptIsDismissed(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.SetPrompt(fakesecret.PromptStall)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		cancel()
+	}()
+	err = NewDBus().Upsert(ctx, id, pw)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want ErrUnavailable and the cancellation", err)
+	}
+	if errors.Is(err, ErrPromptDismissed) {
+		t.Fatalf("err = %v: a cancelled wait is not the user refusing", err)
+	}
+	if n := srv.Dismissed(); n != 1 {
+		t.Fatalf("prompt dismissed %d times, want 1", n)
+	}
+	if n := srv.Stored(); n != 0 {
+		t.Fatalf("%d items stored although the prompt was never answered", n)
 	}
 }

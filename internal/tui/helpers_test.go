@@ -81,13 +81,62 @@ func keyMsg(k string) tea.KeyPressMsg {
 // directly to look at the session view itself.
 func press(m Model, keys ...string) Model {
 	for _, k := range keys {
-		nm, cmd := m.Update(keyMsg(k))
-		m = nm.(Model)
+		var cmd tea.Cmd
+		m, cmd = act(m, keyMsg(k))
 		if m.session != nil {
 			m = settle(m, cmd)
 		}
 	}
 	return m
+}
+
+// act sends msg and, when that starts a keyring operation, runs it as Bubble
+// Tea would and feeds the model its reply, until nothing is left waiting on
+// the keyring. It returns the model then and the commands the last update
+// returned, so a test sees what the user would once the keyring answered.
+func act(m Model, msg tea.Msg) (Model, tea.Cmd) {
+	nm, cmd := m.Update(msg)
+	return drainKeyring(nm.(Model), cmd)
+}
+
+// drainKeyring feeds m the replies of the keyring operations cmd runs.
+func drainKeyring(m Model, cmd tea.Cmd) (Model, tea.Cmd) {
+	for m.keyring != nil {
+		nm, next := m.Update(awaitKeyring(cmd, m.keyring.id))
+		m, cmd = nm.(Model), next
+	}
+	return m, cmd
+}
+
+// awaitKeyring runs cmd, and any batch it stands for, and returns the reply
+// of keyring operation id. Everything else it produces is dropped.
+func awaitKeyring(cmd tea.Cmd, id int) keyringReplyMsg {
+	found := make(chan keyringReplyMsg, 1)
+	var run func(tea.Cmd)
+	run = func(c tea.Cmd) {
+		if c == nil {
+			return
+		}
+		go func() {
+			switch msg := c().(type) {
+			case tea.BatchMsg:
+				for _, c := range msg {
+					run(c)
+				}
+			case keyringReplyMsg:
+				if msg.id == id {
+					found <- msg
+				}
+			}
+		}()
+	}
+	run(cmd)
+	select {
+	case r := <-found:
+		return r
+	case <-time.After(10 * time.Second):
+		panic("keyring operation did not finish within 10s")
+	}
 }
 
 // settle runs cmd the way Bubble Tea would and feeds the model the end of
@@ -158,15 +207,18 @@ func typeInto(m Model, s string) Model {
 	return m
 }
 
+// bg is the context tests hand the keyring when nothing is meant to cancel it.
+var bg = context.Background()
+
 type panicStore struct{}
 
-func (panicStore) Lookup(secret.Identity) (secret.LookupResult, error) {
+func (panicStore) Lookup(context.Context, secret.Identity) (secret.LookupResult, error) {
 	panic("list must not query secret.Store")
 }
-func (panicStore) Upsert(secret.Identity, secret.Password) error {
+func (panicStore) Upsert(context.Context, secret.Identity, secret.Password) error {
 	panic("list must not query secret.Store")
 }
-func (panicStore) Delete(secret.Identity) error {
+func (panicStore) Delete(context.Context, secret.Identity) error {
 	panic("list must not query secret.Store")
 }
 func (panicStore) Presence(context.Context, secret.Identity) (secret.Presence, error) {
@@ -181,27 +233,27 @@ type wrapStore struct {
 	lookups   int
 }
 
-func (w *wrapStore) Lookup(id secret.Identity) (secret.LookupResult, error) {
+func (w *wrapStore) Lookup(ctx context.Context, id secret.Identity) (secret.LookupResult, error) {
 	w.lookups++
 	if w.lookupErr != nil {
 		return secret.LookupResult{}, w.lookupErr
 	}
-	return w.inner.Lookup(id)
+	return w.inner.Lookup(ctx, id)
 }
-func (w *wrapStore) Upsert(id secret.Identity, pw secret.Password) error {
+func (w *wrapStore) Upsert(ctx context.Context, id secret.Identity, pw secret.Password) error {
 	if w.upsertErr != nil {
 		return w.upsertErr
 	}
-	return w.inner.Upsert(id, pw)
+	return w.inner.Upsert(ctx, id, pw)
 }
 func (w *wrapStore) Presence(ctx context.Context, id secret.Identity) (secret.Presence, error) {
 	return w.inner.Presence(ctx, id)
 }
-func (w *wrapStore) Delete(id secret.Identity) error {
+func (w *wrapStore) Delete(ctx context.Context, id secret.Identity) error {
 	if w.deleteErr != nil {
 		return w.deleteErr
 	}
-	return w.inner.Delete(id)
+	return w.inner.Delete(ctx, id)
 }
 
 type harness struct {
@@ -247,6 +299,10 @@ func newHarness(t *testing.T, body string, store secret.Store) *harness {
 		},
 	})
 	h.m = m
+	// A test that starts a client and then fails, or simply returns, must
+	// not leave it running: the app is shared by every copy of the model,
+	// so this stops whichever session it last started.
+	t.Cleanup(func() { m.app.StopSession(time.Second) })
 	return h
 }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -53,17 +54,38 @@ type Launcher struct {
 	Clock  Clock
 	Stdout io.Writer
 	Stderr io.Writer
-	// OwnSignals says the caller handles SIGINT itself, so Start does not
-	// forward it to the client. The TUI keeps the terminal in raw mode while
-	// a session runs and stops the client through Session.Interrupt; a
-	// second forwarder would count one Ctrl+C twice.
+	// OwnSignals says the caller handles signals itself. Otherwise, while
+	// the client runs, Start passes SIGINT on to its process group, as Ctrl+C
+	// in a terminal the client owned would have done, and turns SIGTERM or
+	// SIGHUP into a stop of the whole group: SIGTERM, then SIGKILL after
+	// StopGrace. The client runs in a process group of its own, so without
+	// that a launcher script ending `wicket connect`, or a closed terminal,
+	// would end Wicket and leave FreeRDP and its helpers running. The TUI
+	// keeps the terminal in raw mode while a session runs and stops the
+	// client through the Session itself; a second forwarder would count one
+	// Ctrl+C twice.
 	OwnSignals bool
+	// StopGrace is how long a client stopped on SIGTERM or SIGHUP gets
+	// before it is killed, when the launcher forwards those signals (see
+	// OwnSignals). Zero means DefaultStopGrace.
+	StopGrace time.Duration
 	// WaitDelay bounds how long Wait keeps copying the client's output
 	// after it exits. Output written to anything but a file is copied by a
 	// goroutine that only ends when every holder of the pipe has closed it,
 	// so a helper the client left running would otherwise hold Wait open.
 	// Zero waits for as long as it takes, as exec.Cmd does.
 	WaitDelay time.Duration
+}
+
+// DefaultStopGrace is how long a forwarded SIGTERM or SIGHUP gives the client
+// before it is killed.
+const DefaultStopGrace = 3 * time.Second
+
+func (l *Launcher) stopGrace() time.Duration {
+	if l.StopGrace > 0 {
+		return l.StopGrace
+	}
+	return DefaultStopGrace
 }
 
 func (l *Launcher) clock() Clock {
@@ -87,8 +109,10 @@ type Session struct {
 	pgid    int
 	started time.Time
 	clock   Clock
-	// interrupt forwards Wicket's own SIGINT to the client. It is nil when
-	// the launcher's caller handles signals itself.
+	// client is the client's basename, for Outcome.Client.
+	client string
+	// interrupt forwards Wicket's own SIGINT, SIGTERM and SIGHUP to the
+	// client. It is nil when the launcher's caller handles signals itself.
 	interrupt chan os.Signal
 
 	done chan struct{}
@@ -103,6 +127,8 @@ type Session struct {
 	// stage is how far a stop has escalated, as an index into stopSignals:
 	// 0 until Interrupt, Escalate or Terminate has sent anything.
 	stage int
+	// stopped is the first SIGTERM or SIGHUP Wicket received and passed on.
+	stopped os.Signal
 }
 
 // stopSignals are the signals a stop sends, in order. They are indexed
@@ -119,8 +145,19 @@ type Class int
 
 const (
 	ClassStartError Class = iota
+	// ClassShortSession is a clean exit so soon after the start that the
+	// session probably never happened: a window closed at once, say.
 	ClassShortSession
+	// ClassEnded is a session that ended the way sessions do: the window
+	// was closed, the user logged off, the server disconnected it.
 	ClassEnded
+	// ClassFailed is a client that exited with an error, or was killed by a
+	// signal, however long it ran. FreeRDP can take a quarter of a minute to
+	// give up on a host it cannot reach, and a failure that slow used to read
+	// as a session that had simply ended. For FreeRDP's own clients the exit
+	// code says which endings are errors (see exitcode.go); for any other
+	// client every non-zero status is one.
+	ClassFailed
 )
 
 type Outcome struct {
@@ -128,25 +165,58 @@ type Outcome struct {
 	ExitCode int
 	Signaled bool
 	Duration time.Duration
+	// Stopped is the signal Wicket itself received, and passed on, that
+	// ended the session: SIGTERM or SIGHUP, when the launcher's caller does
+	// not handle signals itself. It is nil when nothing stopped Wicket.
+	Stopped os.Signal
+	// Client is the basename of the client that ran, which says how to read
+	// its exit code.
+	Client string
 }
 
+// Classify says how a session ended. A caller that stopped the client itself
+// knows better than the exit status whether that was a failure, and should
+// say so over this.
 func Classify(o Outcome) Class {
 	if o.StartErr != nil {
 		return ClassStartError
 	}
-	if o.Duration < ShortSessionThreshold {
+	if o.Signaled {
+		return ClassFailed
+	}
+	// A plain end -- status 0, or 1 from FreeRDP, whose SDL client exits 1
+	// when its window is closed -- so soon after the start that the session
+	// probably never happened is offered a retry. A logoff, a timeout or a
+	// cancel is something someone chose, however quick.
+	plain := o.ExitCode == 0
+	if e, ok := o.meaning(); ok {
+		if !e.ended {
+			return ClassFailed
+		}
+		plain = o.ExitCode <= 1
+		if !plain {
+			return ClassEnded
+		}
+	} else if o.ExitCode != 0 {
+		return ClassFailed
+	}
+	if plain && o.Duration < ShortSessionThreshold {
 		return ClassShortSession
 	}
 	return ClassEnded
 }
 
-// ExitStatus is Wicket's process exit code after a successful start: child's code, or 128+signal.
+// ExitStatus is Wicket's process exit code after a successful start: the
+// child's code, or 128+signal when it was killed. A session ended because
+// Wicket itself was sent SIGTERM or SIGHUP exits as a program killed by that
+// signal conventionally does, 128 plus its number, whatever the client made
+// of it: the caller asked Wicket to stop, and should be able to tell.
 func (o Outcome) ExitStatus() int {
 	if o.StartErr != nil {
 		return 2
 	}
-	if o.Signaled {
-		return o.ExitCode
+	if sig, ok := o.Stopped.(syscall.Signal); ok {
+		return 128 + int(sig)
 	}
 	return o.ExitCode
 }
@@ -185,42 +255,74 @@ func (l *Launcher) Start(plan Plan, cred Credential) (*Session, error) {
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = l.WaitDelay
+	// The handler goes in before the client starts. Installed after, a
+	// SIGTERM or SIGHUP that landed while the client was starting, or while
+	// its password was being written, took Wicket's default action: Wicket
+	// died, and the client, in a group of its own, kept running. A signal
+	// caught before the group exists waits in the channel, and stops the
+	// group as soon as there is one.
+	var sigs chan os.Signal
+	if !l.OwnSignals {
+		sigs = make(chan os.Signal, 4)
+		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
+		if sigs != nil {
+			// Nothing was started, so there is nothing to stop.
+			signal.Stop(sigs)
+		}
 		return nil, err
 	}
+	sess := &Session{
+		cmd:       cmd,
+		pgid:      cmd.Process.Pid,
+		started:   l.clock().Now(),
+		clock:     l.clock(),
+		client:    filepath.Base(plan.Client),
+		done:      make(chan struct{}),
+		interrupt: sigs,
+	}
+	if sigs != nil {
+		grace := l.stopGrace()
+		go func(ch <-chan os.Signal) {
+			for sig := range ch {
+				if sig == os.Interrupt {
+					sess.signal(syscall.SIGINT)
+					continue
+				}
+				// Terminate waits, and a second signal must still be
+				// drained from ch, so the stop runs on its own.
+				if sess.noteStopped(sig) {
+					go sess.Terminate(grace)
+				}
+			}
+		}(sigs)
+	}
+	// The reaper runs from here on, so a stop the handler starts while the
+	// password is being written sees the client exit, and nothing signals
+	// its group once it has been collected.
+	go sess.reap()
 	if cred != nil {
 		// A credential that cannot reach the child is fatal: the client would
 		// otherwise sit at a prompt it can never satisfy, and the caller would
 		// blame the password.
 		if err := cred.WriteLine(stdin); err != nil {
 			_ = stdin.Close()
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			_ = cmd.Wait()
+			sess.signal(syscall.SIGKILL)
+			out := sess.Wait()
+			if out.Stopped != nil {
+				// Wicket was told to stop while the password was on its
+				// way, and stopping the client is what broke the pipe: the
+				// session says so, and the caller exits as told.
+				return sess, nil
+			}
 			return nil, fmt.Errorf("could not send the password to %s: %w", plan.Client, err)
 		}
 	}
 	_ = stdin.Close()
-
-	sess := &Session{
-		cmd:     cmd,
-		pgid:    cmd.Process.Pid,
-		started: l.clock().Now(),
-		clock:   l.clock(),
-		done:    make(chan struct{}),
-	}
-	if !l.OwnSignals {
-		sess.interrupt = make(chan os.Signal, 1)
-		signal.Notify(sess.interrupt, os.Interrupt)
-		go func(ch <-chan os.Signal) {
-			for range ch {
-				sess.signal(syscall.SIGINT)
-			}
-		}(sess.interrupt)
-	}
 	// The reaper is the only caller of cmd.Wait, so Wait, Done and a stop
 	// racing the exit all see one outcome.
-	go sess.reap()
 	return sess, nil
 }
 
@@ -291,6 +393,18 @@ func (s *Session) Terminate(grace time.Duration) {
 	}
 }
 
+// noteStopped records sig as what ended the session, and reports whether it
+// is the first such signal: a second SIGTERM needs no second stop.
+func (s *Session) noteStopped(sig os.Signal) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped != nil {
+		return false
+	}
+	s.stopped = sig
+	return true
+}
+
 func (s *Session) signal(sig syscall.Signal) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -342,6 +456,10 @@ func (s *Session) reap() {
 		close(s.interrupt)
 	}
 	s.out = outcomeOf(s.cmd.ProcessState, err, end.Sub(s.started))
+	s.out.Client = s.client
+	s.mu.Lock()
+	s.out.Stopped = s.stopped
+	s.mu.Unlock()
 	close(s.done)
 }
 

@@ -21,7 +21,9 @@ var (
 	fakeErr  error
 )
 
-// FakeRDPDir returns a directory containing a `sdl-freerdp3` (and `xfreerdp3`) recorder on PATH.
+// FakeRDPDir returns a directory containing a `sdl-freerdp3` (and `xfreerdp3`)
+// recorder on PATH, and the same recorder as `myrdp`, a client that is not
+// FreeRDP's.
 func FakeRDPDir(t *testing.T) string {
 	t.Helper()
 	fakeOnce.Do(func() {
@@ -40,7 +42,7 @@ func FakeRDPDir(t *testing.T) string {
 			t.Logf("go build fakerdp: %s", out)
 			return
 		}
-		for _, name := range []string{"sdl-freerdp3", "xfreerdp3", "wlfreerdp3"} {
+		for _, name := range []string{"sdl-freerdp3", "xfreerdp3", "wlfreerdp3", "myrdp"} {
 			link := filepath.Join(dir, name)
 			if err := os.Symlink(bin, link); err != nil {
 				fakeErr = err

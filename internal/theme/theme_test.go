@@ -216,3 +216,29 @@ foreground = "#2A2A32"
 		t.Fatalf("surface = %s, want the light fallback %s", first.Hex["surface"], wicketLight()["surface"])
 	}
 }
+
+// A key of the wrong type is one broken role, not a broken file: the rest of
+// the theme still applies and only that role falls back. It used to throw
+// the whole file away, so omarchy mode drew terminal colours instead.
+func TestLoad_WrongTypedKeyFallsBackPerRole(t *testing.T) {
+	home := t.TempDir()
+	writeTheme(t, home, `mode = "dark"
+background = "#101010"
+foreground = 12
+accent = "#ABCDEF"
+red = "#F0B0B0"
+`)
+	pal, rep := Load(home)
+	if rep.InvalidTOML || rep.MissingFile {
+		t.Fatalf("report %+v, want the file used", rep)
+	}
+	if pal.Hex["accent"] != "#ABCDEF" || pal.Hex["danger"] != "#F0B0B0" || pal.Hex["surface"] != "#101010" {
+		t.Fatalf("the good roles were not kept: %v", pal.Hex)
+	}
+	if !slices.Contains(rep.FallbackRoles, "primary") {
+		t.Fatalf("FallbackRoles = %v, want primary", rep.FallbackRoles)
+	}
+	if s := Choose(ModeOmarchy, home); s.Look.Kind != KindOmarchy || s.Warning != "" {
+		t.Fatalf("omarchy mode gave kind %d, warning %q", s.Look.Kind, s.Warning)
+	}
+}

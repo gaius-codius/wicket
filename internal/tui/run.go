@@ -49,12 +49,15 @@ func runProgram(m Model, opts ...tea.ProgramOption) error {
 		}
 	}()
 
-	_, err := p.Run()
+	final, err := p.Run()
 	// Whatever ended the program -- q, a signal, an error, a panic Bubble Tea
 	// recovered from -- a client still running is stopped before Wicket
 	// exits. The handler stays installed until then, so a second SIGTERM
 	// cannot kill Wicket half way through stopping it.
 	app.StopSession(quitGrace)
+	// A keyring operation still running is abandoned, and told so, rather
+	// than left holding a connection or a prompt.
+	app.CancelKeyring()
 	signal.Stop(sigs)
 	close(done)
 	<-forwarded
@@ -64,5 +67,23 @@ func runProgram(m Model, opts ...tea.ProgramOption) error {
 	if errors.Is(err, tea.ErrInterrupted) {
 		return nil
 	}
+	if err == nil {
+		if fm, ok := final.(Model); ok && fm.stoppedBy != 0 {
+			return &StoppedError{Signal: fm.stoppedBy}
+		}
+	}
 	return err
 }
+
+// StoppedError is Run's report that Wicket was ended by SIGTERM or SIGHUP.
+// It is not a failure to print, but the caller should exit as a program
+// killed by the signal would, as wicket connect does: a script that stopped
+// Wicket can then tell that it did.
+type StoppedError struct {
+	Signal syscall.Signal
+}
+
+func (e *StoppedError) Error() string { return "stopped by " + e.Signal.String() }
+
+// ExitStatus is 128 plus the signal's number.
+func (e *StoppedError) ExitStatus() int { return 128 + int(e.Signal) }

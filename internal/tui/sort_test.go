@@ -343,7 +343,7 @@ func TestList_LastUsedRefreshedAfterConnect(t *testing.T) {
 	store := secret.NewMemory()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = store.Upsert(h.m.identity(p), mustPassword(t, "pw"))
+	_ = store.Upsert(bg, h.m.identity(p), mustPassword(t, "pw"))
 	if !strings.Contains(lineWith(screen(h.m), "▌ work"), "never") {
 		t.Fatalf("setup:\n%s", screen(h.m))
 	}

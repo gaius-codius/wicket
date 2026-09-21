@@ -49,6 +49,18 @@ func TestClassify_Boundaries(t *testing.T) {
 	if Classify(Outcome{Duration: 3001 * time.Millisecond}) != ClassEnded {
 		t.Fatal("3.001s")
 	}
+	// A failure is a failure however long it took: FreeRDP gives up on an
+	// unreachable host after about fifteen seconds.
+	for _, o := range []Outcome{
+		{ExitCode: 131, Duration: 16 * time.Second},
+		{ExitCode: 1, Duration: time.Hour},
+		{ExitCode: 131, Duration: time.Second},
+		{ExitCode: 128 + 9, Signaled: true, Duration: time.Minute},
+	} {
+		if got := Classify(o); got != ClassFailed {
+			t.Fatalf("%+v classed %v, want a failure", o, got)
+		}
+	}
 }
 
 func TestStart_WaitExitCodeAndStdin(t *testing.T) {
@@ -74,7 +86,7 @@ func TestStart_WaitExitCodeAndStdin(t *testing.T) {
 	if o.ExitCode != 7 {
 		t.Fatalf("exit %d", o.ExitCode)
 	}
-	if Classify(o) != ClassShortSession {
+	if Classify(o) != ClassFailed {
 		t.Fatalf("class %v", Classify(o))
 	}
 	r := testutil.ReadRecord(t, rec)
@@ -97,4 +109,75 @@ type lineCred string
 func (l lineCred) WriteLine(w io.Writer) error {
 	_, err := io.WriteString(w, string(l)+"\n")
 	return err
+}
+
+// FreeRDP's own clients say with their exit code how a session ended, and
+// most endings that exit non-zero are not failures: the SDL client exits 1
+// when its window is closed, and 2 when the user logs off. Only the failures
+// among them say the password may be wrong.
+func TestClassify_FreeRDPExitCodes(t *testing.T) {
+	t.Parallel()
+	long := time.Minute
+	for _, tc := range []struct {
+		client      string
+		code        int
+		dur         time.Duration
+		class       Class
+		reason      string
+		credentials bool
+	}{
+		{"sdl-freerdp3", 0, long, ClassEnded, "", false},
+		{"sdl-freerdp3", 1, long, ClassEnded, "disconnected", false},
+		{"sdl-freerdp3", 1, time.Second, ClassShortSession, "disconnected", false},
+		{"sdl-freerdp3", 2, long, ClassEnded, "logged off", false},
+		{"sdl-freerdp3", 2, time.Second, ClassEnded, "logged off", false},
+		{"xfreerdp3", 3, long, ClassEnded, "idle timeout", false},
+		{"xfreerdp3", 5, long, ClassEnded, "another session took over", false},
+		{"sdl-freerdp3", 11, long, ClassEnded, "disconnected by the user", false},
+		{"xfreerdp3", 12, long, ClassEnded, "logged off", false},
+		{"sdl-freerdp", 131, 16 * time.Second, ClassFailed, "connection failed", false},
+		{"sdl-freerdp3", 132, time.Second, ClassFailed, "authentication failed", true},
+		{"sdl-freerdp3", 134, time.Second, ClassFailed, "logon failed", true},
+		{"sdl-freerdp3", 135, time.Second, ClassFailed, "account locked out", false},
+		{"xfreerdp", 141, 15 * time.Second, ClassFailed, "could not connect", false},
+		{"sdl-freerdp3", 148, time.Second, ClassFailed, "password expired", false},
+		{"sdl-freerdp3", 154, time.Second, ClassFailed, "wrong password", true},
+		// A code FreeRDP does not document says nothing either way.
+		{"sdl-freerdp3", 99, long, ClassFailed, "", true},
+		{"sdl-freerdp3", 255, long, ClassFailed, "", true},
+		// Another client's codes mean something else: every non-zero
+		// status is a failure, and none of them has a reason.
+		{"myrdp", 2, long, ClassFailed, "", true},
+		{"myrdp", 132, long, ClassFailed, "", true},
+		{"myrdp", 0, long, ClassEnded, "", true},
+	} {
+		o := Outcome{Client: tc.client, ExitCode: tc.code, Duration: tc.dur}
+		if got := Classify(o); got != tc.class {
+			t.Errorf("%s %d after %v: class %v, want %v", tc.client, tc.code, tc.dur, got, tc.class)
+		}
+		if got := o.Reason(); got != tc.reason {
+			t.Errorf("%s %d: reason %q, want %q", tc.client, tc.code, got, tc.reason)
+		}
+		if got := o.MaybeCredentials(); got != tc.credentials {
+			t.Errorf("%s %d: credentials %v, want %v", tc.client, tc.code, got, tc.credentials)
+		}
+	}
+	// A client killed by a signal failed, whatever its number reads as.
+	if o := (Outcome{Client: "sdl-freerdp3", ExitCode: 128 + 2, Signaled: true}); Classify(o) != ClassFailed || o.Reason() != "" {
+		t.Fatalf("signalled client: class %v reason %q", Classify(o), o.Reason())
+	}
+}
+
+// The outcome names the client that ran, so its exit code can be read.
+func TestStart_OutcomeNamesTheClient(t *testing.T) {
+	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
+	t.Setenv("FAKERDP_EXIT", "2")
+	l := &Launcher{Stdout: io.Discard, Stderr: io.Discard, OwnSignals: true}
+	sess, err := l.Start(testPlan(t), lineCred("pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := sess.Wait(); o.Client != "sdl-freerdp3" || Classify(o) != ClassEnded || o.Reason() != "logged off" {
+		t.Fatalf("outcome %+v class %v", o, Classify(o))
+	}
 }

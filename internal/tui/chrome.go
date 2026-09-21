@@ -129,6 +129,33 @@ func (m Model) hints(width int, hs ...keyHint) []string {
 	return lines
 }
 
+// shortHints is the footer cut to one line for a short terminal: the key
+// the view is for, or the one that destroys something, and "?", which leads
+// to the rest. A view with neither keeps its last key, which is how it is
+// left. Dropping the footer outright left a user who had never read the help
+// with no key at all on screen.
+func (m Model) shortHints(width int, hs []keyHint) []string {
+	var keep []keyHint
+	for _, h := range hs {
+		if h.intent != intentNormal || h.key == "?" {
+			keep = append(keep, h)
+		}
+	}
+	if len(keep) == 0 && len(hs) > 0 {
+		keep = hs[len(hs)-1:]
+	}
+	lines := m.hints(width, keep...)
+	if len(lines) > 1 {
+		// Two entries that do not fit side by side: "?" is the way to the
+		// others, so it is the one kept.
+		if last := keep[len(keep)-1]; last.key == "?" {
+			lines = m.hints(width, last)
+		}
+		lines = lines[:1]
+	}
+	return lines
+}
+
 // hintStyles returns the key and label styles for a footer entry. The
 // primary and danger labels are in the text colour rather than muted, so the
 // key the view is for reads first.

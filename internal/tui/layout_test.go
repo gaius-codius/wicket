@@ -297,3 +297,128 @@ func TestModal_ShowsTheErrorWhenOneLineIsLeft(t *testing.T) {
 		t.Fatalf("80x9 shows the field but not why it is still here:\n%s", out)
 	}
 }
+
+// eightProfiles is the QA fixture: enough profiles that a short terminal
+// cannot show them all, each with a domain so the selected card has details.
+func eightProfiles() string {
+	var b strings.Builder
+	b.WriteString("[general]\n")
+	for _, n := range []string{"work", "emile-pc", "cafe", "laptop", "bobs-box", "quote", "newbox", "testnet"} {
+		b.WriteString("[[profiles]]\nname = \"" + n + "\"\nhost = \"" + n + ".example\"\nuser = \"alice\"\ndomain = \"CORP\"\nscale = 100\n")
+	}
+	return b.String()
+}
+
+// With a filter open, the filter line and the selected match outrank every
+// piece of chrome. At ten rows or fewer the results used to collapse to a
+// lone "…", and at eight or fewer the query went too, while the divider,
+// blank rows and status line stayed.
+func TestRender_FilterKeepsTheQueryAndAMatch(t *testing.T) {
+	cfg := eightProfiles()
+	for _, w := range []int{20, 30, 50, 60, 100, 130} {
+		for h := heightTiny; h <= 14; h++ {
+			m := sized(t, cfg, w, h, "/", "t")
+			m.setStatus("session stopped", statusInfo)
+			out := stripANSI(m.render())
+			lines := strings.Split(out, "\n")
+			var query, match bool
+			for _, ln := range lines {
+				ln = strings.Trim(ln, "│ ")
+				query = query || strings.HasPrefix(ln, "/ t")
+				match = match || strings.HasPrefix(ln, "▌ ")
+				if ln == "…" {
+					t.Errorf("%dx%d: a lone ellipsis stands in for the matches:\n%s", w, h, out)
+				}
+			}
+			if !query || !match {
+				t.Errorf("%dx%d: query shown %v, selected match shown %v:\n%s", w, h, query, match, out)
+			}
+		}
+	}
+}
+
+// A short terminal gives up spacing, the divider and then footer lines before
+// list rows, cutting the footer to one line before dropping it, and says in
+// the header that more rows exist. It used to keep a four-line footer and the
+// spacing and show the selected profile alone.
+func TestRender_ShortListKeepsRowsBeforeTheFooter(t *testing.T) {
+	cfg := eightProfiles()
+	names := []string{"work", "emile-pc", "cafe", "laptop"}
+	for _, size := range [][2]int{{30, 10}, {50, 10}, {60, 12}, {80, 12}, {100, 10}} {
+		m := sized(t, cfg, size[0], size[1])
+		m.setStatus("session ended", statusInfo)
+		out := stripANSI(m.render())
+		for _, n := range names {
+			if !strings.Contains(out, "  "+n) && !strings.Contains(out, "▌ "+n) {
+				t.Errorf("%dx%d: row %q missing:\n%s", size[0], size[1], n, out)
+			}
+		}
+		if !strings.Contains(out, "of 8") {
+			t.Errorf("%dx%d: nothing says the list is windowed:\n%s", size[0], size[1], out)
+		}
+		if !strings.Contains(out, "session ended") || !strings.Contains(out, "? help") {
+			t.Errorf("%dx%d: status or the way to help missing:\n%s", size[0], size[1], out)
+		}
+	}
+	// When everything fits, the header does not claim a window.
+	if out := stripANSI(sized(t, cfg, 80, 30).render()); strings.Contains(out, "of 8") || !strings.Contains(out, "8 connections") {
+		t.Errorf("80x30 claims a window:\n%s", out)
+	}
+}
+
+// Blank spacer rows go before content: a scroll cue, the form's help line,
+// the host a delete names, and who a session is connected to all used to be
+// dropped while the blank rows around them stayed.
+func TestRender_SpacersGoBeforeContent(t *testing.T) {
+	cfg := eightProfiles()
+	form := stripANSI(sized(t, cfg, 60, 8, "e").render())
+	if !strings.Contains(form, "▼") || !strings.Contains(form, "What the list") {
+		t.Errorf("form 60x8 lost its cue or help:\n%s", form)
+	}
+	del := stripANSI(sized(t, cfg, 40, 8, "D").render())
+	if !strings.Contains(del, "work.example") {
+		t.Errorf("delete 40x8 lost the host:\n%s", del)
+	}
+	base := newHarness(t, cfg, secret.NewMemory())
+	p, _ := base.m.app.Cfg.Profile("work")
+	nm, _ := withSession(base.m, p, false).Update(teaWin(30, 8))
+	if ses := stripANSI(nm.(Model).render()); !strings.Contains(ses, "elapsed") {
+		t.Errorf("session 30x8 lost its detail line:\n%s", ses)
+	}
+}
+
+// Narrow layouts shorten text with an ellipsis rather than cutting it: an
+// empty field's hint was clipped mid-word, and a value too long for its
+// column lost its tail with no sign of it.
+func TestForm_NarrowTextIsMarkedAsCut(t *testing.T) {
+	cfg := fixtureTOML("work", "a-rather-long-host.example.invalid", "u")
+	m := sized(t, cfg, 59, 30, "e")
+	m = focusField(t, m, fieldScale)
+	out := stripANSI(m.render())
+	var pw, host string
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.Contains(ln, "password:") && !strings.Contains(ln, "forget") {
+			pw = ln
+		}
+		if strings.Contains(ln, "host:") {
+			host = ln
+		}
+	}
+	if !strings.Contains(pw, "…") {
+		t.Errorf("the password hint is cut without an ellipsis: %q", pw)
+	}
+	m = sized(t, cfg, 30, 30, "e")
+	m = focusField(t, m, fieldScale)
+	out = stripANSI(m.render())
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.Contains(ln, "host:") {
+			host = ln
+		}
+		if strings.Contains(ln, "scale:") && !strings.Contains(ln, "‹ 100% ›") {
+			t.Errorf("30 wide: the scale does not say which: %q", ln)
+		}
+	}
+	if !strings.Contains(host, "…") {
+		t.Errorf("30 wide: the host is cut without an ellipsis: %q", host)
+	}
+}

@@ -1,6 +1,7 @@
 package theme
 
 import (
+	"fmt"
 	"image/color"
 	"math"
 	"os"
@@ -33,18 +34,19 @@ type Report struct {
 	InvalidTOML   bool
 }
 
+// fileColors is the part of an Omarchy colors.toml that Wicket reads. A key
+// that is missing or not a string is left empty, and its role falls back.
 type fileColors struct {
-	Mode            string `toml:"mode"`
-	Background      string `toml:"background"`
-	Foreground      string `toml:"foreground"`
-	DarkForeground  string `toml:"dark_foreground"`
-	LightForeground string `toml:"light_foreground"`
-	Muted           string `toml:"muted"`
-	Accent          string `toml:"accent"`
-	Green           string `toml:"green"`
-	Red             string `toml:"red"`
-	Yellow          string `toml:"yellow"`
-	Selection       string `toml:"selection"`
+	Background      string
+	Foreground      string
+	DarkForeground  string
+	LightForeground string
+	Muted           string
+	Accent          string
+	Green           string
+	Red             string
+	Yellow          string
+	Selection       string
 }
 
 // wicketDark and wicketLight are Verdigris, Wicket's own theme. They are
@@ -110,9 +112,18 @@ func Load(home string) (Palette, Report) {
 	if modeIsLight(raw) {
 		fb = wicketLight()
 	}
-	var fc fileColors
-	if _, err := toml.Decode(string(data), &fc); err != nil {
-		return paletteFromHex(fb), Report{InvalidTOML: true, FallbackRoles: allRoles()}
+	// Each role is read on its own, so a key of the wrong type costs that
+	// role, not the file. Decoding into a struct stopped at the first type
+	// error and threw the whole theme away, where a bad string fell back
+	// per role.
+	fc := fileColors{}
+	for key, dst := range map[string]*string{
+		"background": &fc.Background, "foreground": &fc.Foreground,
+		"dark_foreground": &fc.DarkForeground, "light_foreground": &fc.LightForeground,
+		"muted": &fc.Muted, "accent": &fc.Accent, "green": &fc.Green, "red": &fc.Red,
+		"yellow": &fc.Yellow, "selection": &fc.Selection,
+	} {
+		*dst, _ = raw[key].(string)
 	}
 	hex := map[string]string{}
 	var fell []string
@@ -179,6 +190,45 @@ func readableOn(surface, want string) string {
 		return "#000000"
 	}
 	return "#FFFFFF"
+}
+
+// liftTo returns want when it reaches target against surface, and otherwise
+// want mixed towards black or white, whichever reads better on surface, just
+// far enough to reach it. Unlike readableOn it keeps the colour's hue where it
+// can, so a lifted accent still reads as the accent rather than as more body
+// text. When target cannot be reached, it returns black or white.
+func liftTo(surface, want string, target float64) string {
+	if want == "" {
+		return readableOn(surface, want)
+	}
+	if contrast(want, surface) >= target {
+		return want
+	}
+	ext := readableOn(surface, "")
+	lo, hi := 0.0, 1.0
+	for range 24 {
+		mid := (lo + hi) / 2
+		if contrast(mix(want, ext, mid), surface) >= target {
+			hi = mid
+		} else {
+			lo = mid
+		}
+	}
+	return mix(want, ext, hi)
+}
+
+// mix is a blended t of the way from a to b, in sRGB.
+func mix(a, b string, t float64) string {
+	if t >= 1 {
+		return b
+	}
+	ra, ga, ba, _ := mustRGBA(a).RGBA()
+	rb, gb, bb, _ := mustRGBA(b).RGBA()
+	ch := func(x, y uint32) uint8 {
+		fx, fy := float64(x>>8), float64(y>>8)
+		return uint8(math.Round(fx + (fy-fx)*t))
+	}
+	return fmt.Sprintf("#%02X%02X%02X", ch(ra, rb), ch(ga, gb), ch(ba, bb))
 }
 
 func modeIsLight(raw map[string]any) bool {

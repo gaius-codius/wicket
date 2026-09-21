@@ -4,6 +4,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -38,13 +39,19 @@ type Model struct {
 	cursor     int
 	status     string
 	statusKind statusKind
-	helpFor    view
+	// statusCarried is set when the status was there before the dialog on
+	// screen opened: an error from something else, which the dialog's own
+	// question, field and keys outrank.
+	statusCarried bool
+	helpFor       view
 	// helpTop is the first help line shown, so a long key list stays
 	// reachable in a short terminal.
 	helpTop  int
 	loadErr  string
 	loadPath string
 	quit     bool
+	// stoppedBy is the SIGTERM or SIGHUP that ended Wicket, if one did.
+	stoppedBy syscall.Signal
 	// now drives relative last-used times; nil means time.Now.
 	now func() time.Time
 
@@ -87,6 +94,10 @@ type Model struct {
 	// Ctrl+C does anything while it is set.
 	session    *sessionState
 	sessionSeq int
+	// keyring is the keyring operation running off the loop, if any; while
+	// it is set only esc and ctrl+c do anything. See keyring.go.
+	keyring    *keyringOp
+	keyringSeq int
 
 	// theme is the start-up theme decision and look what is drawn now; a
 	// background colour reply from the terminal can replace look.
@@ -194,9 +205,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return nm, cmd
 	}
+	next.scopeStatus(m)
 	next, poll := next.resumeUsedPoll(m.listShown())
 	next, check := next.ensurePresence()
 	return next, tea.Batch(cmd, poll, check)
+}
+
+// scopeStatus drops a stale note when a form or dialog opens over the list.
+// "✓ Deleted work." under "▲ Delete newbox?" reads as an answer to the
+// question on screen. Only notes and successes go: a warning or an error
+// is something still to act on, and one the user may not have read yet. A
+// status the opening itself set is left alone.
+func (m *Model) scopeStatus(before Model) {
+	opened := m.view != before.view && isDialog(m.view) && !isDialog(before.view) && before.view != viewHelp
+	if !opened || m.status != before.status || m.statusKind != before.statusKind {
+		return
+	}
+	if m.statusKind == statusInfo || m.statusKind == statusSuccess {
+		m.setStatus("", statusInfo)
+		return
+	}
+	m.statusCarried = true
+}
+
+// isDialog reports whether v is drawn over the list and answers to it.
+func isDialog(v view) bool {
+	return v == viewForm || v == viewDelete || v == viewModal
 }
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -218,6 +252,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleSignal(msg)
 	case presenceMsg:
 		return m.handlePresence(msg)
+	case keyringReplyMsg:
+		return m.handleKeyringReply(msg)
+	case keyringSlowMsg:
+		return m.handleKeyringSlow(msg)
 	case usedPollMsg:
 		return m.handleUsedPoll()
 	case tea.KeyPressMsg:
@@ -230,7 +268,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handlePaste sends a terminal paste to whichever text input has focus.
 func (m Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
-	if m.session != nil {
+	if m.session != nil || m.keyring != nil {
 		return m, nil
 	}
 	switch {
@@ -252,7 +290,17 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.session != nil {
 		return m.handleSessionKey(key)
 	}
+	if m.keyring != nil {
+		return m.handleKeyringKey(key)
+	}
 	if key == "ctrl+c" {
+		if m.formAtStake() {
+			// Unsaved typing is asked about, as esc asks; a second
+			// ctrl+c, while asking, quits.
+			m.view = viewForm
+			m.form.confirmDiscard, m.form.quitOnDiscard = true, true
+			return m, nil
+		}
 		return m.interrupt()
 	}
 	lo := newLayout(m.width, m.height)
@@ -295,6 +343,11 @@ func (m Model) render() string {
 		return m.styles.muted.Render("resize terminal")
 	}
 	context, status, foot, c := m.fitChrome(&lo)
+	if m.view == viewList {
+		// Only now is the list's window known, and with it whether the
+		// header should say that more rows exist.
+		context = m.listContextFit(lo, lo.Inner-lipgloss.Width(brandMark)-2)
+	}
 
 	bodyLines := m.bodyLines(lo)
 	assemble := func(body []string) string {
@@ -346,40 +399,125 @@ func (m Model) panelLayout() layout {
 // fitChrome decides which pieces of the panel survive at the current height
 // and sets lo.Budget to the lines left for the body.
 //
-// Chrome is dropped least-useful-first so the body keeps at least one line and
-// the panel still fits the window. Without this the frame ran off the bottom
-// of any terminal under eight rows, taking the footer and the bottom border
-// with it.
+// Chrome is dropped least-useful-first, and only while the body is short of
+// what it needs at that rank (see bodyNeeds): the spacing and the divider go
+// while the body lacks any of its content, the footer -- first cut to one
+// line, then entirely -- while it lacks what it cannot do without, and the
+// status line and header only to keep a single line of body. Without this the
+// frame ran off the bottom of any terminal under eight rows; with only the
+// last rule, a short terminal kept its spacing and a four-line footer and
+// showed one profile.
 func (m Model) fitChrome(lo *layout) (context string, status, foot []string, c chromeParts) {
 	context, hs := m.chrome()
 	foot = m.hints(lo.Inner, hs...)
 	status = m.statusLines(lo.Inner)
+	// An error left from before a dialog opened is kept, since it may not
+	// have been read, but it is not the dialog's: it gets one line, and goes
+	// before the dialog's keys do. Wrapped whole, three lines of "Deleted
+	// testnet, but…" once left "Delete work?" without its host or its y/n.
+	carried := m.statusCarried && isDialog(m.view)
+	if carried && len(status) > 1 {
+		mark, st := m.statusMark(m.statusKind)
+		status = []string{st.Render(mark) + " " + st.Render(truncate(m.status, max(lo.Inner-2, 1)))}
+	}
 
 	c = chromeParts{header: true, divider: true, topGap: true, gap: true,
 		status: len(status) > 0, foot: len(foot) > 0}
 	avail := max(lo.Height-2, 1) // the frame's top and bottom border
+	room := func() int { return avail - c.cost(len(status), len(foot)) }
+	want, keep, core := m.bodyNeeds(*lo)
+	short := m.shortHints(lo.Inner, hs)
 	// The footer goes before the status line: the keys are in the help view
 	// and the README, while a warning that is never drawn is simply lost.
-	for _, drop := range []*bool{&c.gap, &c.topGap, &c.divider, &c.foot, &c.status, &c.header} {
-		if c.cost(len(status), len(foot))+1 <= avail {
+	steps := []struct {
+		need int
+		drop func()
+	}{
+		{want, func() { c.gap = false }},
+		{want, func() { c.topGap = false }},
+		{want, func() { c.divider = false }},
+		{keep, func() {
+			if carried {
+				c.status = false
+			}
+		}},
+		{keep, func() {
+			if c.foot && len(short) < len(foot) {
+				foot = short
+			} else {
+				c.foot = false
+			}
+		}},
+		{keep, func() { c.foot = false }},
+		{core, func() { c.status = false }},
+		{core, func() { c.header = false }},
+	}
+	for _, st := range steps {
+		if room() >= max(st.need, 1) {
 			break
 		}
-		*drop = false
+		st.drop()
 	}
-	lo.Budget = max(avail-c.cost(len(status), len(foot)), 1)
+	lo.Budget = max(room(), 1)
 	return context, status, foot, c
 }
 
-// listBudget is how many rows the list body gets at the current size. Page
+// bodyNeeds is what the current view's body asks of the chrome, in three
+// ranks: want is everything worth a line of spacing or the divider, keep is
+// what is worth the footer, and core is what is worth the status line and
+// the header. Each is at least one line and want >= keep >= core.
+func (m Model) bodyNeeds(lo layout) (want, keep, core int) {
+	switch m.view {
+	case viewList:
+		if len(m.profiles()) == 0 {
+			break
+		}
+		lo.Budget = 1 << 16
+		pl := m.planList(lo)
+		// The filter line and the selected match are the core: typing into
+		// a filter nobody can see, or at matches nobody can see, is blind.
+		filter := btoi(m.filterActive())
+		rows := max(min(len(pl.vis), listKeepRows), 1)
+		return filter + rows + len(pl.details), filter + rows, filter + 1
+	case viewForm:
+		// The focused row (and a pending "discard?"), then a scroll cue
+		// either side and the help line.
+		c := 1 + btoi(m.form.confirmDiscard)
+		return c + 3, c, c
+	case viewDelete:
+		// The question, then the host that says which profile it means;
+		// the explanation below them is worth the spacing, not the keys.
+		note := len(strings.Split(lipgloss.NewStyle().Width(lo.Inner).Render(deleteNote), "\n"))
+		if p, ok := m.app.Cfg.Profile(m.delName); ok && p.Host != "" {
+			return 2 + note, 2, 1
+		}
+		return 1 + note, 1, 1
+	case viewSession:
+		// Who is connected and for how long; the note only explains, and
+		// is drawn under a gap of its own.
+		if m.session != nil {
+			note := len(strings.Split(lipgloss.NewStyle().Width(max(lo.Inner, 1)).Render(sessionNote), "\n"))
+			return 3 + note, 1, 1
+		}
+	case viewRetry:
+		// What happened, how the client exited and what it said outrank the
+		// spacing and the divider, and are worth the long footer; the hint
+		// and the list row under the overlay only want them.
+		msg, detail, note, hint := m.retryBlocks(lo)
+		keep := len(msg) + len(detail) + len(note)
+		return keep + len(hint) + 2, keep, len(msg)
+	}
+	return 1, 1, 1
+}
+
+// listBudget is how many rows the list shows at the current size. Page
 // movement uses it so pgup and pgdn move by what is on screen, rather than by
 // half the window, which counted the chrome as list rows.
 func (m Model) listBudget() int {
 	lo := newLayout(m.width, m.height)
 	m.fitChrome(&lo)
-	if m.filterActive() {
-		lo.Budget = max(lo.Budget-2, 1)
-	}
-	return lo.Budget
+	pl := m.planList(lo)
+	return max(pl.end-pl.start, 1)
 }
 
 // chromeParts records which pieces of the panel survive at the current height.
@@ -409,8 +547,11 @@ func (m Model) bodyLines(lo layout) []string {
 		// The overlay is the point of this view, so it takes its lines first
 		// and the list underneath gets what is left: at least a row and the
 		// gap above the overlay, or nothing at all.
-		rl := m.viewRetry(lo, max(lo.Budget-2, 1))
+		rl := m.viewRetry(lo, lo.Budget)
 		if lo.Budget-len(rl) < 2 {
+			// No room for a row and the gap above the overlay: the overlay
+			// alone. Holding two lines back for the list, as this once did,
+			// cost the exit status and the client's error.
 			return clipLines(rl, lo.Budget)
 		}
 		listLo := lo
@@ -468,6 +609,13 @@ func clipLines(lines []string, n int) []string {
 // chrome returns the header context and footer keys for the current view.
 // Each key's intent is set here, by what it does in this view.
 func (m Model) chrome() (string, []keyHint) {
+	if m.keyring != nil {
+		// Waiting on the keyring, the only keys are the ones that stop it.
+		w := m
+		w.keyring = nil
+		ctx, _ := w.chrome()
+		return ctx, m.keyringHints()
+	}
 	switch m.view {
 	case viewHelp:
 		return "keys", []keyHint{{"↑/↓", "scroll", intentNormal}, {"esc", "close", intentNormal}}
@@ -481,6 +629,9 @@ func (m Model) chrome() (string, []keyHint) {
 		if m.form.confirmDiscard {
 			// Discarding an edit loses typing, not a saved profile, so y
 			// is not drawn as a danger.
+			if m.form.quitOnDiscard {
+				return ctx, []keyHint{{"y", "discard and quit", intentNormal}, {"n", "keep editing", intentNormal}}
+			}
 			return ctx, []keyHint{{"y", "discard", intentNormal}, {"n", "keep editing", intentNormal}}
 		}
 		hs := []keyHint{{"ctrl+s", "save", intentPrimary}, {"↑/↓", "move", intentNormal}, {"esc", "cancel", intentNormal}}
@@ -492,7 +643,11 @@ func (m Model) chrome() (string, []keyHint) {
 	case viewDelete:
 		return "delete", []keyHint{{"y", "delete", intentDanger}, {"n", "cancel", intentNormal}, {"?", "help", intentNormal}}
 	case viewModal:
-		hs := []keyHint{{"enter", "connect once", intentPrimary}, {"ctrl+s", "save and connect", intentNormal}, {"esc", "cancel", intentNormal}}
+		hs := []keyHint{{"enter", "connect once", intentPrimary}}
+		if m.modal.canSave() {
+			hs = append(hs, keyHint{"ctrl+s", "save and connect", intentNormal})
+		}
+		hs = append(hs, keyHint{"esc", "cancel", intentNormal})
 		if m.modal.focused {
 			// ? belongs in the password, so help needs tab first.
 			return "password", append(hs, keyHint{"tab", "more keys", intentNormal})
@@ -542,6 +697,14 @@ func (m Model) interrupt() (tea.Model, tea.Cmd) {
 	return m.quitNow()
 }
 
+// formAtStake reports whether ctrl+c would throw away form changes nobody
+// has been asked about: the form, or its help, is up with unsaved edits and
+// no "discard?" pending.
+func (m Model) formAtStake() bool {
+	onForm := m.view == viewForm || (m.view == viewHelp && m.prev == viewForm)
+	return onForm && m.form.dirty() && !m.form.confirmDiscard
+}
+
 func (m Model) quitNow() (tea.Model, tea.Cmd) {
 	m.quit = true
 	return m, tea.Quit
@@ -558,6 +721,7 @@ func (m Model) openHelp() (tea.Model, tea.Cmd) {
 func (m *Model) setStatus(msg string, kind statusKind) {
 	m.status = msg
 	m.statusKind = kind
+	m.statusCarried = false
 }
 
 // statusNameWidth caps a profile name quoted on the status line, so a long

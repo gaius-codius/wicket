@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -76,6 +77,12 @@ func startTUI() error {
 func run(args []string, stdout, stderr io.Writer, runTUI func() error) int {
 	if len(args) == 0 {
 		if err := runTUI(); err != nil {
+			// SIGTERM or SIGHUP ended the TUI: exit as wicket connect does,
+			// without calling it an error.
+			var stopped *tui.StoppedError
+			if errors.As(err, &stopped) {
+				return stopped.ExitStatus()
+			}
 			fmt.Fprintln(stderr, err)
 			return 2
 		}

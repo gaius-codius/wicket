@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -55,110 +56,252 @@ type App struct {
 	// after Bubble Tea has returned whatever model it last had.
 	mu     sync.Mutex
 	active *Session
+	// base is the parent of every keyring operation's context, cancelled
+	// when Wicket exits so that nothing is left waiting on the keyring.
+	base     context.Context
+	stopBase context.CancelFunc
 }
 
-func (a *App) SaveProfile(oldName string, newP config.Profile, intent PasswordIntent) (warnings []string, err error) {
+// keyringContext returns a context for one keyring operation, bounded by
+// limit and cancelled early if Wicket exits.
+func (a *App) keyringContext(limit time.Duration) (context.Context, context.CancelFunc) {
+	a.mu.Lock()
+	if a.base == nil {
+		a.base, a.stopBase = context.WithCancel(context.Background())
+	}
+	base := a.base
+	a.mu.Unlock()
+	return context.WithTimeout(base, limit)
+}
+
+// CancelKeyring gives up on every keyring operation still running. Wicket
+// calls it on the way out.
+func (a *App) CancelKeyring() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.stopBase != nil {
+		a.stopBase()
+	}
+}
+
+// savePlan is a validated save, carried out in steps: the keyring work runs
+// off the TUI's update loop, since a keyring can take minutes to answer, and
+// the config write runs on it, since the list reads the config as it draws.
+type savePlan struct {
+	oldName string
+	// old is the profile as it was, or nil for a new one.
+	old    *config.Profile
+	p      config.Profile
+	intent PasswordIntent
+	oldID  secret.Identity
+	newID  secret.Identity
+	// moved is set when the save changes the profile's keyring identity: its
+	// name, host, user or domain.
+	moved bool
+	// accountChanged is the part of moved a user may not expect to carry a
+	// password: a new host, user or domain rather than just a new name.
+	accountChanged bool
+}
+
+// carries reports whether the stored password follows the profile to its new
+// identity. It does whenever the identity changes and the user neither typed
+// a replacement nor asked to forget it: a blank password field keeps what is
+// stored, as the form says, even across a new host, user or domain. Dropping
+// it there, as Wicket once did, deleted the password without a word.
+func (s savePlan) carries() bool { return s.moved && !s.intent.set() && !s.intent.forget() }
+
+// finishes reports whether anything is left for the keyring once the config
+// is written: the old entry to remove, or a typed password to store.
+func (s savePlan) finishes() bool {
+	return s.intent.set() || (s.old != nil && (s.moved || s.intent.forget()))
+}
+
+// carry is what carrySecret did before the config moved.
+type carry struct {
+	// copied is set when the password now also exists under the new
+	// identity, and the old entry can go.
+	copied bool
+	// unknown is set when the keyring could not be read, so Wicket cannot
+	// tell whether there was a password to carry. The old entry is then
+	// left alone: deleting it would lose a password that was never copied.
+	unknown bool
+	// attempted is set once the copy has been sent to the keyring, whether
+	// or not it was confirmed: a write the caller gave up on may still have
+	// landed.
+	attempted bool
+}
+
+// planSave validates a save without touching the config or the keyring.
+func (a *App) planSave(oldName string, newP config.Profile, intent PasswordIntent) (savePlan, error) {
 	// Surrounding whitespace is trimmed rather than rejected. A paste was
 	// already trimmed on its way into the field, so typing the same trailing
 	// space was the only way to see "must not have leading or trailing
 	// whitespace" -- the validator still guards a hand-edited config file.
 	trim(&newP.Name, &newP.Host, &newP.User, &newP.Domain, &newP.Client, &newP.Size)
 	if err := config.ValidateProfile(newP); err != nil {
-		return nil, err
+		return savePlan{}, err
 	}
 	if intent.set() && intent.Password.Empty() {
-		return nil, &config.FieldError{Field: "password", Msg: "cannot store a blank password"}
+		return savePlan{}, &config.FieldError{Field: "password", Msg: "cannot store a blank password"}
 	}
 	if a.Cfg.NameTaken(newP.Name, oldName) {
-		return nil, &config.FieldError{Field: "name", Msg: "already used"}
+		return savePlan{}, &config.FieldError{Field: "name", Msg: "already used"}
 	}
-	var old *config.Profile
+	plan := savePlan{oldName: oldName, p: newP, intent: intent, newID: secret.IdentityFor(a.Cfg.Path(), newP)}
 	if oldName != "" {
 		if p, ok := a.Cfg.Profile(oldName); ok {
-			cp := p
-			old = &cp
+			plan.old = &p
+			plan.oldID = secret.IdentityFor(a.Cfg.Path(), p)
+			plan.accountChanged = p.Host != newP.Host || p.User != newP.User || p.Domain != newP.Domain
+			plan.moved = plan.accountChanged || p.Name != newP.Name
 		}
 	}
-	renamed := old != nil && old.Name != newP.Name
-	identityChanged := old != nil && (old.Host != newP.Host || old.User != newP.User || old.Domain != newP.Domain)
-	var oldID secret.Identity
-	if old != nil {
-		oldID = secret.IdentityFor(a.Cfg.Path(), *old)
-	}
-	newID := secret.IdentityFor(a.Cfg.Path(), newP)
+	return plan, nil
+}
 
-	// A rename leaves the identity otherwise unchanged, so an existing secret
-	// is carried to the new name before the config moves and the old entry is
-	// deleted below. A typed replacement needs none of that: it is written
-	// after the config, like every other save.
-	copiedNew := false
-	if renamed && !identityChanged && !intent.set() && !intent.forget() {
-		res, lerr := a.Secrets.Lookup(oldID)
-		switch {
-		case lerr == nil:
-			if err := a.Secrets.Upsert(newID, res.Password); err != nil {
-				return nil, err
-			}
-			copiedNew = true
-		case errors.Is(lerr, secret.ErrNotFound):
-			// Nothing to carry over.
-		case errors.Is(lerr, secret.ErrUnavailable):
-			// A keyring Wicket cannot reach must not block a rename. The
-			// profile may have no password at all, and on a machine with no
-			// Secret Service there would otherwise be no way to rename
-			// anything. The delete below reports what was left behind.
-		default:
-			return nil, lerr
+// carrySecret copies the stored password to the profile's new identity before
+// the config moves, so there is never a moment when the profile on disk has
+// no password to find. The old entry stays until finishSave, after the config
+// is written: if anything fails first, the password is still where it was.
+func (a *App) carrySecret(ctx context.Context, plan savePlan) (carry, error) {
+	res, err := a.Secrets.Lookup(ctx, plan.oldID)
+	switch {
+	case err == nil:
+		pw := res.Password
+		defer pw.Clear()
+		if err := a.Secrets.Upsert(ctx, plan.newID, pw); err != nil {
+			return carry{attempted: true}, err
 		}
+		return carry{copied: true, attempted: true}, nil
+	case errors.Is(err, secret.ErrNotFound):
+		return carry{}, nil
+	case errors.Is(err, secret.ErrUnavailable):
+		// A keyring Wicket cannot reach must not block a save. The profile
+		// may have no password at all, and on a machine with no Secret
+		// Service there would otherwise be no way to edit anything.
+		return carry{unknown: true}, nil
+	default:
+		return carry{}, err
 	}
+}
 
-	if err := a.Cfg.Upsert(newP, oldName); err != nil {
-		if copiedNew {
-			if derr := a.Secrets.Delete(newID); derr != nil && !errors.Is(derr, secret.ErrNotFound) {
-				warnings = append(warnings, "orphan secret at "+newP.Name)
-			}
-		}
-		return warnings, err
+// commitSave writes the config and moves the last-used time with a rename.
+func (a *App) commitSave(plan savePlan) (warnings []string, err error) {
+	if err := a.Cfg.Upsert(plan.p, plan.oldName); err != nil {
+		return nil, err
 	}
-
-	if renamed && a.State != nil {
-		if err := a.State.Rename(old.Name, newP.Name); err != nil {
+	if plan.old != nil && plan.old.Name != plan.p.Name && a.State != nil {
+		if err := a.State.Rename(plan.old.Name, plan.p.Name); err != nil {
 			warnings = append(warnings, "last_used: "+err.Error())
-		}
-	}
-
-	if old != nil && (renamed || identityChanged || intent.forget()) {
-		if err := a.Secrets.Delete(oldID); err != nil && !errors.Is(err, secret.ErrNotFound) {
-			warnings = append(warnings, leftoverWarning(err))
-		}
-	}
-
-	if intent.set() {
-		if err := a.Secrets.Upsert(newID, intent.Password); err != nil {
-			warnings = append(warnings, "could not save password: "+err.Error())
 		}
 	}
 	return warnings, nil
 }
 
-func (a *App) DeleteProfile(name string) (warnings []string, err error) {
+// undoCarry removes a copy carrySecret made, when the config write that was
+// to follow it failed.
+func (a *App) undoCarry(ctx context.Context, plan savePlan) []string {
+	if err := a.Secrets.Delete(ctx, plan.newID); err != nil && !errors.Is(err, secret.ErrNotFound) {
+		return []string{"a copy of its password was left in the keyring"}
+	}
+	return nil
+}
+
+// finishSave does the keyring work that follows the config write. A typed
+// password is stored before the old entry is removed, and the old entry is
+// removed only once it has been: a failure between the two leaves a password
+// behind rather than none.
+func (a *App) finishSave(ctx context.Context, plan savePlan, c carry) (warnings []string) {
+	if plan.intent.set() {
+		if err := a.Secrets.Upsert(ctx, plan.newID, plan.intent.Password); err != nil {
+			warnings = append(warnings, "could not save password: "+keyringProblem(err))
+			if plan.old != nil && plan.moved {
+				// The old password is the only one there is. It used to be
+				// deleted anyway, and a keyring that refused the new one
+				// lost both.
+				warnings = append(warnings, "the old one was kept under its old details")
+			}
+			return warnings
+		}
+	}
+	if plan.old == nil || !(plan.moved || plan.intent.forget()) {
+		return warnings
+	}
+	if c.unknown {
+		// The password, if there was one, was never copied, so the old
+		// entry is all there is.
+		return append(warnings, leftoverWarning(secret.ErrUnavailable))
+	}
+	if err := a.Secrets.Delete(ctx, plan.oldID); err != nil && !errors.Is(err, secret.ErrNotFound) {
+		warnings = append(warnings, leftoverWarning(err))
+	}
+	return warnings
+}
+
+// SaveProfile writes newP over the profile called oldName, or adds it when
+// oldName is empty, and does what intent says with its stored password. It
+// runs the steps the TUI runs one at a time, in the same order.
+func (a *App) SaveProfile(ctx context.Context, oldName string, newP config.Profile, intent PasswordIntent) (warnings []string, err error) {
+	plan, err := a.planSave(oldName, newP, intent)
+	if err != nil {
+		return nil, err
+	}
+	var c carry
+	if plan.carries() {
+		if c, err = a.carrySecret(ctx, plan); err != nil {
+			return nil, carryFailed(err)
+		}
+	}
+	warnings, err = a.commitSave(plan)
+	if err != nil {
+		if c.copied {
+			warnings = append(warnings, a.undoCarry(ctx, plan)...)
+		}
+		return warnings, err
+	}
+	return append(warnings, a.finishSave(ctx, plan, c)...), nil
+}
+
+// carryFailed explains a save refused because its password could not be
+// moved. Nothing was written, and the password is still stored as it was.
+func carryFailed(err error) error {
+	return fmt.Errorf("could not move the saved password (%s), so nothing was saved; type a new password or switch on forget password to save without it", keyringProblem(err))
+}
+
+// removeProfile deletes name from the config and the last-used state, and
+// returns the keyring identity its password was stored under, for
+// forgetSecret to remove off the update loop.
+func (a *App) removeProfile(name string) (id secret.Identity, warnings []string, err error) {
 	p, ok := a.Cfg.Profile(name)
 	if !ok {
-		return nil, fmt.Errorf("profile %q not found", name)
+		return id, nil, fmt.Errorf("profile %q not found", name)
 	}
-	id := secret.IdentityFor(a.Cfg.Path(), p)
+	id = secret.IdentityFor(a.Cfg.Path(), p)
 	if err := a.Cfg.Remove(name); err != nil {
-		return nil, err
+		return id, nil, err
 	}
 	if a.State != nil {
 		if err := a.State.Forget(name); err != nil {
 			warnings = append(warnings, "last_used: "+err.Error())
 		}
 	}
-	if err := a.Secrets.Delete(id); err != nil && !errors.Is(err, secret.ErrNotFound) {
-		warnings = append(warnings, leftoverWarning(err))
+	return id, warnings, nil
+}
+
+// forgetSecret removes a deleted profile's password.
+func (a *App) forgetSecret(ctx context.Context, id secret.Identity) []string {
+	if err := a.Secrets.Delete(ctx, id); err != nil && !errors.Is(err, secret.ErrNotFound) {
+		return []string{leftoverWarning(err)}
 	}
-	return warnings, nil
+	return nil
+}
+
+func (a *App) DeleteProfile(ctx context.Context, name string) (warnings []string, err error) {
+	id, warnings, err := a.removeProfile(name)
+	if err != nil {
+		return nil, err
+	}
+	return append(warnings, a.forgetSecret(ctx, id)...), nil
 }
 
 // leftoverWarning describes a secret that could not be removed. A keyring that
@@ -167,9 +310,34 @@ func (a *App) DeleteProfile(name string) (warnings []string, err error) {
 // Service, including the ones that never had a password.
 func leftoverWarning(err error) string {
 	if errors.Is(err, secret.ErrUnavailable) {
-		return "keyring unavailable; any saved password was left in place"
+		return keyringProblem(err) + "; any saved password was left in place"
 	}
 	return "a leftover secret may remain"
+}
+
+// keyringProblem says in a few words why a keyring call failed. The error
+// itself can be three lines of D-Bus detail -- a socket path, a method name --
+// that the user can do nothing with and that wraps the status line; what they
+// can act on is whether the keyring was missing, slow, or refused.
+func keyringProblem(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "stopped waiting for the keyring"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "the keyring did not answer"
+	case errors.Is(err, secret.ErrPromptDismissed):
+		return "the keyring prompt was dismissed"
+	case errors.Is(err, secret.ErrPromptTimeout):
+		return "nobody answered the keyring prompt"
+	case errors.Is(err, secret.ErrUnavailable):
+		return "keyring unavailable"
+	case errors.Is(err, secret.ErrNotFound):
+		return "no password saved"
+	}
+	// Anything else is unexpected, and the error is all there is to go on,
+	// so it is kept, on one line and briefly.
+	msg, _, _ := strings.Cut(err.Error(), "\n")
+	return "keyring error: " + truncate(sanitize(msg), 60)
 }
 
 type credResult struct {
@@ -179,12 +347,12 @@ type credResult struct {
 	Err       error
 }
 
-func (a *App) ResolveCredential(p config.Profile, typed *secret.Password) credResult {
+func (a *App) ResolveCredential(ctx context.Context, p config.Profile, typed *secret.Password) credResult {
 	if typed != nil {
 		return credResult{Cred: *typed}
 	}
 	id := secret.IdentityFor(a.Cfg.Path(), p)
-	res, err := a.Secrets.Lookup(id)
+	res, err := a.Secrets.Lookup(ctx, id)
 	if err == nil {
 		return credResult{Cred: res.Password, Multiple: res.Multiple}
 	}
@@ -275,8 +443,18 @@ func (a *App) Wait(s *Session) ConnectResult {
 		res.IsError = true
 	case rdp.ClassShortSession:
 		res.Status = "session ended quickly"
+	case rdp.ClassFailed:
+		// Wicket cannot see whether FreeRDP ever connected, only how it
+		// exited; a failure is reported as one however long it took.
+		res.Status = "FreeRDP exited with an error"
+		if r := out.Reason(); r != "" {
+			res.Status = "FreeRDP failed: " + r
+		}
 	default:
 		res.Status = "session ended"
+		if r := out.Reason(); r != "" {
+			res.Status += ": " + r
+		}
 	}
 	return res
 }
@@ -309,7 +487,8 @@ var (
 )
 
 // clientNote picks the line of the client's output most likely to say why a
-// session failed: the last error, or failing that the last line. It is
+// session failed: the last line naming a FreeRDP error code (ERRCONNECT_ or
+// ERRINFO_), failing that the last error, failing that the last line. It is
 // cleaned of escape sequences and control characters, since it is client
 // output drawn on Wicket's screen. A line that contains the password, which
 // a client could only have echoed, is never a candidate. It is looked for
@@ -318,9 +497,12 @@ var (
 // a line the raw check had passed and the cleaned check could not match.
 func clientNote(out []byte, cred rdp.Credential) string {
 	pw, _ := cred.(secret.Password)
-	var last, lastErr string
+	var last, lastErr, lastCode string
 	for _, ln := range bytes.Split(out, []byte("\n")) {
 		raw := string(ln)
+		if terminalNoise(raw) {
+			continue
+		}
 		clean := cleanOutput(raw)
 		if pw.OccursIn(raw, cleanOutput) || pw.OccursIn(clean, cleanOutput) {
 			continue
@@ -330,14 +512,31 @@ func clientNote(out []byte, cred rdp.Credential) string {
 			continue
 		}
 		last = s
+		if strings.Contains(s, "ERRCONNECT_") || strings.Contains(s, "ERRINFO_") {
+			lastCode = s
+		}
 		if strings.Contains(raw, "ERROR") || strings.Contains(s, "ERRCONNECT") {
 			lastErr = s
 		}
 	}
-	if lastErr != "" {
+	switch {
+	case lastCode != "":
+		return lastCode
+	case lastErr != "":
 		return lastErr
 	}
 	return last
+}
+
+// terminalNoise reports a line FreeRDP logs about the terminal rather than
+// the connection. Its password reader tries to switch off echo on stdin, and
+// stdin is Wicket's pipe, so every run logs "tcsetattr(TCSANOW) failed with
+// Inappropriate ioctl for device" as an ERROR, once more on the way out,
+// after the real error: picked as the last error, it stood in for why every
+// real connection had failed.
+func terminalNoise(line string) bool {
+	return strings.Contains(line, "com.freerdp.utils.passphrase") ||
+		strings.Contains(line, "tcsetattr") || strings.Contains(line, "tcgetattr")
 }
 
 // cleanOutput removes the escape sequences and control characters from a
@@ -366,6 +565,6 @@ func (a *App) ProbeClient(p config.Profile) error {
 	return nil
 }
 
-func (a *App) StoreSecret(p config.Profile, pw secret.Password) error {
-	return a.Secrets.Upsert(secret.IdentityFor(a.Cfg.Path(), p), pw)
+func (a *App) StoreSecret(ctx context.Context, p config.Profile, pw secret.Password) error {
+	return a.Secrets.Upsert(ctx, secret.IdentityFor(a.Cfg.Path(), p), pw)
 }

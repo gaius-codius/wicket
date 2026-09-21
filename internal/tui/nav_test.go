@@ -26,11 +26,10 @@ func manyProfiles(n int) string {
 
 func TestCtrlC_QuitsFromEveryView(t *testing.T) {
 	for _, keys := range [][]string{
-		nil,        // list
-		{"?"},      // help
-		{"n"},      // form
-		{"n", "x"}, // dirty form
-		{"/"},      // filter
+		nil,   // list
+		{"?"}, // help
+		{"n"}, // form
+		{"/"}, // filter
 	} {
 		h := newHarness(t, fixtureTOML("work", "h", "u"), panicStore{})
 		h.m = press(h.m, keys...)
@@ -38,6 +37,37 @@ func TestCtrlC_QuitsFromEveryView(t *testing.T) {
 		if !h.m.quit {
 			t.Fatalf("ctrl+c after %v did not quit (view %v)", keys, h.m.view)
 		}
+	}
+}
+
+// Ctrl+C on a form with unsaved changes asks first, as esc does, and a
+// second ctrl+c while asking quits. It used to quit at once, while the
+// header's "● modified" suggested the typing was protected.
+func TestCtrlC_AsksBeforeDroppingFormChanges(t *testing.T) {
+	for _, keys := range [][]string{{"n", "x"}, {"e", "x", "tab", "tab", "tab", "tab", "tab", "?"}} {
+		h := newHarness(t, fixtureTOML("work", "h", "u"), panicStore{})
+		h.m = press(h.m, keys...)
+		h.m = press(h.m, "ctrl+c")
+		if h.m.quit || h.m.view != viewForm || !h.m.form.confirmDiscard {
+			t.Fatalf("after %v: ctrl+c quit=%v view %v, want the discard question", keys, h.m.quit, h.m.view)
+		}
+		if out := screen(h.m); !strings.Contains(out, "Discard unsaved changes?") || !strings.Contains(out, "discard and quit") {
+			t.Fatalf("after %v: no question on screen:\n%s", keys, out)
+		}
+		h.m = press(h.m, "ctrl+c")
+		if !h.m.quit {
+			t.Fatalf("after %v: a second ctrl+c did not quit", keys)
+		}
+	}
+	// n keeps editing, and y answers the ctrl+c by quitting.
+	h := newHarness(t, fixtureTOML("work", "h", "u"), panicStore{})
+	h.m = press(h.m, "n", "x", "ctrl+c", "n")
+	if h.m.quit || h.m.view != viewForm || h.m.form.p.Name != "x" {
+		t.Fatalf("n: quit=%v view %v name %q", h.m.quit, h.m.view, h.m.form.p.Name)
+	}
+	h.m = press(h.m, "ctrl+c", "y")
+	if !h.m.quit {
+		t.Fatal("y after ctrl+c did not quit")
 	}
 }
 
@@ -211,7 +241,15 @@ func TestList_FilterNoMatches(t *testing.T) {
 	h := newHarness(t, manyProfiles(3), panicStore{})
 	h.m = press(h.m, "/")
 	h.m = typeInto(h.m, "zzz")
+	// With nothing matched, the footer offers nothing to move to or
+	// connect to.
+	if out := screen(h.m); strings.Contains(out, "↑/↓") || !strings.Contains(out, "esc clear") {
+		t.Fatalf("filtering with no matches:\n%s", out)
+	}
 	h.m = press(h.m, "enter")
+	if out := screen(h.m); strings.Contains(out, "enter connect") || !strings.Contains(out, "edit filter") {
+		t.Fatalf("filtered to nothing:\n%s", out)
+	}
 	if !strings.Contains(screen(h.m), "No matches.") {
 		t.Fatal(screen(h.m))
 	}

@@ -73,6 +73,7 @@ type Server struct {
 	dismissed int
 	calls     []string
 	stall     bool
+	stallAll  bool
 	stop      chan struct{}
 }
 
@@ -93,10 +94,26 @@ func (s *Server) StallSearches() {
 	s.stall = true
 }
 
-func (s *Server) record(method string) {
+// StallEverything makes every Secret Service method hang until the server
+// shuts down, so a test can prove that no keyring operation -- a write or a
+// delete as well as a search -- can hold the client up for good.
+func (s *Server) StallEverything() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.stall = true
+	s.stallAll = true
+}
+
+// record logs a call and, when StallEverything is on, holds it until the
+// server shuts down.
+func (s *Server) record(method string) {
+	s.mu.Lock()
 	s.calls = append(s.calls, method)
+	stall := s.stallAll
+	s.mu.Unlock()
+	if stall {
+		<-s.stop
+	}
 }
 
 // SetLocked makes the collection answer searches with locked items, which

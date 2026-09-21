@@ -54,10 +54,10 @@ theme = "auto"
 
 | Value | Meaning |
 |-------|---------|
-| `auto` | Omarchy if `~/.local/state/omarchy/current/theme/colors.toml` exists, else Verdigris |
+| `auto` | Omarchy if `~/.local/state/omarchy/current/theme/colors.toml` exists and is readable, else Verdigris |
 | `wicket` | Verdigris, matched to the terminal |
 | `wicket-dark`, `wicket-light` | Fixed Verdigris variant |
-| `omarchy` | Omarchy (terminal colours + warning if missing) |
+| `omarchy` | Omarchy (terminal colours + warning if missing or unreadable) |
 | `terminal` | Terminal ANSI colours |
 
 ## Keys
@@ -81,8 +81,9 @@ stored one; use `forget password` when editing to clear it.
 
 `Enter` starts FreeRDP in its own window; Wicket stays on the status view
 until that window closes, then cleans up the process group. During a session,
-`Ctrl+C` stops FreeRDP (interrupt, then terminate, then kill). If the session
-dies quickly, you get the exit/error and can retry or enter a new password.
+`Ctrl+C` stops FreeRDP (interrupt, then terminate, then kill). If FreeRDP
+fails, or the session ends within a few seconds, you get the reason and can
+retry or enter a new password. A logoff or disconnect goes back to the list.
 
 ## Contributing
 

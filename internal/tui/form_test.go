@@ -46,7 +46,7 @@ func TestForm_AddAllFields(t *testing.T) {
 		t.Fatalf("toml:\n%s", raw)
 	}
 	id := secret.IdentityFor(h.m.app.Cfg.Path(), p)
-	if _, err := h.store.Lookup(id); err != nil {
+	if _, err := h.store.Lookup(bg, id); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -123,7 +123,7 @@ func TestForm_NewProfileSavesWithoutPassword(t *testing.T) {
 	if p.Host != "host1" || p.User != "user1" {
 		t.Fatalf("%+v", p)
 	}
-	if _, err := h.store.Lookup(secret.IdentityFor(h.m.app.Cfg.Path(), p)); err == nil {
+	if _, err := h.store.Lookup(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p)); err == nil {
 		t.Fatal("must not store a secret")
 	}
 }
@@ -133,7 +133,7 @@ func TestForm_TypeThenClearPasswordSavesUnchangedSecret(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
 	id := secret.IdentityFor(h.m.app.Cfg.Path(), p)
-	_ = store.Upsert(id, mustPassword(t, "keep-me"))
+	_ = store.Upsert(bg, id, mustPassword(t, "keep-me"))
 	h.m = press(h.m, "e")
 	h.m = focusField(t, h.m, fieldPassword)
 	h.m = typeInto(h.m, "x")
@@ -148,7 +148,7 @@ func TestForm_TypeThenClearPasswordSavesUnchangedSecret(t *testing.T) {
 	if h.m.view != viewList {
 		t.Fatalf("view=%v err=%s", h.m.view, h.m.form.err)
 	}
-	got, err := store.Lookup(id)
+	got, err := store.Lookup(bg, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,11 +306,11 @@ func TestForm_ForgetThenEnterShowsModal(t *testing.T) {
 	store := secret.NewMemory()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, "secret"))
+	_ = store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, "secret"))
 	h.m.form = formState{oldName: "work", p: p, forget: true}
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
-	if _, err := store.Lookup(secret.IdentityFor(h.m.app.Cfg.Path(), p)); err == nil {
+	if _, err := store.Lookup(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p)); err == nil {
 		t.Fatal("item should be gone")
 	}
 	h.m = press(h.m, "enter")
@@ -324,13 +324,18 @@ func TestForm_HostChangeDeletesOldSecret(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
 	oldID := secret.IdentityFor(h.m.app.Cfg.Path(), p)
-	_ = store.Upsert(oldID, mustPassword(t, "secret"))
+	_ = store.Upsert(bg, oldID, mustPassword(t, "secret"))
 	p.Host = "other"
 	h.m.form = formState{oldName: "work", p: p}
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
-	if _, err := store.Lookup(oldID); err == nil {
+	if _, err := store.Lookup(bg, oldID); err == nil {
 		t.Fatal("old identity remains")
+	}
+	// The password moved rather than vanished: deleting the old entry alone
+	// is what the bug this once guarded against did too.
+	if got := storedAs(t, store, h.m.app, p); got != "secret" {
+		t.Fatalf("new identity holds %q, want the password carried to it", got)
 	}
 }
 
@@ -416,7 +421,7 @@ func TestForm_TypedPasswordOnEditReplacesTheStoredOne(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
 	id := secret.IdentityFor(h.m.app.Cfg.Path(), p)
-	if err := store.Upsert(id, mustPassword(t, "old")); err != nil {
+	if err := store.Upsert(bg, id, mustPassword(t, "old")); err != nil {
 		t.Fatal(err)
 	}
 	h.m = press(h.m, "e")
@@ -426,7 +431,7 @@ func TestForm_TypedPasswordOnEditReplacesTheStoredOne(t *testing.T) {
 	if h.m.view != viewList {
 		t.Fatalf("view=%v err=%s", h.m.view, h.m.form.err)
 	}
-	got, err := store.Lookup(id)
+	got, err := store.Lookup(bg, id)
 	if err != nil {
 		t.Fatal(err)
 	}

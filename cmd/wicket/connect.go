@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -78,6 +79,8 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	} else if err := st.Record(name); err != nil {
 		fmt.Fprintln(stderr, "warning: last_used:", err)
 	}
+	// A SIGTERM or SIGHUP from here on stops the client's whole process
+	// group and ends Wait; see rdp.Launcher.OwnSignals.
 	out := sess.Wait()
 	if out.StartErr != nil {
 		fmt.Fprintln(stderr, out.StartErr)
@@ -90,8 +93,14 @@ func execLookPath(client string) (string, error) {
 	return rdp.OSRunner{}.LookPath(client)
 }
 
+// resolveCLICredential finds the password for id, asking on a terminal when
+// the keyring has none. Each keyring call is bounded by secret.OpTimeout, which
+// leaves room to answer an unlock prompt; Ctrl+C or SIGTERM end the wait
+// sooner, since nothing is running yet that could be left behind.
 func resolveCLICredential(store secret.Store, id secret.Identity, stderr io.Writer) (rdp.Credential, error) {
-	res, err := store.Lookup(id)
+	ctx, cancel := context.WithTimeout(context.Background(), secret.OpTimeout)
+	res, err := store.Lookup(ctx, id)
+	cancel()
 	if err == nil {
 		if res.Multiple {
 			fmt.Fprintln(stderr, "warning: multiple secrets matched; using the most recently modified")
@@ -128,7 +137,9 @@ func resolveCLICredential(store secret.Store, id secret.Identity, stderr io.Writ
 	}
 	ans := strings.TrimSpace(strings.ToLower(line))
 	if ans == "y" || ans == "yes" {
-		if err := store.Upsert(id, pw); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), secret.OpTimeout)
+		defer cancel()
+		if err := store.Upsert(ctx, id, pw); err != nil {
 			fmt.Fprintln(stderr, "warning: could not save password:", err)
 		}
 	}

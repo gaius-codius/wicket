@@ -12,7 +12,7 @@ func TestDelete_ConfirmRemovesAll(t *testing.T) {
 	store := secret.NewMemory()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, "secret"))
+	_ = store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, "secret"))
 	_ = h.m.app.State.Record("work")
 	h.m = press(h.m, "D")
 	out := screen(h.m)
@@ -23,7 +23,7 @@ func TestDelete_ConfirmRemovesAll(t *testing.T) {
 	if _, ok := h.m.app.Cfg.Profile("work"); ok {
 		t.Fatal("profile remains")
 	}
-	if _, err := store.Lookup(secret.IdentityFor(h.m.app.Cfg.Path(), p)); err == nil {
+	if _, err := store.Lookup(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p)); err == nil {
 		t.Fatal("secret remains")
 	}
 	if _, ok := h.m.app.State.LastUsed("work"); ok {
@@ -38,13 +38,13 @@ func TestDelete_CancelLeavesAll(t *testing.T) {
 	store := secret.NewMemory()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = store.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, "secret"))
+	_ = store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, "secret"))
 	h.m = press(h.m, "D")
 	h.m = press(h.m, "n")
 	if _, ok := h.m.app.Cfg.Profile("work"); !ok {
 		t.Fatal("removed on cancel")
 	}
-	if _, err := store.Lookup(secret.IdentityFor(h.m.app.Cfg.Path(), p)); err != nil {
+	if _, err := store.Lookup(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -82,7 +82,7 @@ func TestDelete_LeftoverStatus(t *testing.T) {
 	store := &wrapStore{inner: inner, deleteErr: os.ErrPermission}
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	_ = inner.Upsert(secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, "secret"))
+	_ = inner.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, "secret"))
 	h.m = press(h.m, "D")
 	h.m = press(h.m, "y")
 	if !strings.Contains(h.m.status, "leftover") {

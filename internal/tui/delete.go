@@ -6,7 +6,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/gaius-codius/wicket/internal/secret"
 )
 
 func (m Model) handleDeleteKey(key string) (tea.Model, tea.Cmd) {
@@ -29,16 +28,12 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 	m.delName = ""
 	m.view = viewList
 	m.clearFilter()
-	var id secret.Identity
-	if p, ok := m.app.Cfg.Profile(name); ok {
-		id = m.identity(p)
-	}
 	// The selection moves to the profile shown after the deleted one, or
 	// before it at the end of the list, found by name in the order the list
 	// is drawn in: the cursor is a file index, and the next file index is
 	// somewhere else entirely once the list is sorted.
 	next := m.neighbour(name)
-	warns, err := m.app.DeleteProfile(name)
+	id, warns, err := m.app.removeProfile(name)
 	m.forgetPresence(id)
 	m.refreshUsed()
 	if err != nil {
@@ -46,8 +41,9 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.selectNameOr(next)
-	m.setStatus(outcome("Deleted", name, warns))
-	return m, nil
+	// The password goes off the update loop: the keyring may be slow, or
+	// waiting on an unlock prompt. See keyring.go.
+	return m.finishDelete(name, id, warns)
 }
 
 // neighbour is the name drawn after name in the list, or before it when name

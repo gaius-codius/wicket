@@ -112,6 +112,9 @@ func (c *Config) Upsert(p Profile, except string) error {
 	if err := ValidateProfile(p); err != nil {
 		return err
 	}
+	if err := validateHostForSave(p.Host); err != nil {
+		return err
+	}
 	return c.mutate(func() error {
 		if c.NameTaken(p.Name, except) {
 			return &FieldError{Field: "name", Msg: "already used"}

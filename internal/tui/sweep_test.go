@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -86,8 +87,7 @@ func assertTUISweep(t *testing.T, save bool) {
 	}
 	// The last enter starts the client. The session view it leaves up is
 	// swept while the client runs, then again once it has ended.
-	nm, cmd := h.m.Update(keyMsg("enter"))
-	running := nm.(Model)
+	running, cmd := act(h.m, keyMsg("enter"))
 	if running.session == nil {
 		t.Fatalf("no session: view %v status %q", running.view, running.status)
 	}
@@ -142,9 +142,9 @@ func TestTUISweep_TwoConfigsDoNotShare(t *testing.T) {
 	h1 := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	h2 := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p1, _ := h1.m.app.Cfg.Profile("work")
-	_ = store.Upsert(secret.IdentityFor(h1.m.app.Cfg.Path(), p1), mustPassword(t, sentinel))
+	_ = store.Upsert(bg, secret.IdentityFor(h1.m.app.Cfg.Path(), p1), mustPassword(t, sentinel))
 	p2, _ := h2.m.app.Cfg.Profile("work")
-	if _, err := store.Lookup(secret.IdentityFor(h2.m.app.Cfg.Path(), p2)); err == nil {
+	if _, err := store.Lookup(bg, secret.IdentityFor(h2.m.app.Cfg.Path(), p2)); err == nil {
 		t.Fatal("configs shared an item")
 	}
 }
@@ -152,7 +152,7 @@ func TestTUISweep_TwoConfigsDoNotShare(t *testing.T) {
 // lookupPanics fails the test if anything reads a stored secret.
 type lookupPanics struct{ *secret.Memory }
 
-func (lookupPanics) Lookup(secret.Identity) (secret.LookupResult, error) {
+func (lookupPanics) Lookup(context.Context, secret.Identity) (secret.LookupResult, error) {
 	panic("the presence check must not read the secret")
 }
 
@@ -163,7 +163,7 @@ func TestTUISweep_PresenceNeverCarriesPassword(t *testing.T) {
 	store := lookupPanics{secret.NewMemory()}
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	if err := store.Upsert(h.m.identity(p), mustPassword(t, sentinel)); err != nil {
+	if err := store.Upsert(bg, h.m.identity(p), mustPassword(t, sentinel)); err != nil {
 		t.Fatal(err)
 	}
 	for _, size := range [][2]int{{80, 24}, {140, 30}} {

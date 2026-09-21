@@ -1,31 +1,93 @@
 package tui
 
 import (
+	"errors"
 	"reflect"
-	"strconv"
-	"strings"
+	"slices"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
 
+// Field ids run in the order the form shows them, which is also tab order.
 const (
 	fieldName = iota
 	fieldHost
 	fieldUser
 	fieldDomain
-	fieldClient
 	fieldSize
 	fieldFullscreen
 	fieldDynamic
 	fieldScale
 	fieldPassword
 	fieldForget
+	fieldClient
 	fieldCount
 )
+
+// fieldNone marks an error that belongs to no row.
+const fieldNone = -1
+
+// formLabels are what the form calls each field. They are for people, not
+// for matching: a config key and a label differ ("dynamic_resolution" and
+// "dynamic resolution"), and matching errors by label once left the error
+// for that field unattached to it.
+var formLabels = [fieldCount]string{
+	fieldName:       "name",
+	fieldHost:       "host",
+	fieldUser:       "user",
+	fieldDomain:     "domain",
+	fieldSize:       "size",
+	fieldFullscreen: "fullscreen",
+	fieldDynamic:    "dynamic resolution",
+	fieldScale:      "scale",
+	fieldPassword:   "password",
+	fieldForget:     "forget password",
+	fieldClient:     "client",
+}
+
+// fieldKeys are the names validation errors use for each field: the config
+// keys, plus "password", which SaveProfile uses for the keyring. "forget
+// password" has none; nothing can be wrong with it.
+var fieldKeys = [fieldCount]string{
+	fieldName:       "name",
+	fieldHost:       "host",
+	fieldUser:       "user",
+	fieldDomain:     "domain",
+	fieldSize:       "size",
+	fieldFullscreen: "fullscreen",
+	fieldDynamic:    "dynamic_resolution",
+	fieldScale:      "scale",
+	fieldPassword:   "password",
+	fieldClient:     "client",
+}
+
+// fieldForKey returns the field a validation error names.
+func fieldForKey(key string) (int, bool) {
+	for id, k := range fieldKeys {
+		if k != "" && k == key {
+			return id, true
+		}
+	}
+	return fieldNone, false
+}
+
+// formSection is a titled group of rows.
+type formSection struct {
+	title  string
+	fields []int
+}
+
+// formSections groups the rows. The order here is the order on screen and
+// the order tab walks them.
+var formSections = []formSection{
+	{"CONNECTION", []int{fieldName, fieldHost, fieldUser, fieldDomain}},
+	{"DISPLAY", []int{fieldSize, fieldFullscreen, fieldDynamic, fieldScale}},
+	{"PASSWORD", []int{fieldPassword, fieldForget}},
+	{"ADVANCED", []int{fieldClient}},
+}
 
 type formState struct {
 	oldName  string
@@ -33,8 +95,10 @@ type formState struct {
 	field    int
 	password string
 	forget   bool
+	// err is the message on screen, and errField the row it belongs to,
+	// or fieldNone for one shown below the form.
 	err      string
-	errField string
+	errField int
 
 	// inputs holds a text input for each text field, indexed by field.
 	inputs [fieldCount]textinput.Model
@@ -65,19 +129,53 @@ func (f *formState) textValue(id int) *string {
 	return nil
 }
 
-// fields lists the rows this form shows, in order. "forget password" only
-// appears on an edit: a profile being added has no stored password to delete,
-// so the row would be inert and would still mark the form dirty.
+// sections lists the groups this form shows, holding only the rows it shows.
+// "forget password" only appears on an edit: a profile being added has no
+// stored password to delete, so the row would be inert and would still mark
+// the form dirty.
+func (f formState) sections() []formSection {
+	out := make([]formSection, 0, len(formSections))
+	for _, sec := range formSections {
+		ids := make([]int, 0, len(sec.fields))
+		for _, id := range sec.fields {
+			if id == fieldForget && f.oldName == "" {
+				continue
+			}
+			ids = append(ids, id)
+		}
+		out = append(out, formSection{sec.title, ids})
+	}
+	return out
+}
+
+// fields lists the rows this form shows, in order.
 func (f formState) fields() []int {
 	ids := make([]int, 0, fieldCount)
-	for id := range fieldCount {
-		if id == fieldForget && f.oldName == "" {
-			continue
-		}
-		ids = append(ids, id)
+	for _, sec := range f.sections() {
+		ids = append(ids, sec.fields...)
 	}
 	return ids
 }
+
+// shows reports whether field id is one of this form's rows.
+func (f formState) shows(id int) bool {
+	return slices.Contains(f.fields(), id)
+}
+
+// setError shows err, under the field it names when it names one this form
+// shows. The field's own row already says which field it is, so only the
+// message goes under it.
+func (f *formState) setError(err error) {
+	f.err, f.errField = err.Error(), fieldNone
+	var fe *config.FieldError
+	if errors.As(err, &fe) {
+		if id, ok := fieldForKey(fe.Field); ok && f.shows(id) {
+			f.err, f.errField = fe.Msg, id
+		}
+	}
+}
+
+func (f *formState) clearError() { f.err, f.errField = "", fieldNone }
 
 // fieldIndex is the focused field's position among the visible rows, which is
 // not its id once a row is hidden.
@@ -115,13 +213,13 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 	if p.Scale == 0 {
 		p.Scale = config.DefaultScale
 	}
-	f := formState{oldName: oldName, p: p, orig: p}
+	f := formState{oldName: oldName, p: p, orig: p, errField: fieldNone}
 	for id := range fieldCount {
 		if v := f.textValue(id); v != nil {
 			f.inputs[id] = m.newInput(*v, id == fieldPassword)
+			f.inputs[id].Placeholder = f.emptyHint(id)
 		}
 	}
-	f.inputs[fieldSize].Placeholder = "dimension (1920x1080), N% (100%) or empty for default"
 	f.focus(fieldName)
 	m.form = f
 	m.view = viewForm
@@ -204,12 +302,12 @@ func (f *formState) editText(msg tea.Msg) {
 	id := f.field
 	in, err := updateInput(f.inputs[id], msg, id == fieldPassword)
 	if err != nil {
-		f.err, f.errField = err.Error(), fieldLabel(id)
+		f.err, f.errField = err.Error(), id
 		return
 	}
 	f.inputs[id] = in
-	if f.errField == fieldLabel(id) {
-		f.err, f.errField = "", ""
+	if f.err != "" && f.errField == id {
+		f.clearError()
 	}
 	v := f.textValue(id)
 	before := *v
@@ -231,7 +329,26 @@ func (f *formState) focus(id int) {
 	}
 }
 
-func fieldLabel(id int) string { return formLabels[id] }
+// emptyHint is what an empty text field shows in place of a value: whether
+// it has to be filled, or what leaving it empty does. The password hints say
+// only what a blank does; the form never asks the keyring whether a password
+// is stored.
+func (f formState) emptyHint(id int) string {
+	switch id {
+	case fieldName, fieldHost, fieldUser, fieldClient:
+		return "required"
+	case fieldDomain:
+		return "optional"
+	case fieldSize:
+		return "client default"
+	case fieldPassword:
+		if f.oldName == "" {
+			return "type to save in the keyring"
+		}
+		return "leave blank to keep any saved one"
+	}
+	return ""
+}
 
 func (m *Model) toggleFormField(f *formState) {
 	switch f.field {
@@ -245,8 +362,8 @@ func (m *Model) toggleFormField(f *formState) {
 		f.forget = !f.forget
 		if f.forget {
 			// Forgetting and typing a replacement are contradictory, so the
-			// checkbox drops the typed password the same way typing one drops
-			// the checkbox.
+			// switch drops the typed password the same way typing one drops
+			// the switch.
 			f.password = ""
 			f.inputs[fieldPassword].SetValue("")
 		}
@@ -284,22 +401,21 @@ func (m Model) cancelForm() (tea.Model, tea.Cmd) {
 
 func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	f := m.form
-	f.err = ""
-	f.errField = ""
+	f.clearError()
 	// Trim before saving rather than after: SaveProfile trims its own copy,
 	// so the form was left holding " work " and selected a profile by a name
 	// that no longer existed.
 	trim(&f.p.Name, &f.p.Host, &f.p.User, &f.p.Domain, &f.p.Client, &f.p.Size)
-	// A typed password is stored, an empty one leaves the keyring as it is, and
-	// the checkbox clears it. editText and toggleFormField keep the first and
-	// last of those from being asked for at once.
+	// A typed password is stored, an empty one leaves the keyring as it is,
+	// and the forget switch clears it. editText and toggleFormField keep the
+	// first and last of those from being asked for at once.
 	var intent PasswordIntent
 	switch {
 	case f.password != "":
 		pw, err := secret.NewPassword(f.password)
 		if err != nil {
-			f.err = err.Error()
-			f.errField = "password"
+			f.err, f.errField = err.Error(), fieldPassword
+			f.focus(fieldPassword)
 			m.form = f
 			return m, nil
 		}
@@ -309,9 +425,12 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	}
 	warns, err := m.app.SaveProfile(f.oldName, f.p, intent)
 	if err != nil {
-		f.err = err.Error()
-		if fe, ok := err.(*config.FieldError); ok {
-			f.errField = fe.Field
+		f.setError(err)
+		// The invalid field may be scrolled out of a short panel, so focus
+		// goes to it: the viewport follows focus, and the fix is typed
+		// there anyway.
+		if f.errField != fieldNone {
+			f.focus(f.errField)
 		}
 		m.form = f
 		return m, nil
@@ -326,86 +445,4 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	// a save with any of them is not reported as a success.
 	m.setStatus(outcome("Saved", name, warns))
 	return m, nil
-}
-
-func (m Model) viewForm(lo layout) string {
-	f := m.form
-	// The label column is sized to the panel, not the other way round: a
-	// narrow terminal should truncate labels rather than render rows wider
-	// than the frame.
-	longest := 0
-	for _, l := range formLabels {
-		longest = max(longest, len(l)+1)
-	}
-	labelW := min(longest, max(lo.Inner-2-6, 3))
-	valueW := max(lo.Inner-2-labelW-2, 1)
-	rows := make([]string, 0, fieldCount)
-	row := func(id int, value string) {
-		label := formLabels[id]
-		mark := "  "
-		labelStyle := m.styles.muted
-		if f.field == id {
-			mark = m.styles.accent.Render("▌ ")
-			labelStyle = m.styles.accent
-		}
-		if f.err != "" && f.errField == strings.ToLower(label) {
-			labelStyle = m.styles.danger
-		}
-		if f.textValue(id) != nil {
-			value = inputView(f.inputs[id], valueW)
-		} else {
-			value = m.styles.primary.Render(truncate(value, valueW))
-		}
-		rows = append(rows, mark+labelStyle.Render(padRight(truncate(label+":", labelW), labelW))+"  "+value)
-	}
-	for _, id := range f.fields() {
-		switch id {
-		case fieldFullscreen:
-			row(id, check(f.p.Fullscreen))
-		case fieldDynamic:
-			row(id, check(f.p.DynamicResolution))
-		case fieldScale:
-			row(id, "‹ "+strconv.Itoa(f.p.Scale)+"% ›")
-		case fieldForget:
-			row(id, check(f.forget))
-		default:
-			row(id, "")
-		}
-	}
-	wrap := lipgloss.NewStyle().Width(lo.Inner)
-	var tail []string
-	switch {
-	case f.confirmDiscard:
-		tail = []string{"", m.styles.warning.Render("▲ ") + m.styles.primary.Render(wrap.Render("Discard unsaved changes?"))}
-	case f.err != "":
-		tail = append([]string{""}, strings.Split(m.styles.danger.Render(wrap.Render("✗ "+f.err)), "\n")...)
-	}
-	// The form scrolls to the focused field instead of running past the
-	// bottom of the panel, where the last rows were unreachable but still
-	// saved by ctrl+s.
-	budget := max(lo.Budget-len(tail), 1)
-	start, end := listWindow(len(rows), f.fieldIndex(), budget, 1)
-	out := append([]string{}, rows[start:end]...)
-	return strings.Join(append(out, tail...), "\n")
-}
-
-var formLabels = [fieldCount]string{
-	fieldName:       "name",
-	fieldHost:       "host",
-	fieldUser:       "user",
-	fieldDomain:     "domain",
-	fieldClient:     "client",
-	fieldSize:       "size",
-	fieldFullscreen: "fullscreen",
-	fieldDynamic:    "dynamic_resolution",
-	fieldScale:      "scale",
-	fieldPassword:   "password",
-	fieldForget:     "forget password",
-}
-
-func check(v bool) string {
-	if v {
-		return "[x]"
-	}
-	return "[ ]"
 }

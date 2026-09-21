@@ -114,18 +114,25 @@ Omarchy theme falls back to Verdigris.
 | `?` | Help for the current view |
 | `q`, Ctrl+C | Quit |
 
-In the form, ↑/↓ or Tab move between fields, text fields take the usual
-cursor keys (←/→, Home/End, Ctrl+W, Ctrl+U), Ctrl+S saves, and Esc cancels
-(asking first if you changed anything). The form scrolls to the focused field,
-so every field is reachable in a short terminal. `?` opens help only when a
-checkbox has focus: in a text field it types a literal `?`. The same is true of
-the password dialog, where Tab leaves the field first.
+The form groups its fields under CONNECTION (name, host, user, domain),
+DISPLAY (size, fullscreen, dynamic resolution, scale), PASSWORD and ADVANCED
+(client), and ↑/↓ or Tab move through them in that order. Text fields take the
+usual cursor keys (←/→, Home/End, Ctrl+W, Ctrl+U); Space or Enter switches an
+on/off field, and ←/→ choose the scale. The line under the fields says what
+the focused one is for. Ctrl+S saves, and Esc cancels (asking first if you
+changed anything; the header shows `● modified` while there is something to
+lose). If a save is refused, the error appears under the field at fault and
+the focus moves there. The form scrolls to the focused field, with a count of
+the fields above and below, so every field is reachable in a short terminal.
+`?` opens help only when an on/off or scale field has focus: in a text field
+it types a literal `?`. The same is true of the password dialog, where Tab
+leaves the field first.
 
 A password typed into the form is saved to the keyring on Ctrl+S; leaving the
-field empty keeps whatever is already stored. To drop a stored password, tick
-`forget password`, which appears only when editing an existing profile. Typing
-a password clears that checkbox and ticking it clears the typed password, so
-the two are never asked for at once.
+field empty keeps whatever is already stored. To drop a stored password, switch
+on `forget password`, which appears only when editing an existing profile.
+Typing a password switches that off and switching it on clears the typed
+password, so the two are never asked for at once.
 
 Paste with your terminal's paste shortcut; Ctrl+V is not bound. A paste may
 carry one trailing line break, which is dropped; anything spanning more than

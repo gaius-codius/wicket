@@ -3,6 +3,8 @@ package tui
 import (
 	"errors"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -47,6 +49,13 @@ func TestForm_AddAllFields(t *testing.T) {
 	if _, err := h.store.Lookup(id); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// openedForm opens the form on p the way n and e do, so its text inputs
+// exist: a failed save moves focus, which a bare formState cannot take.
+func openedForm(m Model, oldName string, p config.Profile) Model {
+	nm, _ := m.openForm(oldName, p)
+	return nm.(Model)
 }
 
 func TestForm_EscAfterPasswordCreatesNothing(t *testing.T) {
@@ -175,10 +184,7 @@ func TestForm_SizeTrimmedOnSave(t *testing.T) {
 
 func TestForm_DuplicateNameRejected(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
-	h.m.form = formState{
-		p: config.Profile{Name: "work", Host: "h2", User: "u2", Client: config.DefaultClient, Scale: 100, DynamicResolution: true},
-	}
-	h.m.view = viewForm
+	h.m = openedForm(h.m, "", config.Profile{Name: "work", Host: "h2", User: "u2", Client: config.DefaultClient, Scale: 100, DynamicResolution: true})
 	before, _ := os.ReadFile(h.cfg)
 	h.m = press(h.m, "ctrl+s")
 	if h.m.view != viewForm {
@@ -193,9 +199,9 @@ func TestForm_DuplicateNameRejected(t *testing.T) {
 func TestForm_SizeValidation(t *testing.T) {
 	h := newHarness(t, "", secret.NewMemory())
 	base := config.Profile{Name: "n", Host: "h", User: "u", Client: config.DefaultClient, Scale: 100, DynamicResolution: true}
-	h.m.form = formState{p: base}
-	h.m.form.p.Size = "nope"
-	h.m.view = viewForm
+	nope := base
+	nope.Size = "nope"
+	h.m = openedForm(h.m, "", nope)
 	h.m = press(h.m, "ctrl+s")
 	if h.m.view != viewForm || h.m.form.err == "" {
 		t.Fatal("size=nope should fail")
@@ -346,15 +352,15 @@ func TestForm_ArrowKeysMoveFields(t *testing.T) {
 	}
 	// Down works from text fields and from toggles alike.
 	h.m = press(h.m, "down", "down", "down", "down", "down", "down")
-	if h.m.form.field != fieldFullscreen {
+	if h.m.form.field != fieldDynamic {
 		t.Fatalf("after 6 downs: %d", h.m.form.field)
 	}
 	h.m = press(h.m, "down", "down", "down", "down", "down", "down", "down")
-	if h.m.form.field != fieldPassword {
+	if h.m.form.field != fieldClient {
 		t.Fatalf("down past last field should stop at last: %d", h.m.form.field)
 	}
 	h.m = press(h.m, "up")
-	if h.m.form.field != fieldScale {
+	if h.m.form.field != fieldPassword {
 		t.Fatalf("up: %d", h.m.form.field)
 	}
 	if h.m.form.p.Name != "" {
@@ -499,5 +505,182 @@ func TestForm_SelectsTheSavedProfileAfterTrimming(t *testing.T) {
 	sel, ok := h.m.selected()
 	if !ok || sel.Name != "qqq" {
 		t.Fatalf("selected %+v, want the profile just saved", sel)
+	}
+}
+
+// Validation errors name config keys and the form shows labels, and the two
+// differ for dynamic resolution. The error used to be matched against the
+// label, so that one never reached its row.
+func TestForm_ErrorAttachesToItsFieldByKey(t *testing.T) {
+	m := sized(t, fixtureTOML("work", "h", "u"), 80, 30, "e")
+	m.form.setError(&config.FieldError{Field: "dynamic_resolution", Msg: "must be a boolean"})
+	if m.form.errField != fieldDynamic {
+		t.Fatalf("error attached to field %d, want dynamic resolution", m.form.errField)
+	}
+	labelW, valueW := formColumns(m.panelLayout().Inner)
+	if row := m.formRow(fieldDynamic, labelW, valueW); !strings.Contains(row, m.styles.danger.Render(padRight("dynamic resolution:", labelW))) {
+		t.Fatalf("label not marked as the invalid one: %q", row)
+	}
+	lines := strings.Split(stripANSI(m.render()), "\n")
+	for i, ln := range lines {
+		if strings.Contains(ln, "dynamic resolution:") {
+			if i+1 >= len(lines) || !strings.Contains(lines[i+1], "✗ must be a boolean") {
+				t.Fatalf("error is not under its field:\n%s", strings.Join(lines, "\n"))
+			}
+			return
+		}
+	}
+	t.Fatalf("no dynamic resolution row:\n%s", strings.Join(lines, "\n"))
+}
+
+// Tab walks the fields in the order the sections show them.
+func TestForm_TabFollowsTheSections(t *testing.T) {
+	m := sized(t, fixtureTOML("work", "h", "u"), 80, 30, "e")
+	want := []int{fieldName, fieldHost, fieldUser, fieldDomain, fieldSize, fieldFullscreen,
+		fieldDynamic, fieldScale, fieldPassword, fieldForget, fieldClient}
+	for i, id := range want {
+		if m.form.field != id {
+			t.Fatalf("tab stop %d is %q, want %q", i, formLabels[m.form.field], formLabels[id])
+		}
+		m = press(m, "tab")
+	}
+	if m.form.field != fieldName {
+		t.Fatalf("tab from the last field went to %q, want name", formLabels[m.form.field])
+	}
+
+	// The screen shows them in the same order, under their headings.
+	out := stripANSI(m.render())
+	at := -1
+	for _, s := range []string{"CONNECTION", "name:", "host:", "user:", "domain:", "DISPLAY", "size:",
+		"fullscreen:", "dynamic resolution:", "scale:", "PASSWORD", "  password:", "forget password:",
+		"ADVANCED", "client:"} {
+		i := strings.Index(out, s)
+		if i <= at {
+			t.Fatalf("%q is out of order:\n%s", s, out)
+		}
+		at = i
+	}
+}
+
+var cuePattern = regexp.MustCompile(`▲ (\d+) (?:more )?above|▼ (\d+) (?:more )?below`)
+
+// The scroll cues count exactly the rows the window leaves out, above and
+// below, wherever the focus is.
+func TestForm_ScrollCuesCountHiddenFields(t *testing.T) {
+	for _, h := range []int{11, 14, 18} {
+		for _, key := range []string{"n", "e"} {
+			m := sized(t, fixtureTOML("work", "h", "u"), 80, h, key)
+			ids := m.form.fields()
+			for _, focus := range ids {
+				m = focusField(t, m, focus)
+				out := stripANSI(m.render())
+				first, shown := -1, 0
+				for i, id := range ids {
+					if strings.Contains(out, "│ ▌ "+formLabels[id]+":") || strings.Contains(out, "│   "+formLabels[id]+":") {
+						if first < 0 {
+							first = i
+						}
+						shown++
+					}
+				}
+				above, below := 0, 0
+				for _, c := range cuePattern.FindAllStringSubmatch(out, -1) {
+					if c[1] != "" {
+						above, _ = strconv.Atoi(c[1])
+					} else {
+						below, _ = strconv.Atoi(c[2])
+					}
+				}
+				if above != first || below != len(ids)-first-shown {
+					t.Fatalf("80x%d %q, %s focused: cues say %d above and %d below; %d rows shown from %d of %d:\n%s",
+						h, key, formLabels[focus], above, below, shown, first, len(ids), out)
+				}
+			}
+		}
+	}
+}
+
+// With a line or two to spare, the focused field comes first and its error
+// second. Clipping the whole form from the bottom used to keep the field and
+// replace the error with an ellipsis.
+func TestForm_FocusedFieldAndErrorSurviveATinyBudget(t *testing.T) {
+	m := sized(t, fixtureTOML("work", "h", "u"), 80, 30, "e")
+	m = focusField(t, m, fieldSize)
+	m.form.setError(&config.FieldError{Field: "size", Msg: "use dimension (1920x1080), N% (e.g. 100%), or empty (FreeRDP chooses)"})
+	lo := m.panelLayout()
+	m.fitChrome(&lo)
+	for budget := 1; budget <= 2; budget++ {
+		lo.Budget = budget
+		body := strings.Split(stripANSI(m.viewForm(lo)), "\n")
+		if len(body) != budget || !strings.HasPrefix(body[0], "▌ size:") {
+			t.Fatalf("budget %d: want the focused row first:\n%s", budget, strings.Join(body, "\n"))
+		}
+		if budget == 2 && !strings.Contains(body[1], "✗ use dimension") {
+			t.Fatalf("budget 2: want the error second:\n%s", strings.Join(body, "\n"))
+		}
+	}
+}
+
+// A failed save moves focus to the field that failed, which scrolls it on
+// screen however far it was from where the cursor stood.
+func TestForm_FailedSaveFocusesTheInvalidField(t *testing.T) {
+	m := sized(t, fixtureTOML("work", "h", "u"), 80, 12, "e")
+	m = focusField(t, m, fieldSize)
+	m = typeInto(m, "nope")
+	m = focusField(t, m, fieldName)
+	m = press(m, "ctrl+s")
+	if m.view != viewForm || m.form.field != fieldSize {
+		t.Fatalf("view %v, focus on %q; want the form, focused on size", m.view, formLabels[m.form.field])
+	}
+	if out := stripANSI(m.render()); !strings.Contains(out, "▌ size:") || !strings.Contains(out, "✗ use dimension") {
+		t.Fatalf("the invalid field or its error is off screen:\n%s", out)
+	}
+}
+
+// The three scales are shown side by side where they fit, and only the
+// current one, between arrows, where they do not.
+func TestForm_ScaleFallsBackWhenNarrow(t *testing.T) {
+	scaleRow := func(w int) string {
+		m := sized(t, fixtureTOML("work", "h", "u"), w, 30, "e")
+		m = focusField(t, m, fieldScale)
+		for _, ln := range strings.Split(stripANSI(m.render()), "\n") {
+			if strings.Contains(ln, "scale:") {
+				return ln
+			}
+		}
+		t.Fatalf("%d wide: no scale row", w)
+		return ""
+	}
+	if row := scaleRow(80); !strings.Contains(row, "‹100%›") || !strings.Contains(row, "140%") || !strings.Contains(row, "180%") {
+		t.Fatalf("80 wide shows %q, want all three choices", row)
+	}
+	if row := scaleRow(44); !strings.Contains(row, "‹ 100% ›") || strings.Contains(row, "180%") {
+		t.Fatalf("44 wide shows %q, want only the current scale", row)
+	}
+}
+
+// The header says when the form holds changes, and says so ahead of the
+// name when the two do not both fit.
+func TestForm_HeaderMarksUnsavedChanges(t *testing.T) {
+	header := func(m Model) string {
+		for _, ln := range strings.Split(stripANSI(m.render()), "\n") {
+			if strings.Contains(ln, brandMark) {
+				return ln
+			}
+		}
+		t.Fatal("no header")
+		return ""
+	}
+	m := sized(t, fixtureTOML("a-connection-with-a-long-name", "h", "u"), 80, 24, "e")
+	if h := header(m); strings.Contains(h, "modified") || !strings.Contains(h, "edit a-connection") {
+		t.Fatalf("unchanged form: %q", h)
+	}
+	m = typeInto(m, "x")
+	if h := header(m); !strings.Contains(h, "edit a-connection") || !strings.Contains(h, "● modified") {
+		t.Fatalf("changed form: %q", h)
+	}
+	nm, _ := m.Update(teaWin(30, 24))
+	if h := header(nm.(Model)); !strings.Contains(h, "● modified") {
+		t.Fatalf("30 wide dropped the marker: %q", h)
 	}
 }

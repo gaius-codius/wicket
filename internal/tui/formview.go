@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/gaius-codius/wicket/internal/rdp"
 )
 
 // formBlock is a run of form lines that the viewport keeps or drops whole: a
@@ -275,8 +277,74 @@ func (m *Model) formValue(id, width int) string {
 		return m.onOff(f.forget, width)
 	case fieldScale:
 		return m.scaleValue(f.p.Scale, width)
+	case fieldClient:
+		return m.clientValue(width)
 	}
 	return inputView(f.inputs[id], width)
+}
+
+// customChoice is the client row's last choice, which makes it a text input.
+const customChoice = "custom…"
+
+// notFound marks a configured client that PATH did not have when the form
+// opened.
+const notFound = "not found"
+
+// clientValue draws the client row: the choices with the current one marked,
+// as the scale row does, or only the current one when they do not fit; or,
+// on "custom…", the text input. A configured client PATH did not have is
+// marked, from the search made as the form opened.
+func (m *Model) clientValue(width int) string {
+	f := &m.form
+	if f.clientCustom() {
+		in := f.inputs[fieldClient]
+		mark := "  " + notFound
+		if f.clientMissing != "" && in.Value() == f.clientMissing &&
+			width-lipgloss.Width(mark) > lipgloss.Width(in.Value()) {
+			return inputView(in, width-lipgloss.Width(mark)) + m.styles.muted.Render(mark)
+		}
+		return inputView(in, width)
+	}
+	choices := append(slices.Clip(f.clients), customChoice)
+	full := len(choices) - 1
+	for _, c := range choices {
+		full += lipgloss.Width(c) + 2
+		if c == f.clientMissing {
+			full += 1 + lipgloss.Width(notFound)
+		}
+	}
+	if full <= width {
+		parts := make([]string, 0, len(choices))
+		for i, c := range choices {
+			var part string
+			if i == f.clientAt {
+				part = m.styles.onSelection(m.styles.primary.Bold(true)).Render("‹" + c + "›")
+			} else {
+				part = m.styles.muted.Render(" " + c + " ")
+			}
+			if c == f.clientMissing {
+				part += " " + m.styles.muted.Render(notFound)
+			}
+			parts = append(parts, part)
+		}
+		return strings.Join(parts, " ")
+	}
+	// Only the current choice, in the tightest form that still marks it,
+	// and with its marker while there is room for one.
+	cur := choices[f.clientAt]
+	forms := []string{"‹ " + cur + " ›", "‹" + cur + "›", cur}
+	if cur == f.clientMissing {
+		forms = []string{"‹" + cur + "› " + notFound, "‹" + cur + "›", cur}
+	}
+	for _, s := range forms {
+		if lipgloss.Width(s) <= width {
+			if head, ok := strings.CutSuffix(s, " "+notFound); ok {
+				return m.styles.primary.Render(head) + " " + m.styles.muted.Render(notFound)
+			}
+			return m.styles.primary.Render(s)
+		}
+	}
+	return m.styles.primary.Render(truncate(cur, width))
 }
 
 // onOff draws a boolean. The words carry the value, so it still reads with
@@ -360,7 +428,24 @@ var formHelp = [fieldCount]string{
 	fieldScale:      "`←/→` to choose.",
 	fieldPassword:   "Saved in the keyring on `ctrl+s`. Empty keeps what is stored.",
 	fieldForget:     "Deletes the stored password on save. `space` switches.",
-	fieldClient:     "FreeRDP binary on PATH.",
+	fieldClient:     "`←/→` to choose.",
+}
+
+// clientHelp says what the client row's current choice is.
+func (f *formState) clientHelp() string {
+	const choose = " `←/→` to choose."
+	switch {
+	case f.detected == 0:
+		return "No FreeRDP client found on PATH. Type a binary name."
+	case f.clientCustom():
+		return "Any FreeRDP-compatible binary on PATH. `←` from the start goes back."
+	case f.clients[f.clientAt] == f.clientMissing:
+		return "Not found on PATH; kept until you choose another." + choose
+	}
+	if about, ok := rdp.AboutClient(f.clients[f.clientAt]); ok {
+		return about + "." + choose
+	}
+	return "The client this profile names, kept as it is." + choose
 }
 
 // formHelpLine is the help for field id on one line of width cells.
@@ -368,6 +453,9 @@ func (m *Model) formHelpLine(id, width int) string {
 	text := formHelp[id]
 	if id == fieldPassword && m.form.oldName == "" {
 		text = "Saved in the keyring on `ctrl+s`. Empty asks when connecting."
+	}
+	if id == fieldClient {
+		text = m.form.clientHelp()
 	}
 	var b strings.Builder
 	left := width

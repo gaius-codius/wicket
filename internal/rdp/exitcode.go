@@ -1,6 +1,10 @@
 package rdp
 
-import "path/filepath"
+import (
+	"path/filepath"
+
+	"github.com/gaius-codius/wicket/internal/config"
+)
 
 // FreeRDP's clients exit with a code that says why the session ended, and
 // most of the non-zero ones are not failures: a remote logoff, an idle
@@ -18,10 +22,63 @@ import "path/filepath"
 
 // freerdpClients are the basenames whose exit codes follow the table.
 var freerdpClients = map[string]bool{
-	"sdl-freerdp3": true,
-	"sdl-freerdp":  true,
-	"xfreerdp3":    true,
-	"xfreerdp":     true,
+	ClientSDL:     true,
+	"sdl-freerdp": true,
+	ClientX11:     true,
+	"xfreerdp":    true,
+}
+
+// The FreeRDP 3 clients Wicket offers by name.
+const (
+	ClientSDL = "sdl-freerdp3"
+	ClientX11 = "xfreerdp3"
+)
+
+// KnownClient is a FreeRDP client the profile form offers by name.
+type KnownClient struct {
+	Name string
+	// About says in a few words what the client is, for the form's help.
+	About string
+}
+
+// KnownClients are the clients the form offers, most preferred first; a new
+// profile gets the first one installed. wlfreerdp3 is left out for now: how
+// well it copes with Wicket's options is still being looked into.
+var KnownClients = []KnownClient{
+	{ClientSDL, "FreeRDP's SDL client (native Wayland and X11)"},
+	{ClientX11, "FreeRDP's X11 client (runs through XWayland on Wayland)"},
+}
+
+// InstalledClients returns the known clients lookPath finds, in order of
+// preference. lookPath is exec.LookPath in production; tests pass their own
+// so that nothing depends on what the machine has installed.
+func InstalledClients(lookPath func(string) (string, error)) []KnownClient {
+	var out []KnownClient
+	for _, c := range KnownClients {
+		if _, err := lookPath(c.Name); err == nil {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// PreferredClient is the client a new profile starts with: the first known
+// client installed, or config.DefaultClient when none is.
+func PreferredClient(installed []KnownClient) string {
+	if len(installed) > 0 {
+		return installed[0].Name
+	}
+	return config.DefaultClient
+}
+
+// AboutClient describes name when it is a known client.
+func AboutClient(name string) (string, bool) {
+	for _, c := range KnownClients {
+		if c.Name == name {
+			return c.About, true
+		}
+	}
+	return "", false
 }
 
 // exitMeaning is what one FreeRDP exit code says.
@@ -102,6 +159,19 @@ var freerdpExits = map[int]exitMeaning{
 // clients, whose exit codes Wicket knows.
 func IsFreeRDP(client string) bool {
 	return freerdpClients[filepath.Base(client)]
+}
+
+// exitPreConnectFailed is ERRCONNECT_PRE_CONNECT_FAILED: the client gave up
+// before it started connecting, which is about the client and its
+// surroundings rather than the host.
+const exitPreConnectFailed = 136
+
+// PreConnectFailed reports whether a FreeRDP client gave up before it began
+// to connect. The SDL client does this when it cannot make sense of the
+// monitors, which a fractionally scaled Wayland output can cause under /f.
+func (o Outcome) PreConnectFailed() bool {
+	_, ok := o.meaning()
+	return ok && o.ExitCode == exitPreConnectFailed
 }
 
 // meaning looks up o's exit code, when the client is FreeRDP's and the code

@@ -33,8 +33,10 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 		m.moveCursor(key)
 		return m, nil
 	case "n":
+		// The client is left empty for openForm, which fills in the first
+		// FreeRDP client installed from the same PATH search it makes for
+		// the client row's choices.
 		return m.openForm("", config.Profile{
-			Client:            config.DefaultClient,
 			Scale:             config.DefaultScale,
 			DynamicResolution: config.DefaultDynamicResolution,
 		})

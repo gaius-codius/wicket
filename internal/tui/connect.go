@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,6 +23,9 @@ type retryState struct {
 	outcome rdp.Outcome
 	// note is the client's own last word on why, cleaned for the screen.
 	note string
+	// fullscreen is a hint for a known client failure under fullscreen,
+	// worked out when the session ended; see fullscreenHint.
+	fullscreen string
 }
 
 func (m Model) beginConnect() (tea.Model, tea.Cmd) {
@@ -110,7 +114,7 @@ func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce b
 		held, _ := cred.(secret.Password)
 		hp := held
 		m.retry = retryState{profile: p, held: &hp, useOnce: keepUseOnce, status: cr.Status, class: cr.Class, outcome: cr.Outcome,
-			note: clientNote(cr.Output, cred)}
+			note: clientNote(cr.Output, cred), fullscreen: m.app.fullscreenHint(p, cr.Outcome)}
 		m.view = viewRetry
 		// The overlay carries the session's own message; only the other
 		// warnings stay on the status line.
@@ -179,9 +183,28 @@ func (m Model) handleRetryKey(key string) (tea.Model, tea.Cmd) {
 // under "could not connect" or a logoff it pointed at the wrong culprit.
 const retryHint = "If the password may be wrong, press n for a new password."
 
+// fullscreenHint is for FreeRDP's SDL client giving up before it connects
+// with fullscreen on. On a fractionally scaled Wayland monitor it can misread
+// the monitor's size (a 3840x2160 output at 1.6 as 102x102) and fail in
+// pre-connect, exit 136, where the X11 client with /f works. That is a
+// FreeRDP bug, so the hint offers ways round it: xfreerdp3 when it is
+// installed, and fullscreen off either way. It searches PATH, so it is asked
+// once, as the session ends, not as the overlay draws.
+func (a *App) fullscreenHint(p config.Profile, o rdp.Outcome) string {
+	if !p.Fullscreen || filepath.Base(o.Client) != rdp.ClientSDL || !o.PreConnectFailed() {
+		return ""
+	}
+	const lead = "FreeRDP's SDL client can fail fullscreen on scaled monitors; "
+	if a.Installed(rdp.ClientX11) {
+		return lead + "try the " + rdp.ClientX11 + " client or turn fullscreen off."
+	}
+	return lead + "try turning fullscreen off."
+}
+
 // retryBlocks are the overlay's parts, most important first: what happened,
-// how the client exited, what it last said, and the hint.
-func (m Model) retryBlocks(lo layout) (msg, detail, note, hint []string) {
+// how the client exited, the fullscreen hint, what the client last said, and
+// the password hint.
+func (m Model) retryBlocks(lo layout) (msg, detail, fullscreen, note, hint []string) {
 	wrap := lipgloss.NewStyle().Width(max(lo.Inner-2, 1))
 	msg = strings.Split(wrap.Render(m.retry.status), "\n")
 	for i := range msg {
@@ -193,6 +216,9 @@ func (m Model) retryBlocks(lo layout) (msg, detail, note, hint []string) {
 	if d := retryDetail(m.retry); d != "" {
 		detail = block(d)
 	}
+	if m.retry.fullscreen != "" {
+		fullscreen = block(m.retry.fullscreen)
+	}
 	if m.retry.note != "" {
 		// One line only: a client's log line can be long, and the hint
 		// below it matters more than its tail.
@@ -201,16 +227,18 @@ func (m Model) retryBlocks(lo layout) (msg, detail, note, hint []string) {
 	if m.retry.class != rdp.ClassStartError && m.retry.outcome.MaybeCredentials() {
 		hint = block(retryHint)
 	}
-	return msg, detail, note, hint
+	return msg, detail, fullscreen, note, hint
 }
 
 // viewRetry renders the overlay in at most room lines. The message is what
 // happened and always stays; how the client exited comes next, since it is
-// a fact the user cannot see anywhere else, then what the client itself last
-// said; the hint repeats a footer key and goes first.
+// a fact the user cannot see anywhere else, then the fullscreen hint, which
+// says what to do about a failure the rest only describe, then what the
+// client itself last said; the password hint repeats a footer key and goes
+// first.
 func (m Model) viewRetry(lo layout, room int) []string {
 	room = max(room, 1)
-	msg, detail, note, hint := m.retryBlocks(lo)
+	msg, detail, fullscreen, note, hint := m.retryBlocks(lo)
 	if len(msg) > room {
 		// Cut the message itself rather than let clipLines swap its last
 		// line for a bare "…": at one line that took the ▲ marker and every
@@ -226,7 +254,7 @@ func (m Model) viewRetry(lo layout, room int) []string {
 		}
 		lines = append(lines, prefix+m.styles.primary.Bold(true).Render(ln))
 	}
-	for _, block := range [][]string{detail, note, hint} {
+	for _, block := range [][]string{detail, fullscreen, note, hint} {
 		if len(block) > 0 && room-len(lines) >= len(block) {
 			lines = append(lines, block...)
 		}

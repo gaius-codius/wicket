@@ -103,7 +103,7 @@ muted = "#202020"
 }
 
 func TestFallbackSecondaryIsReadable(t *testing.T) {
-	for name, fb := range map[string]map[string]string{"dark": darkFallback(), "light": lightFallback()} {
+	for name, fb := range map[string]map[string]string{"dark": wicketDark(), "light": wicketLight()} {
 		if c := contrast(fb["muted"], fb["surface"]); c < minTextContrast {
 			t.Errorf("%s fallback muted contrast %.2f", name, c)
 		}
@@ -212,7 +212,7 @@ foreground = "#2A2A32"
 			t.Fatalf("run %d surface %s, first run %s", i, got.Hex["surface"], first.Hex["surface"])
 		}
 	}
-	if first.Hex["surface"] != lightFallback()["surface"] {
-		t.Fatalf("surface = %s, want the light fallback %s", first.Hex["surface"], lightFallback()["surface"])
+	if first.Hex["surface"] != wicketLight()["surface"] {
+		t.Fatalf("surface = %s, want the light fallback %s", first.Hex["surface"], wicketLight()["surface"])
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -52,6 +53,17 @@ type Launcher struct {
 	Clock  Clock
 	Stdout io.Writer
 	Stderr io.Writer
+	// OwnSignals says the caller handles SIGINT itself, so Start does not
+	// forward it to the client. The TUI keeps the terminal in raw mode while
+	// a session runs and stops the client through Session.Interrupt; a
+	// second forwarder would count one Ctrl+C twice.
+	OwnSignals bool
+	// WaitDelay bounds how long Wait keeps copying the client's output
+	// after it exits. Output written to anything but a file is copied by a
+	// goroutine that only ends when every holder of the pipe has closed it,
+	// so a helper the client left running would otherwise hold Wait open.
+	// Zero waits for as long as it takes, as exec.Cmd does.
+	WaitDelay time.Duration
 }
 
 func (l *Launcher) clock() Clock {
@@ -68,13 +80,40 @@ func (l *Launcher) runner() Runner {
 	return OSRunner{}
 }
 
-// Session is a started child. Wait returns after the process exits.
+// Session is a started child. Wait returns after the process exits; it may
+// be called from any number of goroutines, as may the signalling methods.
 type Session struct {
-	cmd       *exec.Cmd
-	started   time.Time
-	clock     Clock
+	cmd     *exec.Cmd
+	pgid    int
+	started time.Time
+	clock   Clock
+	// interrupt forwards Wicket's own SIGINT to the client. It is nil when
+	// the launcher's caller handles signals itself.
 	interrupt chan os.Signal
+
+	done chan struct{}
+	out  Outcome
+
+	mu sync.Mutex
+	// reaped is set once the client's pid may no longer be ours to signal:
+	// after Wait has collected it, the kernel is free to hand the number to
+	// an unrelated process, and a kill aimed at the old group could land on
+	// a stranger.
+	reaped bool
+	// stage is how far a stop has escalated, as an index into stopSignals:
+	// 0 until Interrupt, Escalate or Terminate has sent anything.
+	stage int
 }
+
+// stopSignals are the signals a stop sends, in order. They are indexed
+// rather than compared, since SIGKILL's number is lower than SIGTERM's.
+var stopSignals = [...]syscall.Signal{0, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL}
+
+const (
+	stageInt  = 1
+	stageTerm = 2
+	stageKill = 3
+)
 
 type Class int
 
@@ -145,6 +184,7 @@ func (l *Launcher) Start(plan Plan, cred Credential) (*Session, error) {
 		return nil, err
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = l.WaitDelay
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		return nil, err
@@ -162,39 +202,148 @@ func (l *Launcher) Start(plan Plan, cred Credential) (*Session, error) {
 	}
 	_ = stdin.Close()
 
-	intCh := make(chan os.Signal, 1)
-	signal.Notify(intCh, os.Interrupt)
-	go func(proc *os.Process) {
-		for range intCh {
-			if proc != nil {
-				_ = syscall.Kill(-proc.Pid, syscall.SIGINT)
+	sess := &Session{
+		cmd:     cmd,
+		pgid:    cmd.Process.Pid,
+		started: l.clock().Now(),
+		clock:   l.clock(),
+		done:    make(chan struct{}),
+	}
+	if !l.OwnSignals {
+		sess.interrupt = make(chan os.Signal, 1)
+		signal.Notify(sess.interrupt, os.Interrupt)
+		go func(ch <-chan os.Signal) {
+			for range ch {
+				sess.signal(syscall.SIGINT)
 			}
-		}
-	}(cmd.Process)
-
-	return &Session{
-		cmd:       cmd,
-		started:   l.clock().Now(),
-		clock:     l.clock(),
-		interrupt: intCh,
-	}, nil
+		}(sess.interrupt)
+	}
+	// The reaper is the only caller of cmd.Wait, so Wait, Done and a stop
+	// racing the exit all see one outcome.
+	go sess.reap()
+	return sess, nil
 }
 
+// Wait blocks until the client has exited and returns how it ended.
 func (s *Session) Wait() Outcome {
 	if s == nil || s.cmd == nil {
 		return Outcome{StartErr: errors.New("no session")}
 	}
-	// signal.Stop removes only this session's channel. signal.Reset must not be
-	// used here: it is process-global and would also tear down Bubble Tea's own
-	// SIGINT handler, so the next Ctrl+C would kill the TUI outright and leave
-	// the terminal in raw mode.
-	defer func() {
-		signal.Stop(s.interrupt)
-		close(s.interrupt)
-	}()
+	<-s.done
+	return s.out
+}
+
+// Done is closed once the client has exited and Wait would not block.
+func (s *Session) Done() <-chan struct{} { return s.done }
+
+// Interrupt sends SIGINT to the client's process group: what Ctrl+C would
+// have done in a terminal the client owned. It reports whether the signal
+// was sent; a client that has already exited is left alone.
+func (s *Session) Interrupt() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stage = max(s.stage, stageInt)
+	return s.signalLocked(syscall.SIGINT)
+}
+
+// Escalate sends the next signal a stop has not tried yet: SIGINT, then
+// SIGTERM, then SIGKILL, which it repeats. It returns the signal sent, or 0
+// when the client has already exited.
+func (s *Session) Escalate() syscall.Signal {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reaped {
+		return 0
+	}
+	s.stage = min(s.stage+1, stageKill)
+	sig := stopSignals[s.stage]
+	if !s.signalLocked(sig) {
+		return 0
+	}
+	return sig
+}
+
+// Terminate stops the client for good: SIGTERM to its group, then SIGKILL
+// if it has not exited within grace. It returns once the client has exited,
+// or after a further grace if even SIGKILL has not ended it. Wicket calls it
+// on the way out so a session is never left running without the window
+// that started it.
+func (s *Session) Terminate(grace time.Duration) {
+	if s == nil || s.cmd == nil {
+		return
+	}
+	s.mu.Lock()
+	s.stage = max(s.stage, stageTerm)
+	s.signalLocked(syscall.SIGTERM)
+	s.mu.Unlock()
+	select {
+	case <-s.done:
+		return
+	case <-time.After(grace):
+	}
+	s.mu.Lock()
+	s.stage = stageKill
+	s.signalLocked(syscall.SIGKILL)
+	s.mu.Unlock()
+	select {
+	case <-s.done:
+	case <-time.After(grace):
+	}
+}
+
+func (s *Session) signal(sig syscall.Signal) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.signalLocked(sig)
+}
+
+// signalLocked signals the whole process group, so a helper the client
+// started stops with it. The caller holds s.mu.
+func (s *Session) signalLocked(sig syscall.Signal) bool {
+	if s.reaped {
+		return false
+	}
+	return syscall.Kill(-s.pgid, sig) == nil
+}
+
+func (s *Session) reap() {
+	// Wait for the exit without collecting it. Until the zombie is
+	// collected its pid, and so the group id, cannot be reused, which is
+	// what makes it safe to signal the group right up to this point.
+	if waitExited(s.pgid) {
+		s.mu.Lock()
+		// A client that was asked to stop may have left helpers behind in
+		// its group. They go with it, while the group id is still ours.
+		if s.stage != 0 {
+			_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
+		}
+		s.reaped = true
+		s.mu.Unlock()
+	}
 	err := s.cmd.Wait()
 	dur := s.clock.Now().Sub(s.started)
+	s.mu.Lock()
+	s.reaped = true
+	s.mu.Unlock()
+	// signal.Stop removes only this session's channel. signal.Reset must not be
+	// used here: it is process-global and would also tear down any other
+	// SIGINT handler in the process, such as the TUI's.
+	if s.interrupt != nil {
+		signal.Stop(s.interrupt)
+		close(s.interrupt)
+	}
+	s.out = outcomeOf(err, dur)
+	close(s.done)
+}
+
+func outcomeOf(err error, dur time.Duration) Outcome {
 	o := Outcome{Duration: dur}
+	// ErrWaitDelay means the client exited cleanly -- a failed exit is
+	// reported ahead of it -- but something it started kept its output open
+	// past the launcher's WaitDelay. That is not the client failing to start.
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
+	}
 	if err == nil {
 		return o
 	}

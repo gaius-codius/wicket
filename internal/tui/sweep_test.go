@@ -80,12 +80,23 @@ func assertTUISweep(t *testing.T, save bool) {
 		h.m.form = formState{oldName: "work", p: p, password: sentinel}
 		h.m.view = viewForm
 		h.m = press(h.m, "ctrl+s")
-		h.m = press(h.m, "enter")
 	} else {
 		h.m = press(h.m, "enter")
 		h.m = typeInto(h.m, sentinel)
-		h.m = press(h.m, "enter")
 	}
+	// The last enter starts the client. The session view it leaves up is
+	// swept while the client runs, then again once it has ended.
+	nm, cmd := h.m.Update(keyMsg("enter"))
+	running := nm.(Model)
+	if running.session == nil {
+		t.Fatalf("no session: view %v status %q", running.view, running.status)
+	}
+	assertNoSentinel(t, []byte(running.View().Content), "session view")
+	assertNoSentinel(t, []byte(running.status), "session status")
+	assertNoSentinel(t, []byte(fmt.Sprintf("%#v", *running.session)), "session state")
+	s := running.session.s
+	h.m = settle(running, cmd)
+	assertNoSentinel(t, s.output.Bytes(), "captured client output")
 
 	select {
 	case s := <-seen:

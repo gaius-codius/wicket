@@ -85,6 +85,11 @@ func helpKeys(v view) []hint {
 			{"n / esc", "cancel"},
 			{"?", "help"},
 		}
+	case viewSession:
+		return []hint{
+			{"ctrl+c", "stop the session"},
+			{"ctrl+c again", "force it to stop"},
+		}
 	case viewRetry:
 		return []hint{
 			{"enter", "retry"},
@@ -99,7 +104,7 @@ func helpKeys(v view) []hint {
 			{"pgup/pgdn", "page"},
 			{"/", "filter by name or host"},
 			{"s", "sort: recent first / file order"},
-			{"enter", "connect"},
+			{"enter", "connect (ctrl+c stops the session)"},
 			{"n", "new"},
 			{"e", "edit selected"},
 			{"D", "delete selected"},

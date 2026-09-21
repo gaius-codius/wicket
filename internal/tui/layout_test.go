@@ -51,6 +51,24 @@ func TestRender_NeverOverflowsTheWindow(t *testing.T) {
 			}
 		}
 	}
+	// The session view, before and after a stop has put a status line up.
+	base := newHarness(t, cfg, secret.NewMemory())
+	p, _ := base.m.app.Cfg.Profile("a-connection-with-a-long-name")
+	for _, stopping := range []bool{false, true} {
+		m := withSession(base.m, p, stopping)
+		for w := widthTiny; w <= 130; w++ {
+			for h := heightTiny; h <= 30; h++ {
+				nm, _ := m.Update(teaWin(w, h))
+				gotW, gotH := measure(nm.(Model).render())
+				if gotW > w || gotH > h {
+					if bad < 10 {
+						t.Errorf("%dx%d session (stopping %v) rendered %dx%d", w, h, stopping, gotW, gotH)
+					}
+					bad++
+				}
+			}
+		}
+	}
 	if bad > 0 {
 		t.Fatalf("%d size and view combinations overflowed", bad)
 	}

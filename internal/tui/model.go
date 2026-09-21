@@ -25,6 +25,7 @@ const (
 	viewDelete
 	viewModal
 	viewRetry
+	viewSession
 )
 
 type Model struct {
@@ -82,7 +83,10 @@ type Model struct {
 	retry       retryState
 	useOnce     *secret.Password
 	useOnceName string
-	connecting  bool
+	// session is the client running now, drawn by the session view. Only
+	// Ctrl+C does anything while it is set.
+	session    *sessionState
+	sessionSeq int
 
 	// theme is the start-up theme decision and look what is drawn now; a
 	// background colour reply from the terminal can replace look.
@@ -99,7 +103,6 @@ type Options struct {
 	StatePath  string
 	Store      secret.Store
 	Launcher   *rdp.Launcher
-	Term       TerminalController
 	Width      int
 	Height     int
 	// Getenv reads WICKET_THEME; nil means os.Getenv.
@@ -127,7 +130,6 @@ func New(opt Options) Model {
 		app: &App{
 			Secrets:  opt.Store,
 			Launcher: opt.Launcher,
-			Term:     opt.Term,
 		},
 	}
 	m.filter = m.newInput("", false)
@@ -204,8 +206,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.BackgroundColorMsg:
 		return m.handleBackground(msg)
-	case connectDoneMsg:
-		return m.handleConnectDone(msg)
+	case sessionEndedMsg:
+		return m.handleSessionEnded(msg)
+	case sessionTickMsg:
+		return m.handleSessionTick(msg)
+	case sessionEscalateMsg:
+		return m.handleEscalate(msg)
+	case signalMsg:
+		return m.handleSignal(msg)
 	case presenceMsg:
 		return m.handlePresence(msg)
 	case usedPollMsg:
@@ -220,7 +228,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handlePaste sends a terminal paste to whichever text input has focus.
 func (m Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
-	if m.connecting {
+	if m.session != nil {
 		return m, nil
 	}
 	switch {
@@ -238,10 +246,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.quit {
 		return m, tea.Quit
 	}
-	if m.connecting {
-		return m, nil
-	}
 	key := msg.String()
+	if m.session != nil {
+		return m.handleSessionKey(key)
+	}
 	if key == "ctrl+c" {
 		return m.interrupt()
 	}
@@ -410,6 +418,9 @@ func (m Model) bodyLines(lo layout) []string {
 		out = append(out, rl...)
 		return clipLines(out, lo.Budget)
 	}
+	if m.view == viewSession {
+		return clipLines(m.viewSession(lo), lo.Budget)
+	}
 	var body string
 	switch m.view {
 	case viewHelp:
@@ -485,6 +496,8 @@ func (m Model) chrome() (string, []keyHint) {
 			return "password", append(hs, keyHint{"tab", "more keys", intentNormal})
 		}
 		return "password", append(hs, keyHint{"?", "help", intentNormal}, keyHint{"tab", "edit password", intentNormal})
+	case viewSession:
+		return "session open", m.sessionHints()
 	case viewRetry:
 		return m.listContext(), []keyHint{{"enter", "retry", intentPrimary}, {"n", "new password", intentNormal},
 			{"esc", "dismiss", intentNormal}, {"?", "help", intentNormal}}
@@ -520,6 +533,10 @@ func (m Model) interrupt() (tea.Model, tea.Cmd) {
 	}
 	m.retry = retryState{}
 	m.clearUseOnce()
+	if m.session != nil && m.session.held != nil {
+		// Run stops the client on the way out; its password goes now.
+		m.session.held.Clear()
+	}
 	return m.quitNow()
 }
 
@@ -613,9 +630,9 @@ func (m Model) handleUsedPoll() (tea.Model, tea.Cmd) {
 	return m, usedPoll()
 }
 
-// resumeUsedPoll catches the list up when it comes back into view, from help
-// or a form, and restarts the poll if it had stopped. wasShown is whether the
-// list was shown before this update.
+// resumeUsedPoll catches the list up when it comes back into view, from help,
+// a form or a session, and restarts the poll if it had stopped. wasShown is
+// whether the list was shown before this update.
 func (m Model) resumeUsedPoll(wasShown bool) (Model, tea.Cmd) {
 	if wasShown || !m.listShown() {
 		return m, nil

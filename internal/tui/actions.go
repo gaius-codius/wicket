@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
@@ -38,31 +42,19 @@ func trim(fields ...*string) {
 	}
 }
 
-type TerminalController interface {
-	Release() error
-	Restore() error
-}
-
-type nopTerm struct{}
-
-func (nopTerm) Release() error { return nil }
-func (nopTerm) Restore() error { return nil }
-
 // App is the Bubble Tea-free use-case layer.
 type App struct {
 	Cfg      *config.Config
 	Secrets  secret.Store
 	State    *config.StateStore
 	Launcher *rdp.Launcher
-	Term     TerminalController
 	Clock    rdp.Clock
-}
 
-func (a *App) term() TerminalController {
-	if a.Term != nil {
-		return a.Term
-	}
-	return nopTerm{}
+	// active is the session running now, if any. It is kept here rather
+	// than only in the model so that Wicket can stop it on the way out,
+	// after Bubble Tea has returned whatever model it last had.
+	mu     sync.Mutex
+	active *Session
 }
 
 func (a *App) SaveProfile(oldName string, newP config.Profile, intent PasswordIntent) (warnings []string, err error) {
@@ -208,34 +200,71 @@ type ConnectResult struct {
 	Warning string
 	Status  string
 	IsError bool
+	// Output is the end of what the client logged, raw. It is never drawn
+	// as it is: clientNote cleans it first.
+	Output []byte
 }
 
-func (a *App) Connect(p config.Profile, cred rdp.Credential) ConnectResult {
-	if err := a.term().Release(); err != nil {
-		return ConnectResult{Class: rdp.ClassStartError, Status: err.Error(), IsError: true}
-	}
-	defer func() { _ = a.term().Restore() }()
+// sessionWaitDelay bounds how long a session's end waits on output from
+// helpers the client left behind; see rdp.Launcher.WaitDelay.
+const sessionWaitDelay = 2 * time.Second
+
+// Session is a client started from the TUI and not yet collected.
+type Session struct {
+	rdp    *rdp.Session
+	output *rdp.Tail
+	// warning is a problem from the start that did not stop it, reported
+	// with the result.
+	warning string
+}
+
+// Start launches the client for p and returns once it is running, so the
+// TUI can draw the session while it lasts. The terminal stays with Wicket:
+// the client's output goes to a bounded buffer rather than to a screen
+// Bubble Tea is drawing, and its password to a private pipe as always.
+func (a *App) Start(p config.Profile, cred rdp.Credential) (*Session, error) {
 	plan, err := rdp.BuildPlan(p)
 	if err != nil {
-		return ConnectResult{Class: rdp.ClassStartError, Status: err.Error(), IsError: true}
+		return nil, err
 	}
-	if a.Launcher == nil {
-		a.Launcher = &rdp.Launcher{}
+	l := rdp.Launcher{}
+	if a.Launcher != nil {
+		l = *a.Launcher
 	}
-	sess, err := a.Launcher.Start(plan, cred)
+	out := rdp.NewTail(rdp.OutputLimit)
+	l.Stdout, l.Stderr = out, out
+	// The TUI owns Ctrl+C and SIGINT while a session runs, and stops the
+	// client through the session itself.
+	l.OwnSignals = true
+	l.WaitDelay = sessionWaitDelay
+	rs, err := l.Start(plan, cred)
 	if err != nil {
-		msg := err.Error()
-		return ConnectResult{Class: rdp.ClassStartError, Status: msg, IsError: true}
+		return nil, err
 	}
-	var warn string
+	s := &Session{rdp: rs, output: out}
+	// The last-used time is recorded once the client has started, as it
+	// always was: a client that never ran was not used.
 	if a.State != nil {
 		if err := a.State.Record(p.Name); err != nil {
-			warn = "last_used: " + err.Error()
+			s.warning = "last_used: " + err.Error()
 		}
 	}
-	out := sess.Wait()
+	a.mu.Lock()
+	a.active = s
+	a.mu.Unlock()
+	return s, nil
+}
+
+// Wait blocks until s has ended and says how.
+func (a *App) Wait(s *Session) ConnectResult {
+	out := s.rdp.Wait()
+	a.mu.Lock()
+	if a.active == s {
+		a.active = nil
+	}
+	a.mu.Unlock()
 	cl := rdp.Classify(out)
-	res := ConnectResult{Class: cl, Outcome: out, Warning: warn}
+	res := ConnectResult{Class: cl, Outcome: out, Warning: s.warning, Output: s.output.Bytes()}
 	switch cl {
 	case rdp.ClassStartError:
 		res.Status = "failed to start"
@@ -246,6 +275,61 @@ func (a *App) Connect(p config.Profile, cred rdp.Credential) ConnectResult {
 		res.Status = "session ended"
 	}
 	return res
+}
+
+// startFailed is the result of a client that never ran.
+func startFailed(err error) ConnectResult {
+	return ConnectResult{Class: rdp.ClassStartError, Status: err.Error(), IsError: true}
+}
+
+// StopSession stops a session that is still running and waits for it to
+// end, escalating to SIGKILL after grace. Wicket calls it whenever it exits,
+// so a client is never left running without the window that started it.
+func (a *App) StopSession(grace time.Duration) {
+	a.mu.Lock()
+	s := a.active
+	a.mu.Unlock()
+	if s != nil {
+		s.rdp.Terminate(grace)
+	}
+}
+
+var (
+	// ansiSequence matches the escape sequences a client may colour its
+	// log with.
+	ansiSequence = regexp.MustCompile(`\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[@-Z\\-_])`)
+	// logPrefix matches the bracketed time, thread, level and function
+	// FreeRDP puts in front of every line, up to the " - " before the
+	// message, which would otherwise take the room the message needs.
+	logPrefix = regexp.MustCompile(`^.*?\]\s*-\s+(\[[^\]]*\]:\s*)?`)
+)
+
+// clientNote picks the line of the client's output most likely to say why a
+// session failed: the last error, or failing that the last line. It is
+// cleaned of escape sequences and control characters, since it is client
+// output drawn on Wicket's screen, and dropped altogether if it contains the
+// password, which a client could only have echoed.
+func clientNote(out []byte, cred rdp.Credential) string {
+	var last, lastErr string
+	for _, ln := range bytes.Split(out, []byte("\n")) {
+		s := sanitize(ansiSequence.ReplaceAllString(string(ln), ""))
+		s = strings.TrimSpace(logPrefix.ReplaceAllString(strings.TrimSpace(s), ""))
+		if s == "" {
+			continue
+		}
+		last = s
+		if strings.Contains(string(ln), "ERROR") || strings.Contains(s, "ERRCONNECT") {
+			lastErr = s
+		}
+	}
+	note := last
+	if lastErr != "" {
+		note = lastErr
+	}
+	if pw, ok := cred.(secret.Password); ok && pw.OccursIn(note) {
+		return ""
+	}
+	return note
 }
 
 // ProbeClient reports a missing or illegal client basename before any password prompt.

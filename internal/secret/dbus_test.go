@@ -2,6 +2,7 @@ package secret
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -207,5 +208,90 @@ func TestDBus_UnansweredPromptTimesOutAndDismisses(t *testing.T) {
 	}
 	if n := srv.Stored(); n != 0 {
 		t.Fatalf("%d items stored although the prompt was never answered", n)
+	}
+}
+
+// Presence runs whenever the list cursor moves, so it must answer from
+// metadata alone. Anything beyond SearchItems -- a session, an Unlock, a
+// prompt, a secret -- would put an unlock dialog in front of the user just
+// for looking at a profile, or pull a password into memory for nothing.
+func TestDBus_PresenceSearchesAndNothingElse(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	saved := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	other := IdentityFor("/tmp/a.toml", config.Profile{Name: "home", Host: "h", User: "u"})
+	srv.Seed(saved.Attrs(), "s3cret", 1000)
+	// A locked keyring with a prompt configured: if Presence tried to unlock,
+	// the prompt would be recorded below.
+	srv.SetLocked(true)
+	srv.SetPrompt(fakesecret.PromptAccept)
+
+	store := NewDBus()
+	ctx := context.Background()
+	got, err := store.Presence(ctx, saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != Saved {
+		t.Fatalf("locked match: %v, want saved", got)
+	}
+	got, err = store.Presence(ctx, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != NotSaved {
+		t.Fatalf("no match: %v, want not saved", got)
+	}
+
+	srv.SetLocked(false)
+	got, err = store.Presence(ctx, saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != Saved {
+		t.Fatalf("unlocked match: %v, want saved", got)
+	}
+
+	calls := srv.Calls()
+	if len(calls) != 3 {
+		t.Fatalf("calls %v, want exactly three SearchItems", calls)
+	}
+	for _, c := range calls {
+		if c != "SearchItems" {
+			t.Fatalf("Presence called %s (all calls: %v); it may only search", c, calls)
+		}
+	}
+}
+
+// A keyring daemon that stops answering must not hold the check up past the
+// caller's deadline, and the failure must read as "unavailable" so the list
+// never claims the password is missing.
+func TestDBus_PresenceHonoursTheDeadline(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+	srv.StallSearches()
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := NewDBus().Presence(ctx, id)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("Presence took %v against a 150ms deadline", elapsed)
+	}
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want it to wrap ErrUnavailable", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want it to say the deadline passed", err)
+	}
+}
+
+func TestDBus_PresenceWithoutAServiceIsUnavailable(t *testing.T) {
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+t.TempDir()+"/nobus")
+	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	if _, err := NewDBus().Presence(context.Background(), id); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want it to wrap ErrUnavailable", err)
 	}
 }

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,6 +124,9 @@ func (panicStore) Upsert(secret.Identity, secret.Password) error {
 func (panicStore) Delete(secret.Identity) error {
 	panic("list must not query secret.Store")
 }
+func (panicStore) Presence(context.Context, secret.Identity) (secret.Presence, error) {
+	panic("list must not query secret.Store")
+}
 
 type wrapStore struct {
 	inner     secret.Store
@@ -144,6 +148,9 @@ func (w *wrapStore) Upsert(id secret.Identity, pw secret.Password) error {
 		return w.upsertErr
 	}
 	return w.inner.Upsert(id, pw)
+}
+func (w *wrapStore) Presence(ctx context.Context, id secret.Identity) (secret.Presence, error) {
+	return w.inner.Presence(ctx, id)
 }
 func (w *wrapStore) Delete(id secret.Identity) error {
 	if w.deleteErr != nil {

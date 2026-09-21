@@ -56,6 +56,40 @@ func (s *StateStore) LastUsed(name string) (time.Time, bool) {
 	return t, ok
 }
 
+// Snapshot returns every last_used timestamp from a single read of the file,
+// for callers that need many of them at once: rendering and sorting the list
+// through LastUsed would reread state.toml once per row per frame. It reads
+// the way LastUsed does -- missing, unparseable or garbage entries are simply
+// absent -- and the map is the caller's to keep; it is never nil.
+func (s *StateStore) Snapshot() map[string]time.Time {
+	m, err := s.readMerged(false)
+	if err != nil {
+		return map[string]time.Time{}
+	}
+	return m
+}
+
+// StateStamp identifies one version of the state file closely enough to tell
+// that another process has written it. The zero value is a missing file.
+type StateStamp struct {
+	exists bool
+	mod    int64
+	size   int64
+}
+
+// Stamp stats the state file without reading it, so a caller holding a
+// Snapshot can poll cheaply for writes it did not make -- a `wicket connect`
+// from another shell, say -- and read again only when the stamp moves. Take
+// the stamp before the Snapshot it describes: a write in between then shows up
+// as a change on the next poll rather than being missed.
+func (s *StateStore) Stamp() StateStamp {
+	fi, err := os.Stat(s.path)
+	if err != nil {
+		return StateStamp{}
+	}
+	return StateStamp{exists: true, mod: fi.ModTime().UnixNano(), size: fi.Size()}
+}
+
 // Record sets last_used for name to now.
 func (s *StateStore) Record(name string) error {
 	return s.mutate(func(m map[string]time.Time) {

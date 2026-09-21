@@ -90,6 +90,7 @@ func (m Model) modalConnect(save bool) (tea.Model, tea.Cmd) {
 		if err := m.app.StoreSecret(p, pw); err != nil {
 			warn = "could not save password: " + err.Error()
 		}
+		m.forgetPresence(m.identity(p))
 	}
 	m.modal = modalState{}
 	m.view = viewList

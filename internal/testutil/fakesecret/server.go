@@ -71,6 +71,32 @@ type Server struct {
 	pending   func()
 	locked    bool
 	dismissed int
+	calls     []string
+	stall     bool
+	stop      chan struct{}
+}
+
+// Calls lists the Secret Service methods clients have invoked, in order, so a
+// test can prove what a client did not do: open a session, unlock, prompt or
+// fetch a secret.
+func (s *Server) Calls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
+}
+
+// StallSearches makes SearchItems hang until the server shuts down, as a
+// wedged keyring daemon does, so a test can prove the client gives up.
+func (s *Server) StallSearches() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stall = true
+}
+
+func (s *Server) record(method string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, method)
 }
 
 // SetLocked makes the collection answer searches with locked items, which
@@ -160,6 +186,7 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 		conn:    conn,
 		items:   map[dbus.ObjectPath]*item{},
 		session: "/org/freedesktop/secrets/session/s1",
+		stop:    make(chan struct{}),
 	}
 	svc := &serviceObj{s: srv}
 	coll := &collectionObj{s: srv}
@@ -186,6 +213,7 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 		}
 	}
 	cleanup = func() {
+		close(srv.stop)
 		_ = conn.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -197,21 +225,33 @@ type serviceObj struct{ s *Server }
 type collectionObj struct{ s *Server }
 
 func (o *serviceObj) OpenSession(algorithm string, input dbus.Variant) (dbus.Variant, dbus.ObjectPath, *dbus.Error) {
+	o.s.record("OpenSession")
 	return o.s.OpenSession(algorithm, input)
 }
 func (o *serviceObj) SearchItems(attributes map[string]string) ([]dbus.ObjectPath, []dbus.ObjectPath, *dbus.Error) {
+	o.s.record("SearchItems")
+	o.s.mu.Lock()
+	stall := o.s.stall
+	o.s.mu.Unlock()
+	if stall {
+		<-o.s.stop
+	}
 	return o.s.SearchItems(attributes)
 }
 func (o *serviceObj) GetSecrets(items []dbus.ObjectPath, session dbus.ObjectPath) (map[dbus.ObjectPath]secretBlob, *dbus.Error) {
+	o.s.record("GetSecrets")
 	return o.s.GetSecrets(items, session)
 }
 func (o *serviceObj) ReadAlias(name string) (dbus.ObjectPath, *dbus.Error) {
+	o.s.record("ReadAlias")
 	return o.s.ReadAlias(name)
 }
 func (o *serviceObj) Unlock(paths []dbus.ObjectPath) ([]dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
+	o.s.record("Unlock")
 	return o.s.Unlock(paths)
 }
 func (o *collectionObj) CreateItem(properties map[string]dbus.Variant, secret secretBlob, replace bool) (dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
+	o.s.record("CreateItem")
 	return o.s.CreateItem(properties, secret, replace)
 }
 
@@ -220,6 +260,7 @@ type promptObj struct{ s *Server }
 // Prompt answers the outstanding prompt and emits Completed, as the Secret
 // Service does once the user has dealt with the dialog.
 func (o *promptObj) Prompt(window string) *dbus.Error {
+	o.s.record("Prompt")
 	o.s.mu.Lock()
 	mode, apply := o.s.prompt, o.s.pending
 	if mode == PromptStall {
@@ -237,6 +278,7 @@ func (o *promptObj) Prompt(window string) *dbus.Error {
 }
 
 func (o *promptObj) Dismiss() *dbus.Error {
+	o.s.record("Dismiss")
 	o.s.mu.Lock()
 	o.s.pending = nil
 	o.s.dismissed++
@@ -370,6 +412,7 @@ type itemObj struct {
 }
 
 func (o *itemObj) GetSecret(session dbus.ObjectPath) (secretBlob, *dbus.Error) {
+	o.s.record("GetSecret")
 	o.s.mu.Lock()
 	defer o.s.mu.Unlock()
 	it, ok := o.s.items[o.path]
@@ -382,6 +425,7 @@ func (o *itemObj) GetSecret(session dbus.ObjectPath) (secretBlob, *dbus.Error) {
 // Get answers org.freedesktop.DBus.Properties.Get, which is how the client
 // reads an item's Modified time to pick the newest of several matches.
 func (o *itemObj) Get(iface, prop string) (dbus.Variant, *dbus.Error) {
+	o.s.record("Get")
 	o.s.mu.Lock()
 	defer o.s.mu.Unlock()
 	it, ok := o.s.items[o.path]
@@ -402,6 +446,7 @@ func (o *itemObj) Get(iface, prop string) (dbus.Variant, *dbus.Error) {
 }
 
 func (o *itemObj) Delete() (dbus.ObjectPath, *dbus.Error) {
+	o.s.record("Delete")
 	o.s.mu.Lock()
 	defer o.s.mu.Unlock()
 	if o.s.prompt != PromptNone {

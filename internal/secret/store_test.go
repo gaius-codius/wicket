@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -70,3 +71,31 @@ func TestMemoryStore_MostRecentWins(t *testing.T) {
 type writerFunc func([]byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+func TestMemoryStore_Presence(t *testing.T) {
+	t.Parallel()
+	m := NewMemory()
+	ctx := context.Background()
+	id := Identity{Service: "wicket", Config: "/a", Profile: "work", Host: "h", User: "u"}
+	if got, err := m.Presence(ctx, id); err != nil || got != NotSaved {
+		t.Fatalf("empty store: %v, %v", got, err)
+	}
+	pw, _ := NewPassword("s3cret")
+	if err := m.Upsert(id, pw); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := m.Presence(ctx, id); err != nil || got != Saved {
+		t.Fatalf("after upsert: %v, %v", got, err)
+	}
+	// The whole identity is the key: a changed host is a different entry.
+	other := id
+	other.Host = "h2"
+	if got, err := m.Presence(ctx, other); err != nil || got != NotSaved {
+		t.Fatalf("other host: %v, %v", got, err)
+	}
+	done, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := m.Presence(done, id); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("cancelled: %v, want ErrUnavailable", err)
+	}
+}

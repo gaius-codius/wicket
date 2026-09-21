@@ -57,6 +57,25 @@ type Model struct {
 	filterErrKind statusKind
 	filterErrSet  bool
 
+	// sortRecent lists the most recently used profiles first. It lasts
+	// for the session only.
+	sortRecent bool
+	// used is a snapshot of every last-used time. Rows and the sort read it
+	// on every frame, so it is taken once and refreshed only after something
+	// that can change it -- a connect, save or delete -- rather than
+	// rereading state.toml for every row. usedStamp is the file it was read
+	// from, so a poll can tell when another Wicket has written it.
+	used      map[string]time.Time
+	usedStamp config.StateStamp
+	// usedPollIdle is set when the poll for other writers stopped because the
+	// list was hidden; showing the list again restarts it. Only a poll that
+	// has run can stop, so a model nobody called Init on never polls.
+	usedPollIdle bool
+	// presence caches whether each identity has a password in the keyring.
+	// It is filled asynchronously; the list only ever reads it.
+	presence    map[secret.Identity]presenceEntry
+	presenceSeq int
+
 	form        formState
 	delName     string
 	modal       modalState
@@ -145,6 +164,7 @@ func New(opt Options) Model {
 	st, _ := config.OpenState(stPath, nil)
 	m.app.Cfg = cfg
 	m.app.State = st
+	m.refreshUsed()
 	m.loadPath = cfg.Path()
 	if warns := cfg.Warnings(); len(warns) > 0 {
 		m.setStatus(strings.Join(warns, "; "), statusInfo)
@@ -158,9 +178,26 @@ func New(opt Options) Model {
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return m.initTheme() }
+func (m Model) Init() tea.Cmd {
+	// The first poll runs at once, so it is the tick it schedules, not this
+	// command, that waits.
+	return tea.Batch(m.initTheme(), func() tea.Msg { return usedPollMsg{} })
+}
 
+// Update handles msg, then starts a keyring check for the selected profile if
+// the message changed the selection to one the list knows nothing about.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	nm, cmd := m.update(msg)
+	next, ok := nm.(Model)
+	if !ok {
+		return nm, cmd
+	}
+	next, poll := next.resumeUsedPoll(m.listShown())
+	next, check := next.ensurePresence()
+	return next, tea.Batch(cmd, poll, check)
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -169,6 +206,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleBackground(msg)
 	case connectDoneMsg:
 		return m.handleConnectDone(msg)
+	case presenceMsg:
+		return m.handlePresence(msg)
+	case usedPollMsg:
+		return m.handleUsedPoll()
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	case tea.PasteMsg:
@@ -523,6 +564,75 @@ func (m *Model) selectName(name string) {
 			return
 		}
 	}
+}
+
+// refreshUsed retakes the last-used snapshot.
+func (m *Model) refreshUsed() {
+	m.used, m.usedStamp = nil, config.StateStamp{}
+	if m.app != nil && m.app.State != nil {
+		// Stamp first: a write between the two is then seen by the next poll.
+		m.usedStamp = m.app.State.Stamp()
+		m.used = m.app.State.Snapshot()
+	}
+}
+
+// refreshUsedIfChanged retakes the snapshot only when state.toml has changed
+// since the last one, so polling costs a stat rather than a parse.
+func (m *Model) refreshUsedIfChanged() {
+	if m.app != nil && m.app.State != nil && m.app.State.Stamp() != m.usedStamp {
+		m.refreshUsed()
+	}
+}
+
+// usedPollEvery is how often the visible list checks state.toml for a connect
+// made by another Wicket, such as `wicket connect work` in another shell.
+const usedPollEvery = 5 * time.Second
+
+// usedPollMsg asks the model to check state.toml for other writers.
+type usedPollMsg struct{}
+
+func usedPoll() tea.Cmd {
+	return tea.Tick(usedPollEvery, func(time.Time) tea.Msg { return usedPollMsg{} })
+}
+
+// listShown reports whether last-used times are on screen: the list, or the
+// retry overlay drawn over it.
+func (m Model) listShown() bool {
+	return m.view == viewList || m.view == viewRetry
+}
+
+// handleUsedPoll refreshes a stale snapshot and keeps polling while the list
+// is shown. Once it is not, the poll stops rather than waking every few
+// seconds for nothing; resumeUsedPoll starts it again.
+func (m Model) handleUsedPoll() (tea.Model, tea.Cmd) {
+	if !m.listShown() {
+		m.usedPollIdle = true
+		return m, nil
+	}
+	m.refreshUsedIfChanged()
+	return m, usedPoll()
+}
+
+// resumeUsedPoll catches the list up when it comes back into view, from help
+// or a form, and restarts the poll if it had stopped. wasShown is whether the
+// list was shown before this update.
+func (m Model) resumeUsedPoll(wasShown bool) (Model, tea.Cmd) {
+	if wasShown || !m.listShown() {
+		return m, nil
+	}
+	m.refreshUsedIfChanged()
+	if !m.usedPollIdle {
+		// Still running, or never started: either way not ours to start.
+		return m, nil
+	}
+	m.usedPollIdle = false
+	return m, usedPoll()
+}
+
+// selectNameOr selects name, or the first profile when name is gone.
+func (m *Model) selectNameOr(name string) {
+	m.cursor = 0
+	m.selectName(name)
 }
 
 func (m *Model) clearUseOnce() {

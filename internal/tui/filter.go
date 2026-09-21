@@ -3,22 +3,79 @@ package tui
 import (
 	"slices"
 	"strings"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 )
 
-// visible returns the indexes of profiles that match the filter, in file
-// order. With no filter, every profile is visible.
+// visible returns the indexes of profiles that match the filter, in the
+// order the list shows them: file order, or most recent first while that sort
+// is on. With no filter, every profile is visible.
 func (m Model) visible() []int {
 	ps := m.profiles()
-	q := strings.ToLower(strings.TrimSpace(m.filter.Value()))
+	q := m.query()
 	out := make([]int, 0, len(ps))
 	for i, p := range ps {
-		if q == "" || strings.Contains(strings.ToLower(p.Name), q) || strings.Contains(strings.ToLower(p.Host), q) {
+		if q == "" || matchStart(p.Name, q) >= 0 || matchStart(p.Host, q) >= 0 {
 			out = append(out, i)
 		}
 	}
+	if m.sortRecent {
+		m.sortByRecent(ps, out)
+	}
 	return out
+}
+
+// query is the filter text the list matches against.
+func (m Model) query() string {
+	return strings.TrimSpace(m.filter.Value())
+}
+
+// matchSpan finds q in s ignoring case and returns the match as rune offsets,
+// or -1, -1. It compares rune by rune rather than searching strings.ToLower
+// of each: lowering can change a string's length ("İ" becomes two runes), so
+// byte offsets found in the lowered copy do not point at the same text in the
+// original, and the highlight drawn from them would land on the wrong letters.
+func matchSpan(s, q string) (start, end int) {
+	qr := []rune(q)
+	if len(qr) == 0 {
+		return -1, -1
+	}
+	sr := []rune(s)
+	for i := 0; i+len(qr) <= len(sr); i++ {
+		if foldEqual(sr[i:i+len(qr)], qr) {
+			return i, i + len(qr)
+		}
+	}
+	return -1, -1
+}
+
+func matchStart(s, q string) int {
+	start, _ := matchSpan(s, q)
+	return start
+}
+
+// foldEqual reports whether a and b, of equal length, match under Unicode
+// simple case folding.
+func foldEqual(a, b []rune) bool {
+	for i := range a {
+		if !runeFoldEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func runeFoldEqual(a, b rune) bool {
+	if a == b {
+		return true
+	}
+	for r := unicode.SimpleFold(a); r != a; r = unicode.SimpleFold(r) {
+		if r == b {
+			return true
+		}
+	}
+	return false
 }
 
 func (m Model) filterActive() bool {

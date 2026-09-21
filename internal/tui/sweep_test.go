@@ -137,3 +137,36 @@ func TestTUISweep_TwoConfigsDoNotShare(t *testing.T) {
 		t.Fatal("configs shared an item")
 	}
 }
+
+// lookupPanics fails the test if anything reads a stored secret.
+type lookupPanics struct{ *secret.Memory }
+
+func (lookupPanics) Lookup(secret.Identity) (secret.LookupResult, error) {
+	panic("the presence check must not read the secret")
+}
+
+// The password line runs a keyring check on every new selection. It must be
+// answered from metadata alone -- never by reading the secret -- and nothing
+// it carries back or draws may hold the password.
+func TestTUISweep_PresenceNeverCarriesPassword(t *testing.T) {
+	store := lookupPanics{secret.NewMemory()}
+	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
+	p, _ := h.m.app.Cfg.Profile("work")
+	if err := store.Upsert(h.m.identity(p), mustPassword(t, sentinel)); err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range [][2]int{{80, 24}, {140, 30}} {
+		m, cmd := update(h.m, teaWin(size[0], size[1]))
+		reply := onlyReply(t, cmd)
+		assertNoSentinel(t, []byte(fmt.Sprintf("%#v", reply)), "presence reply")
+		m, _ = update(m, reply)
+		out := screen(m)
+		if !strings.Contains(out, "● saved in keyring") {
+			t.Fatalf("%dx%d: want saved:\n%s", size[0], size[1], out)
+		}
+		assertNoSentinel(t, []byte(out), "screen")
+		assertNoSentinel(t, []byte(m.View().Content), "raw view")
+		assertNoSentinel(t, []byte(m.status), "status field")
+		assertNoSentinel(t, []byte(fmt.Sprintf("%#v", m.presence)), "presence cache")
+	}
+}

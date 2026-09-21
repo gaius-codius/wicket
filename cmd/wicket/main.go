@@ -16,7 +16,8 @@ const helpText = `Usage: wicket [command]
 
 Wicket is a terminal UI for saved FreeRDP connections.
 
-With no command, wicket starts the TUI.
+With no command, wicket starts the TUI. Press ? there for its keys; s sorts
+the list by most recent use.
 
 Commands:
   connect <profile>   Connect to a named profile without the TUI

@@ -1,6 +1,8 @@
 package secret
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -11,11 +13,32 @@ type LookupResult struct {
 	Multiple bool
 }
 
+// Presence says whether a password is stored for an identity, as far as the
+// keyring will tell without being unlocked.
+type Presence int
+
+const (
+	NotSaved Presence = iota
+	Saved
+)
+
+func (p Presence) String() string {
+	if p == Saved {
+		return "saved"
+	}
+	return "not saved"
+}
+
 // Store is the primitive secret API. Rename/identity transactions live in tui/actions.go.
 type Store interface {
 	Lookup(Identity) (LookupResult, error)
 	Upsert(Identity, Password) error
 	Delete(Identity) error
+	// Presence checks for a stored password from metadata alone. It never
+	// reads the secret and never prompts, so it may run on every selection
+	// change; ctx bounds how long a slow keyring can hold it up. A keyring
+	// that cannot answer yields an error wrapping ErrUnavailable.
+	Presence(context.Context, Identity) (Presence, error)
 }
 
 type memItem struct {
@@ -54,6 +77,20 @@ func (m *Memory) Lookup(id Identity) (LookupResult, error) {
 		}
 	}
 	return LookupResult{Password: best.secret, Multiple: len(hits) > 1}, nil
+}
+
+func (m *Memory) Presence(ctx context.Context, id Identity) (Presence, error) {
+	if err := ctx.Err(); err != nil {
+		return NotSaved, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, it := range m.items {
+		if it.id == id {
+			return Saved, nil
+		}
+	}
+	return NotSaved, nil
 }
 
 func (m *Memory) Upsert(id Identity, pw Password) error {

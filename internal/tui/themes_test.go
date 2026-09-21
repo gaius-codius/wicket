@@ -35,11 +35,22 @@ func themeModel(t *testing.T, env, body string, tty bool) Model {
 	})
 }
 
+// asksForBackground runs cmd, and any batch it stands for, and reports
+// whether one of them asks the terminal for its background.
 func asksForBackground(cmd tea.Cmd) bool {
 	if cmd == nil {
 		return false
 	}
-	return reflect.TypeOf(cmd()) == reflect.TypeOf(tea.RequestBackgroundColor())
+	msg := cmd()
+	if b, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range b {
+			if asksForBackground(c) {
+				return true
+			}
+		}
+		return false
+	}
+	return reflect.TypeOf(msg) == reflect.TypeOf(tea.RequestBackgroundColor())
 }
 
 // rgbFG is the SGR fragment for an RGB foreground from a #RRGGBB hex.

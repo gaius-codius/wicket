@@ -99,6 +99,7 @@ func (m Model) runConnect(p config.Profile, cred rdp.Credential, keepUseOnce boo
 func (m Model) handleConnectDone(msg connectDoneMsg) (tea.Model, tea.Cmd) {
 	m.connecting = false
 	if msg.execErr != nil && msg.cr.Status == "" {
+		m.refreshUsed()
 		m.clearUseOnce()
 		m.retry = retryState{}
 		m.view = viewList
@@ -109,6 +110,8 @@ func (m Model) handleConnectDone(msg connectDoneMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce bool, extra string, cr ConnectResult) (tea.Model, tea.Cmd) {
+	// Connect records the last-used time once the client starts.
+	m.refreshUsed()
 	// warn holds messages that are not about how the session ended, so they
 	// stay on the status line even when the retry overlay is shown.
 	warn := ""

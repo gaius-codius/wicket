@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/gaius-codius/wicket/internal/secret"
 )
 
 func (m Model) handleDeleteKey(key string) (tea.Model, tea.Cmd) {
@@ -24,25 +26,44 @@ func (m Model) handleDeleteKey(key string) (tea.Model, tea.Cmd) {
 
 func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 	name := m.delName
-	idx := m.cursor
-	warns, err := m.app.DeleteProfile(name)
 	m.delName = ""
 	m.view = viewList
 	m.clearFilter()
+	var id secret.Identity
+	if p, ok := m.app.Cfg.Profile(name); ok {
+		id = m.identity(p)
+	}
+	// The selection moves to the profile shown after the deleted one, or
+	// before it at the end of the list, found by name in the order the list
+	// is drawn in: the cursor is a file index, and the next file index is
+	// somewhere else entirely once the list is sorted.
+	next := m.neighbour(name)
+	warns, err := m.app.DeleteProfile(name)
+	m.forgetPresence(id)
+	m.refreshUsed()
 	if err != nil {
 		m.setStatus(err.Error(), statusError)
 		return m, nil
 	}
-	ps := m.profiles()
-	if len(ps) == 0 {
-		m.cursor = 0
-	} else if idx >= len(ps) {
-		m.cursor = len(ps) - 1
-	} else {
-		m.cursor = idx
-	}
+	m.selectNameOr(next)
 	m.setStatus(outcome("Deleted", name, warns))
 	return m, nil
+}
+
+// neighbour is the name drawn after name in the list, or before it when name
+// is last, or "" when there is no other profile.
+func (m Model) neighbour(name string) string {
+	ps := m.profiles()
+	vis := m.visible()
+	pos := slices.IndexFunc(vis, func(i int) bool { return ps[i].Name == name })
+	switch {
+	case pos < 0 || len(vis) < 2:
+		return ""
+	case pos+1 < len(vis):
+		return ps[vis[pos+1]].Name
+	default:
+		return ps[vis[pos-1]].Name
+	}
 }
 
 // deleteNote is what a delete takes with it, so the user answers knowing.

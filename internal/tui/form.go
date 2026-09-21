@@ -423,7 +423,17 @@ func (m Model) saveForm() (tea.Model, tea.Cmd) {
 	case f.forget:
 		intent = PasswordIntent{Action: PasswordForget}
 	}
+	var oldID secret.Identity
+	if old, ok := m.app.Cfg.Profile(f.oldName); ok {
+		oldID = m.identity(old)
+	}
 	warns, err := m.app.SaveProfile(f.oldName, f.p, intent)
+	// A save can move, replace or delete a password, and a rename or a new
+	// host, user or domain is a new identity, so what the list knew about
+	// either is checked again. Even a failed save may have touched the
+	// keyring on its way to failing.
+	m.forgetPresence(oldID, m.identity(f.p))
+	m.refreshUsed()
 	if err != nil {
 		f.setError(err)
 		// The invalid field may be scrolled out of a short panel, so focus

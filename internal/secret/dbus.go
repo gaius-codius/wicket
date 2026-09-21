@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -32,11 +33,49 @@ type ssSecret struct {
 
 // DBus is a libsecret adapter over org.freedesktop.secrets.
 type DBus struct {
-	connect func() (*dbus.Conn, error)
+	connect func(...dbus.ConnOption) (*dbus.Conn, error)
 }
 
 func NewDBus() *DBus {
-	return &DBus{connect: func() (*dbus.Conn, error) { return dbus.ConnectSessionBus() }}
+	return &DBus{connect: dbus.ConnectSessionBus}
+}
+
+// Presence reports whether an item matches id without reading it. It calls
+// SearchItems and nothing else: no session, no Unlock, no GetSecrets. That is
+// what makes it safe to run while the list is on screen -- a locked keyring
+// would otherwise pop an unlock dialog just because the cursor moved. A locked
+// match counts as saved, because the password is there; only reading it needs
+// the user.
+func (d *DBus) Presence(ctx context.Context, id Identity) (Presence, error) {
+	if err := ctx.Err(); err != nil {
+		return NotSaved, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	// Tying the connection to ctx closes it when the caller gives up, so a
+	// wedged bus cannot keep the goroutine behind a timed-out check alive.
+	conn, err := d.connect(dbus.WithContext(ctx))
+	if err != nil {
+		return NotSaved, unavailable(ctx, err)
+	}
+	defer conn.Close()
+	svc := conn.Object(ssBus, ssServicePath)
+	var unlocked, locked []dbus.ObjectPath
+	if err := svc.CallWithContext(ctx, ssServiceIface+".SearchItems", 0, id.Attrs()).Store(&unlocked, &locked); err != nil {
+		return NotSaved, unavailable(ctx, err)
+	}
+	if len(unlocked)+len(locked) == 0 {
+		return NotSaved, nil
+	}
+	return Saved, nil
+}
+
+// unavailable wraps a failed presence check. When the caller's deadline is the
+// cause it says so, rather than passing on whatever the torn-down connection
+// happened to report.
+func unavailable(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("%w: %w", ErrUnavailable, ctxErr)
+	}
+	return fmt.Errorf("%w: %v", ErrUnavailable, err)
 }
 
 func (d *DBus) Lookup(id Identity) (LookupResult, error) {

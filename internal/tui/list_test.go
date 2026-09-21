@@ -16,8 +16,9 @@ func TestList_SelectedCardDetailsAndLastUsed(t *testing.T) {
 	if err := h.m.app.State.Record("work"); err != nil {
 		t.Fatal(err)
 	}
+	h.m.refreshUsed()
 	out := screen(h.m)
-	for _, want := range []string{"◧ wicket", "work", "192.168.1.20", "jdoe", "last used", "just now"} {
+	for _, want := range []string{"◧ wicket", "work", "192.168.1.20", "jdoe", "just now"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
@@ -25,6 +26,23 @@ func TestList_SelectedCardDetailsAndLastUsed(t *testing.T) {
 	if strings.Contains(out, "never") {
 		t.Fatalf("recorded last-used still never:\n%s", out)
 	}
+	// The time is on the row, so the card does not repeat it.
+	if !strings.Contains(lineWith(out, "▌ work"), "just now") {
+		t.Fatalf("last-used should be on the selected row:\n%s", out)
+	}
+	if strings.Contains(out, "last used") {
+		t.Fatalf("card repeats the row's last-used time:\n%s", out)
+	}
+}
+
+// lineWith returns the first line of out containing sub.
+func lineWith(out, sub string) string {
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.Contains(ln, sub) {
+			return ln
+		}
+	}
+	return ""
 }
 
 func TestList_NeverWhenAbsent(t *testing.T) {
@@ -245,10 +263,13 @@ func TestList_WideTwoPane(t *testing.T) {
 	if detail == "" {
 		t.Fatalf("want list and details side by side:\n%s", out)
 	}
-	for _, want := range []string{"host", "p-host-2", "u2", "last used", "display"} {
+	for _, want := range []string{"host", "p-host-2", "u2", "display", "from a shell  wicket connect lab"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("details pane missing %q:\n%s", want, out)
 		}
+	}
+	if !strings.Contains(lineWith(out, "work  p-host-1"), "never") || strings.Contains(out, "last used") {
+		t.Fatalf("wide rows should carry last-used, and the pane not repeat it:\n%s", out)
 	}
 	for _, ln := range strings.Split(out, "\n") {
 		if w := lipgloss.Width(ln); w > 140 {

@@ -107,12 +107,24 @@ Omarchy theme falls back to Verdigris.
 | `g` / `G`, Home / End | First / last |
 | PgUp / PgDn | Page (one screen of rows) |
 | `/` | Filter by name or host (Esc clears) |
+| `s` | Sort most recently used first, or back to file order (not saved) |
 | `Enter` | Connect |
 | `n` | New profile |
 | `e` | Edit selected |
 | `D` | Delete selected |
 | `?` | Help for the current view |
 | `q`, Ctrl+C | Quit |
+
+Each row shows when the profile was last used, on the right; the narrowest
+layout keeps that for the selected row only. `s` sorts by it, most recent
+first, with profiles never used at the end in file order, and the header says
+`recent first` while it is on; the selection stays on the same profile. A
+filter underlines the part of the name or host it matched. The selected
+profile's details say whether a password is saved in the keyring (`● saved in
+keyring`, `asks when connecting`, or `keyring unavailable`); Wicket finds out
+from the keyring's metadata alone, so this never unlocks the keyring or asks
+for anything. In a wide terminal the details also show the `wicket connect`
+command for the profile, quoted for the shell where it needs to be.
 
 The form groups its fields under CONNECTION (name, host, user, domain),
 DISPLAY (size, fullscreen, dynamic resolution, scale), PASSWORD and ADVANCED

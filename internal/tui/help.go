@@ -98,6 +98,7 @@ func helpKeys(v view) []hint {
 			{"g/G, home/end", "first / last"},
 			{"pgup/pgdn", "page"},
 			{"/", "filter by name or host"},
+			{"s", "sort: recent first / file order"},
 			{"enter", "connect"},
 			{"n", "new"},
 			{"e", "edit selected"},

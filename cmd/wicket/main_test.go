@@ -167,18 +167,26 @@ func TestGoModuleFloor(t *testing.T) {
 	}
 }
 
-func TestNoLicenseFile(t *testing.T) {
+// v1 required the opposite: BIZ-006 said a private repo with no license file.
+// Publishing reverses that. A public repo with no license grants nobody the
+// right to use what it publishes, so the file is now the requirement.
+func TestRepoIsLicensed(t *testing.T) {
 	t.Parallel()
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
-	_, err := os.Stat(filepath.Join(root, "LICENSE"))
-	if err == nil {
-		t.Fatal("LICENSE file must not exist (BIZ-006)")
+	for _, f := range []string{"LICENSE", "SECURITY.md", "CONTRIBUTING.md"} {
+		if _, err := os.Stat(filepath.Join(root, f)); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
 	}
-	if !os.IsNotExist(err) {
-		t.Fatalf("stat LICENSE: %v", err)
+	b, err := os.ReadFile(filepath.Join(root, "LICENSE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "MIT License") {
+		t.Fatalf("LICENSE is not the MIT text:\n%s", b)
 	}
 }

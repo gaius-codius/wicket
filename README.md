@@ -6,15 +6,32 @@ Wicket is a terminal UI for saved FreeRDP connections: pick a profile, connect,
 come back when the session ends. Inspired by [Vigiles](https://github.com/gaius-codius/vigiles)
 in stack and interaction grammar, not a clone of it.
 
-## Build
+## Platform
 
-Requires Go 1.24 or newer, and a FreeRDP 3 SDL client on `PATH` (`sdl-freerdp3` by default).
+Linux. Wicket stores passwords in the Secret Service keyring
+(`org.freedesktop.secrets`), which is what GNOME Keyring and KWallet provide.
+
+It compiles for macOS and the BSDs, but there is no Secret Service there, so
+passwords cannot be saved and every connection asks for one. A Keychain
+backend is tracked as [#1](https://github.com/gaius-codius/wicket/issues/1).
+Windows does not build.
+
+## Install
+
+With a Go toolchain:
+
+```
+go install github.com/gaius-codius/wicket/cmd/wicket@latest
+```
+
+Or from a clone:
 
 ```
 go build -o wicket ./cmd/wicket
 ```
 
-Install the binary somewhere on your `PATH`.
+and put the binary somewhere on your `PATH`. You also need a FreeRDP 3 SDL
+client on `PATH` — `sdl-freerdp3` by default, configurable per profile.
 
 ## Run
 
@@ -92,3 +109,14 @@ list. The status line outlives the footer, since a warning you never see is
 lost while the keys are in the help view. Dialogs shed their explanatory note
 first, so the delete confirmation always names what it is about to delete and
 the password prompt always shows its field.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports go through
+[private vulnerability reporting](https://github.com/gaius-codius/wicket/security/advisories/new)
+rather than a public issue; [SECURITY.md](SECURITY.md) describes what Wicket
+protects and what it does not.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

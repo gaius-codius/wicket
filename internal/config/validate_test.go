@@ -199,8 +199,14 @@ func TestValidateSize_RejectsASignedNumber(t *testing.T) {
 // so one bad profile cannot lock the user out of the rest.
 func TestHost_SpacesRejectedOnSaveNotOnLoad(t *testing.T) {
 	for _, bad := range []string{"bad host", "a b:3389", "[::1] :3389", "host\u00a0name"} {
-		if err := validateHostForSave(bad); err == nil {
+		p := Profile{Name: "work", Host: bad, User: "u", Client: DefaultClient, Scale: DefaultScale}
+		if err := ValidateProfileInUse(p); err == nil {
 			t.Errorf("host %q accepted for save", bad)
+		}
+		// "[::1] :3389" is refused on load as well, by the IPv6 rule that
+		// predates this one; the rest are well formed apart from the space.
+		if err := ValidateProfile(p); err != nil && bad != "[::1] :3389" {
+			t.Errorf("host %q rejected on load: %v", bad, err)
 		}
 	}
 	path := writeTOML(t, `

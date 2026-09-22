@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gaius-codius/wicket/internal/config"
+	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
 
@@ -533,5 +534,23 @@ func TestDeleteProfile_LeftoverSecretWarning(t *testing.T) {
 	}
 	if len(warns) == 0 || !strings.Contains(strings.Join(warns, " "), "leftover") {
 		t.Fatalf("warns = %v", warns)
+	}
+}
+
+// A host the config refuses to save is refused before any keyring work, so
+// the password is never copied for a save that cannot land, and refused
+// again at connect time rather than left to FreeRDP.
+func TestSave_SpacedHostIsRefusedBeforeTheKeyring(t *testing.T) {
+	// panicStore fails the test if the save reaches the keyring at all.
+	h := newHarness(t, fixtureTOML("work", "good.example", "u"), panicStore{})
+	p, _ := h.m.app.Cfg.Profile("work")
+	p.Host = "bad host"
+	_, err := h.m.app.planSave("work", p, PasswordIntent{})
+	var fe *config.FieldError
+	if !errors.As(err, &fe) || fe.Field != "host" {
+		t.Fatalf("planSave error = %v, want a host field error", err)
+	}
+	if _, err := rdp.BuildPlan(p); !errors.As(err, &fe) || fe.Field != "host" {
+		t.Fatalf("BuildPlan error = %v, want a host field error", err)
 	}
 }

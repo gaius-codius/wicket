@@ -419,3 +419,55 @@ func TestRetry_FullscreenHintShedsAfterTheReason(t *testing.T) {
 		t.Fatalf("the marker is not in the accent: %q", marked)
 	}
 }
+
+// The way out is what the user acts on, so a shorter block behind it never
+// takes its line. The overlay used to fill the last line with whichever
+// block fitted, which let a one-line "client:" note in ahead of a hint that
+// wrapped to two.
+func TestRetry_ShorterBlocksNeverDisplaceTheWayOut(t *testing.T) {
+	h := clientHarness(t, fixtureTOML("work", "p777-svr01", "777admin"), rdp.ClientSDL, rdp.ClientX11)
+	nm, _ := h.m.Update(teaWin(44, 30))
+	m := nm.(Model)
+	p, _ := m.app.Cfg.Profile("work")
+	p.Fullscreen = true
+	cr := failed(rdp.ClientSDL, 136)
+	cr.Output = []byte("[ERROR][com.freerdp.core] - ERRCONNECT_PRE_CONNECT_FAILED")
+	nm, _ = m.applyConnect(p, secret.Password{}, false, "", cr)
+	m = nm.(Model)
+	lo := newLayout(44, 30)
+	_, fullscreen, _, _, note, _ := m.retryBlocks(lo)
+	if len(fullscreen) < 2 || len(note) != 1 {
+		t.Fatalf("want a wrapped hint and a one-line note, got %d and %d", len(fullscreen), len(note))
+	}
+	for room := 1; room <= 12; room++ {
+		out := stripANSI(strings.Join(m.viewRetry(lo, room), "\n"))
+		if strings.Contains(out, "client:") && !strings.Contains(out, "Try the") {
+			t.Fatalf("room %d: the client note displaced the way out:\n%s", room, out)
+		}
+	}
+}
+
+// The explanation gives way to the client's own line, which says something
+// the user cannot see anywhere else, but it is still drawn above it.
+func TestRetry_ExplanationRanksBelowTheClientLineButReadsAbove(t *testing.T) {
+	h := clientHarness(t, fixtureTOML("work", "p777-svr01", "777admin"), rdp.ClientSDL, rdp.ClientX11)
+	nm, _ := h.m.Update(teaWin(100, 30))
+	m := nm.(Model)
+	p, _ := m.app.Cfg.Profile("work")
+	p.Fullscreen = true
+	cr := failed(rdp.ClientSDL, 136)
+	cr.Output = []byte("[ERROR][com.freerdp.core] - ERRCONNECT_PRE_CONNECT_FAILED")
+	nm, _ = m.applyConnect(p, secret.Password{}, false, "", cr)
+	m = nm.(Model)
+	lo := newLayout(100, 30)
+	msg, fullscreen, detail, why, note, _ := m.retryBlocks(lo)
+	room := len(msg) + len(fullscreen) + len(detail) + len(note)
+	out := stripANSI(strings.Join(m.viewRetry(lo, room), "\n"))
+	if !strings.Contains(out, "client:") {
+		t.Fatalf("the explanation outranked the client line:\n%s", out)
+	}
+	full := stripANSI(strings.Join(m.viewRetry(lo, room+len(why)), "\n"))
+	if i, j := strings.Index(full, "can fail fullscreen"), strings.Index(full, "client:"); i < 0 || j < 0 || i > j {
+		t.Fatalf("the explanation is not drawn above the client line:\n%s", full)
+	}
+}

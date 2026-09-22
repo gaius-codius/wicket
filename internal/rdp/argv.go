@@ -18,7 +18,7 @@ type Plan struct {
 
 // BuildPlan builds REQ-016 tokens plus the verified stdin flag. No password, no /cert:ignore.
 func BuildPlan(p config.Profile) (Plan, error) {
-	if err := config.ValidateProfile(p); err != nil {
+	if err := config.ValidateProfileInUse(p); err != nil {
 		return Plan{}, err
 	}
 	if strings.ContainsRune(p.Client, '/') || strings.ContainsAny(p.Client, " \t") {

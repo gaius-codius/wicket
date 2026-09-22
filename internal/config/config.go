@@ -109,10 +109,7 @@ func parseConfig(path string, data []byte) (*Config, error) {
 
 // Upsert validates p, inserts or replaces the profile named except (empty = add), and saves.
 func (c *Config) Upsert(p Profile, except string) error {
-	if err := ValidateProfile(p); err != nil {
-		return err
-	}
-	if err := validateHostForSave(p.Host); err != nil {
+	if err := ValidateProfileInUse(p); err != nil {
 		return err
 	}
 	return c.mutate(func() error {

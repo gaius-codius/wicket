@@ -142,7 +142,10 @@ func (a *App) planSave(oldName string, newP config.Profile, intent PasswordInten
 	// space was the only way to see "must not have leading or trailing
 	// whitespace" -- the validator still guards a hand-edited config file.
 	trim(&newP.Name, &newP.Host, &newP.User, &newP.Domain, &newP.Client, &newP.Size)
-	if err := config.ValidateProfile(newP); err != nil {
+	// The in-use rules are asked here, before any keyring work, so a host
+	// Upsert would refuse costs nothing and reports like every other field
+	// error rather than after a password has been copied.
+	if err := config.ValidateProfileInUse(newP); err != nil {
 		return savePlan{}, err
 	}
 	if intent.set() && intent.Password.Empty() {

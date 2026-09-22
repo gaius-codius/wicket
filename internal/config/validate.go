@@ -230,13 +230,19 @@ func fmtIndex(i int) string {
 	return fmt.Sprintf("profiles[%d]", i)
 }
 
-// validateHostForSave holds a host being saved to rules a loaded config is
-// not held to. No host name or address has a space in it, and FreeRDP would
-// get "/v:bad host" as one argument and fail on it at connect time; but a
-// config that already has one must still open, or one bad profile would lock
-// the user out of every other.
-func validateHostForSave(host string) error {
-	if strings.ContainsFunc(strings.TrimSpace(host), unicode.IsSpace) {
+// ValidateProfileInUse holds a profile to rules a loaded config is not held
+// to: the ones that decide whether Wicket will act on it, rather than whether
+// it can read it. Saving and connecting both ask, so a host Wicket refuses to
+// save is also one it refuses to launch, with a reason in its own words
+// rather than FreeRDP's. A config that already holds one still opens, or a
+// single bad profile would lock the user out of every other.
+func ValidateProfileInUse(p Profile) error {
+	if err := ValidateProfile(p); err != nil {
+		return err
+	}
+	// No host name or address has a space in it, and FreeRDP would get
+	// "/v:bad host" as one argument and fail on it at connect time.
+	if strings.ContainsFunc(strings.TrimSpace(p.Host), unicode.IsSpace) {
 		return &FieldError{Field: "host", Msg: "must not contain spaces"}
 	}
 	return nil

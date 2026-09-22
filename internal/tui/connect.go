@@ -209,10 +209,12 @@ func (a *App) fullscreenHint(p config.Profile, o rdp.Outcome) (action, why strin
 	return "Try turning fullscreen off.", why
 }
 
-// retryBlocks are the overlay's parts, most important first: what happened,
-// what to do about a fullscreen failure, how the client exited, why that
-// hint is there, what the client last said, and the password hint. The way
-// out comes before the exit status because it is the line the user acts on.
+// retryBlocks are the overlay's parts in reading order: what happened, what
+// to do about a fullscreen failure, how the client exited, why that hint is
+// there, what the client last said, and the password hint. The way out comes
+// before the exit status because it is the line the user acts on; viewRetry
+// ranks them separately, where the explanation goes before the client's own
+// line does.
 func (m Model) retryBlocks(lo layout) (msg, fullscreen, detail, why, note, hint []string) {
 	wrap := lipgloss.NewStyle().Width(max(lo.Inner-2, 1))
 	msg = strings.Split(wrap.Render(m.retry.status), "\n")
@@ -284,10 +286,25 @@ func (m Model) viewRetry(lo layout, room int) []string {
 		}
 		lines = append(lines, prefix+m.styles.primary.Bold(true).Render(ln))
 	}
-	for _, block := range [][]string{fullscreen, detail, why, note, hint} {
-		if len(block) > 0 && room-len(lines) >= len(block) {
-			lines = append(lines, block...)
+	// What to keep is decided by rank, and only then drawn in reading
+	// order. A block that does not fit does not let a shorter one behind it
+	// in: the overlay used to hand the last line to whichever block was
+	// small enough, so a one-line "client:" note could take the line from
+	// the way out that had just been raised above it.
+	room -= len(lines)
+	keep := map[int][]string{}
+	for i, block := range [][]string{fullscreen, detail, note, why, hint} {
+		if len(block) == 0 {
+			continue
 		}
+		if room < len(block) {
+			break
+		}
+		room -= len(block)
+		keep[i] = block
+	}
+	for _, i := range []int{0, 1, 3, 2, 4} {
+		lines = append(lines, keep[i]...)
 	}
 	return lines
 }

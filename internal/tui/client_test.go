@@ -343,10 +343,10 @@ func TestRetry_FullscreenHint(t *testing.T) {
 				t.Fatalf("view %v", m.view)
 			}
 			out := screen(m)
-			if got := strings.Contains(out, "fail fullscreen on scaled monitors"); got != tc.want {
+			if got := strings.Contains(out, "fail fullscreen on a scaled monitor"); got != tc.want {
 				t.Fatalf("hint shown %v, want %v:\n%s", got, tc.want, out)
 			}
-			if got := strings.Contains(out, "try the xfreerdp3 client"); got != tc.wantX11 {
+			if got := strings.Contains(out, "Try the xfreerdp3 client"); got != tc.wantX11 {
 				t.Fatalf("xfreerdp3 offered %v, want %v:\n%s", got, tc.wantX11, out)
 			}
 			if tc.want && !strings.Contains(out, "fullscreen off") {
@@ -377,25 +377,45 @@ func TestRetry_FullscreenHintShedsAfterTheReason(t *testing.T) {
 			if !strings.Contains(out, "▲ FreeRDP failed") {
 				t.Fatalf("%dx%d lost the reason:\n%s", w, ht, out)
 			}
-			hint := strings.Contains(out, "FreeRDP's SDL client")
-			sawHint = sawHint || hint
-			if hint && !strings.Contains(out, "status 136") {
-				t.Fatalf("%dx%d kept the hint over the exit status:\n%s", w, ht, out)
+			// The way out is what the user acts on, so it outlives the
+			// exit status and the sentence explaining it.
+			action := strings.Contains(out, "Try the") || strings.Contains(out, "Try turning")
+			sawHint = sawHint || action
+			if strings.Contains(out, "FreeRDP's SDL client") && !action {
+				t.Fatalf("%dx%d kept the reason over the way out:\n%s", w, ht, out)
+			}
+			if strings.Contains(out, "status 136") && !action {
+				t.Fatalf("%dx%d kept the exit status over the way out:\n%s", w, ht, out)
 			}
 		}
 	}
 	if !sawHint {
 		t.Fatal("the hint never showed")
 	}
-	// Given the room for the reason, the exit status and the hint, the
+	// Given the room for the reason, the way out and the exit status, the
 	// overlay spends it on them rather than on the client's note.
 	lo := newLayout(80, 24)
-	msg, detail, fullscreen, note, _ := base.retryBlocks(lo)
+	msg, fullscreen, detail, _, note, _ := base.retryBlocks(lo)
 	if len(fullscreen) == 0 || len(note) == 0 {
 		t.Fatal("expected a hint and a note")
 	}
 	out := stripANSI(strings.Join(base.viewRetry(lo, len(msg)+len(detail)+len(fullscreen)), "\n"))
-	if !strings.Contains(out, "FreeRDP's SDL client") || strings.Contains(out, "client: ") {
+	if !strings.Contains(out, "Try the") || strings.Contains(out, "client: ") {
 		t.Fatalf("the note outranked the hint:\n%s", out)
+	}
+	// The way out is drawn as a key hint, not as another muted report line:
+	// its own marker, and the accent the footer keys use.
+	full := base.viewRetry(lo, 12)
+	var marked string
+	for _, ln := range full {
+		if strings.Contains(stripANSI(ln), "Try the") {
+			marked = ln
+		}
+	}
+	if !strings.HasPrefix(stripANSI(marked), "→ ") {
+		t.Fatalf("the way out is not marked: %q", stripANSI(marked))
+	}
+	if !strings.Contains(marked, base.styles.accent.Render("→ ")) {
+		t.Fatalf("the marker is not in the accent: %q", marked)
 	}
 }

@@ -23,9 +23,11 @@ type retryState struct {
 	outcome rdp.Outcome
 	// note is the client's own last word on why, cleaned for the screen.
 	note string
-	// fullscreen is a hint for a known client failure under fullscreen,
-	// worked out when the session ended; see fullscreenHint.
-	fullscreen string
+	// fullscreen and fullscreenWhy are a hint for a known client failure
+	// under fullscreen, worked out when the session ended; see
+	// fullscreenHint.
+	fullscreen    string
+	fullscreenWhy string
 }
 
 func (m Model) beginConnect() (tea.Model, tea.Cmd) {
@@ -114,7 +116,8 @@ func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce b
 		held, _ := cred.(secret.Password)
 		hp := held
 		m.retry = retryState{profile: p, held: &hp, useOnce: keepUseOnce, status: cr.Status, class: cr.Class, outcome: cr.Outcome,
-			note: clientNote(cr.Output, cred), fullscreen: m.app.fullscreenHint(p, cr.Outcome)}
+			note: clientNote(cr.Output, cred)}
+		m.retry.fullscreen, m.retry.fullscreenWhy = m.app.fullscreenHint(p, cr.Outcome)
 		m.view = viewRetry
 		// The overlay carries the session's own message; only the other
 		// warnings stay on the status line.
@@ -190,44 +193,71 @@ const retryHint = "If the password may be wrong, press n for a new password."
 // FreeRDP bug, so the hint offers ways round it: xfreerdp3 when it is
 // installed, and fullscreen off either way. It searches PATH, so it is asked
 // once, as the session ends, not as the overlay draws.
-func (a *App) fullscreenHint(p config.Profile, o rdp.Outcome) string {
+//
+// It comes back in two parts. The first is what to do, and is drawn like a
+// key hint rather than like the muted lines it used to sit between, where it
+// read as more of the same report and was missed. The second is why, which
+// is the first of the two to go when the overlay is short.
+func (a *App) fullscreenHint(p config.Profile, o rdp.Outcome) (action, why string) {
 	if !p.Fullscreen || filepath.Base(o.Client) != rdp.ClientSDL || !o.PreConnectFailed() {
-		return ""
+		return "", ""
 	}
-	const lead = "FreeRDP's SDL client can fail fullscreen on scaled monitors; "
+	why = "FreeRDP's SDL client can fail fullscreen on a scaled monitor."
 	if a.Installed(rdp.ClientX11) {
-		return lead + "try the " + rdp.ClientX11 + " client or turn fullscreen off."
+		return "Try the " + rdp.ClientX11 + " client, or turn fullscreen off.", why
 	}
-	return lead + "try turning fullscreen off."
+	return "Try turning fullscreen off.", why
 }
 
 // retryBlocks are the overlay's parts, most important first: what happened,
-// how the client exited, the fullscreen hint, what the client last said, and
-// the password hint.
-func (m Model) retryBlocks(lo layout) (msg, detail, fullscreen, note, hint []string) {
+// what to do about a fullscreen failure, how the client exited, why that
+// hint is there, what the client last said, and the password hint. The way
+// out comes before the exit status because it is the line the user acts on.
+func (m Model) retryBlocks(lo layout) (msg, fullscreen, detail, why, note, hint []string) {
 	wrap := lipgloss.NewStyle().Width(max(lo.Inner-2, 1))
 	msg = strings.Split(wrap.Render(m.retry.status), "\n")
 	for i := range msg {
 		msg[i] = strings.TrimRight(msg[i], " ")
 	}
+	// Every line under the headline sits on the same two-column rail, the
+	// wrapped ones included, so the overlay reads as one block with its
+	// markers down the left rather than as ragged paragraphs.
 	block := func(text string) []string {
-		return strings.Split(m.styles.muted.Render(lipgloss.NewStyle().Width(lo.Inner).Render(text)), "\n")
+		wrapped := strings.Split(lipgloss.NewStyle().Width(max(lo.Inner-2, 1)).Render(text), "\n")
+		out := make([]string, 0, len(wrapped))
+		for _, ln := range wrapped {
+			out = append(out, "  "+m.styles.muted.Render(strings.TrimRight(ln, " ")))
+		}
+		return out
 	}
 	if d := retryDetail(m.retry); d != "" {
 		detail = block(d)
 	}
 	if m.retry.fullscreen != "" {
-		fullscreen = block(m.retry.fullscreen)
+		// The arrow and the accent are what set this apart from the muted
+		// report around it; the words alone carry it where there is no
+		// colour.
+		wrapped := strings.Split(lipgloss.NewStyle().Width(max(lo.Inner-2, 1)).Render(m.retry.fullscreen), "\n")
+		for i, ln := range wrapped {
+			prefix := m.styles.accent.Render("→ ")
+			if i > 0 {
+				prefix = "  "
+			}
+			fullscreen = append(fullscreen, prefix+m.styles.primary.Render(strings.TrimRight(ln, " ")))
+		}
+	}
+	if m.retry.fullscreenWhy != "" {
+		why = block(m.retry.fullscreenWhy)
 	}
 	if m.retry.note != "" {
 		// One line only: a client's log line can be long, and the hint
 		// below it matters more than its tail.
-		note = block(truncate("client: "+m.retry.note, lo.Inner))
+		note = block(truncate("client: "+m.retry.note, max(lo.Inner-2, 1)))
 	}
 	if m.retry.class != rdp.ClassStartError && m.retry.outcome.MaybeCredentials() {
 		hint = block(retryHint)
 	}
-	return msg, detail, fullscreen, note, hint
+	return msg, fullscreen, detail, why, note, hint
 }
 
 // viewRetry renders the overlay in at most room lines. The message is what
@@ -238,7 +268,7 @@ func (m Model) retryBlocks(lo layout) (msg, detail, fullscreen, note, hint []str
 // first.
 func (m Model) viewRetry(lo layout, room int) []string {
 	room = max(room, 1)
-	msg, detail, fullscreen, note, hint := m.retryBlocks(lo)
+	msg, fullscreen, detail, why, note, hint := m.retryBlocks(lo)
 	if len(msg) > room {
 		// Cut the message itself rather than let clipLines swap its last
 		// line for a bare "…": at one line that took the ▲ marker and every
@@ -254,7 +284,7 @@ func (m Model) viewRetry(lo layout, room int) []string {
 		}
 		lines = append(lines, prefix+m.styles.primary.Bold(true).Render(ln))
 	}
-	for _, block := range [][]string{detail, fullscreen, note, hint} {
+	for _, block := range [][]string{fullscreen, detail, why, note, hint} {
 		if len(block) > 0 && room-len(lines) >= len(block) {
 			lines = append(lines, block...)
 		}

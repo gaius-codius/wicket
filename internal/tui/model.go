@@ -504,9 +504,9 @@ func (m Model) bodyNeeds(lo layout) (want, keep, core int) {
 		// fullscreen failure and what the client said outrank the spacing
 		// and the divider, and are worth the long footer; the password hint
 		// and the list row under the overlay only want them.
-		msg, detail, fullscreen, note, hint := m.retryBlocks(lo)
-		keep := len(msg) + len(detail) + len(fullscreen) + len(note)
-		return keep + len(hint) + 2, keep, len(msg)
+		msg, fullscreen, detail, why, note, hint := m.retryBlocks(lo)
+		keep := len(msg) + len(fullscreen) + len(detail) + len(note)
+		return keep + len(why) + len(hint) + 2, keep, len(msg)
 	}
 	return 1, 1, 1
 }

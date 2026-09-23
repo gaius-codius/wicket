@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite the golden files in testdata/preserve")
@@ -211,19 +212,23 @@ extra = { password = "hunter2", keep = 1 }
 	}
 }
 
-// Whatever the file holds, a save either patches it into exactly what a
-// full rewrite would say or falls back to that rewrite; it never panics.
+// Whatever the file holds, the patch either declines it or produces a file
+// that reads back as exactly the document being saved, and never panics.
+// render would catch a wrong patch and fall back, so this calls patch
+// directly: a patch that only render's check stops is still a bug.
 func FuzzSave(f *testing.F) {
 	for _, name := range []string{"hand", "edit", "add", "delete-last"} {
 		b, err := os.ReadFile(filepath.Join("testdata", "preserve", name+".toml"))
 		if err != nil {
 			f.Fatal(err)
 		}
-		f.Add(b)
+		f.Add(b, uint8(0))
+		f.Add(b, uint8(1))
 	}
-	f.Add([]byte("profiles = [{ name = \"a\", host = \"h\", user = \"u\" }]\n"))
-	f.Add([]byte("[[profiles]]\nname = \"a\"\nhost = \"h\"\nuser = \"u\"\nx = \"\"\"\n[[profiles]]\n\"\"\""))
-	f.Fuzz(func(t *testing.T, src []byte) {
+	f.Add([]byte("profiles = [{ name = \"a\", host = \"h\", user = \"u\" }]\n"), uint8(0))
+	f.Add([]byte("[[profiles]]\nname = \"a\"\nhost = \"h\"\nuser = \"u\"\nx = \"\"\"\n[[profiles]]\n\"\"\""), uint8(0))
+	f.Add([]byte("[[profiles]]\nname = \"a\"\nhost = \"h\"\nuser = \"u\"\npassword = \"x\""), uint8(0))
+	f.Fuzz(func(t *testing.T, src []byte, op uint8) {
 		d, err := parseDocument(src)
 		if err != nil {
 			return
@@ -231,7 +236,10 @@ func FuzzSave(f *testing.F) {
 		if _, err := d.typedProfiles(); err != nil {
 			return
 		}
-		if len(d.profiles) > 0 {
+		switch {
+		case op%2 == 1 && len(d.profiles) > 0:
+			d.removeProfile(0)
+		case len(d.profiles) > 0:
 			p, err := profileFromTable(d.profiles[0])
 			if err != nil {
 				return
@@ -239,16 +247,140 @@ func FuzzSave(f *testing.F) {
 			p.User += "x"
 			p.Size = "100%"
 			d.setProfile(0, applyProfile(d.profiles[0], p))
+			fallthrough
+		default:
+			d.addProfile(applyProfile(nil, Profile{Name: "fuzz-new", Host: "h", User: "u",
+				Client: DefaultClient, Scale: 100}))
 		}
-		d.addProfile(applyProfile(nil, Profile{Name: "fuzz-new", Host: "h", User: "u",
-			Client: DefaultClient, Scale: 100}))
-		out, patched, err := d.render()
-		if err != nil {
-			return
-		}
-		full, _ := d.encode()
-		if patched && !sameDocument(out, full) {
-			t.Fatalf("patched file differs from the rewrite:\n%s", out)
+		out, err := d.patch()
+		if err == nil && !d.matches(out) {
+			t.Fatalf("patch reads back as something else:\n%s", out)
 		}
 	})
+}
+
+// Cases from review, each once a lost comment, a stray line or a needless
+// full rewrite. want is the whole file after the save.
+func TestSave_ReviewCases(t *testing.T) {
+	t.Parallel()
+	prof := func(name string) string {
+		return "[[profiles]]\nname = \"" + name + "\"\nhost = \"h\"\nuser = \"u\"\n"
+	}
+	cases := []struct {
+		name, src string
+		save      func(t *testing.T, c *Config)
+		want      string
+	}{
+		{
+			// A divider separated from the next header by a blank line is
+			// about what follows, not about the profile deleted before it.
+			name: "delete keeps the next section's divider",
+			src:  "[general]\n\n# --- Work ---\n\n" + prof("a") + "\n# --- Home ---\n\n# the NAS\n" + prof("b"),
+			save: func(t *testing.T, c *Config) { remove(t, c, "a") },
+			want: "[general]\n\n# --- Work ---\n\n# --- Home ---\n\n# the NAS\n" + prof("b"),
+		},
+		{
+			name: "delete keeps a note on the table after it",
+			src:  "[general]\n\n" + prof("a") + "\n" + prof("b") + "\n# theme can also come from WICKET_THEME\n\n[ui]\ntheme = \"auto\"\n",
+			save: func(t *testing.T, c *Config) { remove(t, c, "b") },
+			want: "[general]\n\n" + prof("a") + "\n# theme can also come from WICKET_THEME\n\n[ui]\ntheme = \"auto\"\n",
+		},
+		{
+			name: "delete keeps the file's own header comment",
+			src:  "# my wicket config\n" + prof("a") + "\n" + prof("b"),
+			save: func(t *testing.T, c *Config) { remove(t, c, "a") },
+			want: "# my wicket config\n" + prof("b"),
+		},
+		{
+			// reflect.DeepEqual has NaN unequal to itself, which made every
+			// save of this file a full rewrite.
+			name: "nan elsewhere",
+			src:  "# keep me\nnote = nan\n\n" + prof("a"),
+			save: func(t *testing.T, c *Config) {
+				p, _ := c.Profile("a")
+				p.User = "u2"
+				upsert(t, c, p, "a")
+			},
+			want: "# keep me\nnote = nan\n\n" + strings.Replace(prof("a"), `"u"`, `"u2"`, 1),
+		},
+		{
+			name: "quoted key with an escape",
+			src:  "# keep me\n\"a\\tb\" = 1\n\n" + prof("a"),
+			save: func(t *testing.T, c *Config) {
+				p, _ := c.Profile("a")
+				p.User = "u2"
+				upsert(t, c, p, "a")
+			},
+			want: "# keep me\n\"a\\tb\" = 1\n\n" + strings.Replace(prof("a"), `"u"`, `"u2"`, 1),
+		},
+		{
+			// A \r\n inside a multi-line string says nothing about the
+			// file's line endings.
+			name: "crlf only inside a string",
+			src:  "note = \"\"\"a\r\nb\"\"\"\n\n" + prof("a"),
+			save: func(t *testing.T, c *Config) {
+				p, _ := c.Profile("a")
+				p.Size = "100%"
+				upsert(t, c, p, "a")
+			},
+			want: "note = \"\"\"a\r\nb\"\"\"\n\n" + prof("a") + "size = \"100%\"\n",
+		},
+		{
+			// The new key goes after the last line that stays, not after a
+			// secret the save removes.
+			name: "new key after a removed secret on the last line",
+			src:  strings.TrimSuffix(prof("a"), "\n") + "\npassword = \"x\"",
+			save: func(t *testing.T, c *Config) {
+				p, _ := c.Profile("a")
+				p.Size = "100%"
+				upsert(t, c, p, "a")
+			},
+			want: prof("a") + "size = \"100%\"\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeTOML(t, tc.src)
+			c, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.save(t, c)
+			if c.Rewrote() {
+				t.Fatal("rewrote the file in full")
+			}
+			got, _ := os.ReadFile(path)
+			if string(got) != tc.want {
+				t.Fatalf("got:\n%q\nwant:\n%q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The encoder writes a local date or time shifted by the machine's zone, so
+// a patch must not be judged against its output: east of UTC that threw the
+// correct patch away and wrote 1979-05-26 for 1979-05-27.
+func TestSave_KeepsLocalDates(t *testing.T) {
+	orig := time.Local
+	time.Local = time.FixedZone("AEST", 10*60*60)
+	t.Cleanup(func() { time.Local = orig })
+
+	src := "[general]\nd = 1979-05-27\nt = 07:32:00\nldt = 1979-05-27T07:32:00\n\n" +
+		"[[profiles]]\nname = \"a\"\nhost = \"h\"\nuser = \"u\"\n"
+	path := writeTOML(t, src)
+	c, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := c.Profile("a")
+	p.User = "u2"
+	upsert(t, c, p, "a")
+	if c.Rewrote() {
+		t.Fatal("rewrote the file in full")
+	}
+	got, _ := os.ReadFile(path)
+	if want := strings.Replace(src, `"u"`, `"u2"`, 1); string(got) != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
 }

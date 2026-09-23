@@ -3,6 +3,8 @@ package config
 import (
 	"bytes"
 	"errors"
+
+	"github.com/BurntSushi/toml"
 )
 
 // errLayout means the file holds something the scanner does not follow. The
@@ -180,10 +182,8 @@ func (s *scanner) keyPart() (string, error) {
 			return "", err
 		}
 		raw := s.src[start+1 : s.pos-1]
-		// A key with escapes would need unescaping to compare; nobody
-		// writes one in this file, so leave it to the full rewrite.
 		if s.src[start] == '"' && bytes.IndexByte(raw, '\\') >= 0 {
-			return "", errLayout
+			return unescape(s.src[start:s.pos])
 		}
 		return string(raw), nil
 	}
@@ -194,6 +194,16 @@ func (s *scanner) keyPart() (string, error) {
 		return "", errLayout
 	}
 	return string(s.src[start:s.pos]), nil
+}
+
+// unescape reads a quoted key with escapes in it the way the decoder does,
+// by having the decoder read it.
+func unescape(quoted []byte) (string, error) {
+	var v struct{ K string }
+	if _, err := toml.Decode("K = "+string(quoted), &v); err != nil {
+		return "", errLayout
+	}
+	return v.K, nil
 }
 
 func isBareKeyChar(c byte) bool {

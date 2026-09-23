@@ -62,9 +62,14 @@ first. Press `?` in the TUI for keys and field help.
 
 Passwords live in libsecret, never in TOML. Hand-editing `config.toml` is
 fine: a save from the TUI changes only the values, keys and profiles it has
-to, and leaves comments, formatting and unknown keys as they are. Keys named
-`password`, `pass`, `secret`, or `passwd` are stripped on save, with their
-line.
+to, and leaves the rest of the file, comments and formatting included, as it
+was. Deleting a profile also removes the comment lines directly above it. A
+file laid out in a way Wicket cannot edit in place, such as profiles written
+as an inline array, is rewritten in full instead, and the TUI says so.
+
+Keys named `password`, `pass`, `secret`, or `passwd` are stripped on save,
+with their line. A password in a comment is left alone, so do not keep one
+there either.
 
 Sharing is per profile, set in the form or by hand:
 

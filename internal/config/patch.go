@@ -3,10 +3,12 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/BurntSushi/toml"
@@ -26,20 +28,19 @@ var profileKeyOrder = []string{
 // that worked; when it did not, the file is re-encoded in full, as every
 // save once was.
 //
-// A patch is only used when the decoder reads it as exactly the document a
-// full re-encode would produce. The scanner and the splicing are then free
-// to be wrong about a file they do not follow: the cost is the old
-// behaviour, never a config that says something the user did not save.
+// A patch is only used when it reads back as exactly the document being
+// saved. The scanner and the splicing are then free to be wrong about a file
+// they do not follow: the cost is the old behaviour, never a config that
+// says something the user did not save.
 func (d *document) render() (data []byte, patched bool, err error) {
+	if p, err := d.safePatch(); err == nil && d.matches(p) {
+		return p, true, nil
+	}
 	full, err := d.encode()
 	if err != nil {
 		return nil, false, err
 	}
-	p, err := d.safePatch()
-	if err != nil || !sameDocument(p, full) {
-		return full, false, nil
-	}
-	return p, true, nil
+	return full, false, nil
 }
 
 // safePatch is patch, with a panic in the hand-written scanner turned into
@@ -53,26 +54,73 @@ func (d *document) safePatch() (out []byte, err error) {
 	return d.patch()
 }
 
-// sameDocument reports whether a and b decode to the same values. A missing
-// [general] and an empty one mean the same; the full encoder always writes
-// the table.
-func sameDocument(a, b []byte) bool {
-	decode := func(data []byte) (map[string]any, bool) {
-		raw := map[string]any{}
-		if _, err := toml.Decode(string(data), &raw); err != nil {
-			return nil, false
-		}
-		if _, ok := raw[keyGeneral]; !ok {
-			raw[keyGeneral] = map[string]any{}
-		}
-		return raw, true
-	}
-	ra, ok := decode(a)
-	if !ok {
+// matches reports whether data reads back as d: the same tables and values,
+// and no secret key left for the load to strip. It compares with d itself
+// rather than with d.encode(), since the encoder is not lossless: it writes
+// a local date or time shifted by the machine's zone.
+func (d *document) matches(data []byte) bool {
+	got, err := parseDocument(data)
+	if err != nil || len(got.warnings) > 0 || len(got.profiles) != len(d.profiles) {
 		return false
 	}
-	rb, ok := decode(b)
-	return ok && reflect.DeepEqual(ra, rb)
+	if !sameValue(got.general, d.general) || !sameValue(got.extras, d.extras) {
+		return false
+	}
+	for i := range d.profiles {
+		if !sameValue(got.profiles[i], d.profiles[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameValue is reflect.DeepEqual for decoded TOML, except that NaN equals
+// NaN, as nan in a file is the same value each time it is read, and times
+// compare by instant and zone name rather than by *time.Location.
+func sameValue(a, b any) bool {
+	switch x := a.(type) {
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for k, v := range x {
+			w, ok := y[k]
+			if !ok || !sameValue(v, w) {
+				return false
+			}
+		}
+		return true
+	case []map[string]any:
+		y, ok := b.([]map[string]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if !sameValue(x[i], y[i]) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if !sameValue(x[i], y[i]) {
+				return false
+			}
+		}
+		return true
+	case float64:
+		y, ok := b.(float64)
+		return ok && (x == y || math.IsNaN(x) && math.IsNaN(y))
+	case time.Time:
+		y, ok := b.(time.Time)
+		return ok && x.Equal(y) && x.Location().String() == y.Location().String()
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 // edit replaces src[start:end] with text; start == end inserts.
@@ -87,19 +135,30 @@ func (d *document) patch() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// New lines follow how the first statement ends, not any \r\n: one
+	// inside a multi-line string says nothing about the file's lines.
 	nl := "\n"
-	if bytes.Contains(d.src, []byte("\r\n")) {
+	if len(stmts) > 0 && bytes.HasSuffix(d.src[:stmts[0].end], []byte("\r\n")) {
 		nl = "\r\n"
 	}
 
+	// Profiles written any other way than as [[profiles]] tables, such as
+	// profiles = [{...}] at the top of the file, are left to the full
+	// rewrite.
 	var heads []int
+	root := true
 	for i, st := range stmts {
-		if st.kind == stmtArrayTable && slices.Equal(st.path, []string{keyProfiles}) {
+		switch {
+		case st.kind == stmtArrayTable && slices.Equal(st.path, []string{keyProfiles}):
 			heads = append(heads, i)
+		case st.kind == stmtTable && slices.Equal(st.path, []string{keyProfiles}),
+			root && st.kind == stmtKeyValue && st.path[0] == keyProfiles:
+			return nil, errLayout
+		}
+		if st.kind == stmtTable || st.kind == stmtArrayTable {
+			root = false
 		}
 	}
-	// Profiles written any other way, such as profiles = [{...}], are left
-	// to the full rewrite.
 	if len(heads) != len(d.origProfiles) {
 		return nil, errLayout
 	}
@@ -115,6 +174,13 @@ func (d *document) patch() ([]byte, error) {
 	for j, h := range heads {
 		if kept[j] {
 			continue
+		}
+		next := len(stmts)
+		if j+1 < len(heads) {
+			next = heads[j+1]
+		}
+		if strayProfileTables(stmts, h, next) {
+			return nil, errLayout
 		}
 		first, last, start, end := deleteSpan(stmts, h, len(d.src))
 		for i := first; i < last; i++ {
@@ -147,7 +213,7 @@ func (d *document) patch() ([]byte, error) {
 	// ahead of anything that follows them, or at the end of a file that has
 	// none.
 	at, after := len(d.src), ""
-	if len(heads) > 0 {
+	if len(heads) > 0 && !strayProfileTables(stmts, heads[len(heads)-1], len(stmts)) {
 		h := heads[len(heads)-1]
 		l := lastContent(stmts, h, blockEnd(stmts, h))
 		at = stmts[l].end
@@ -180,34 +246,35 @@ func ownSection(stmts []stmt, h int) (from, to int) {
 }
 
 // deleteSpan is the part of the file a deleted profile takes with it: the
-// comment lines directly above its header, the profile, and its own
-// subtables ([profiles.x]), up to the comment lines directly above whatever
-// comes next. A profile at the end of the file also takes the blank lines
-// that separated it from the one before, so the file does not end in them.
+// comment lines directly above its header, the profile and its own subtables
+// ([profiles.x]) to its last line, and the blank lines after that. Comments
+// after its last line stay, since they may be about whatever comes next: a
+// section divider, or notes on a table further down. So do comments at the
+// top of the file, which are about the file. At the end of the file it takes
+// the blank lines before it instead, so the file does not end in them.
+//
+// Where a comment belongs is a guess, so each guess errs towards keeping it.
 func deleteSpan(stmts []stmt, h, size int) (first, last, start, end int) {
 	isComment := func(i int) bool { return stmts[i].kind == stmtTrivia && stmts[i].comment }
+	isBlank := func(i int) bool { return stmts[i].kind == stmtTrivia && !stmts[i].comment }
 	first = h
 	for first > 0 && isComment(first-1) {
 		first--
 	}
-	last = blockEnd(stmts, h)
-	if last == len(stmts) {
-		// Comments after the profile's last line are notes on the file,
-		// not on the profile, and stay.
-		for i := lastContent(stmts, h, last) + 1; i < last; i++ {
-			if isComment(i) {
-				return first, i, stmts[first].start, stmts[i].start
-			}
-		}
-		for first > 0 && stmts[first-1].kind == stmtTrivia && !stmts[first-1].comment {
-			first--
-		}
-		return first, last, stmts[first].start, size
+	if first == 0 {
+		first = h
 	}
-	for last > h+1 && isComment(last-1) {
-		last--
+	last = lastContent(stmts, h, blockEnd(stmts, h)) + 1
+	for last < len(stmts) && isBlank(last) {
+		last++
 	}
-	return first, last, stmts[first].start, stmts[last].start
+	if last < len(stmts) {
+		return first, last, stmts[first].start, stmts[last].start
+	}
+	for first > 0 && isBlank(first-1) {
+		first--
+	}
+	return first, last, stmts[first].start, size
 }
 
 // lastContent is the last statement in stmts[h:end] that is not a blank line
@@ -220,6 +287,20 @@ func lastContent(stmts []stmt, h, end int) int {
 		}
 	}
 	return l
+}
+
+// strayProfileTables reports whether a [profiles.x] table comes after the
+// block of the profile whose header is stmts[h], past some other table but
+// before stmts[next], the next profile. It still belongs to that profile: it
+// would outlive the profile's deletion as a table of its own, and would
+// belong to a new profile put in between.
+func strayProfileTables(stmts []stmt, h, next int) bool {
+	for _, st := range stmts[blockEnd(stmts, h):next] {
+		if (st.kind == stmtTable || st.kind == stmtArrayTable) && len(st.path) > 1 && st.path[0] == keyProfiles {
+			return true
+		}
+	}
+	return false
 }
 
 // blockEnd is the statement after the profile whose header is stmts[h] and
@@ -292,11 +373,18 @@ func patchProfile(src []byte, stmts []stmt, h int, old, now map[string]any, nl s
 		return edits, nil
 	}
 
+	// After the last key that stays: one whose line this save removes, a
+	// secret or a cleared key, would leave the new keys adrift.
 	at, indent := stmts[h].end, ""
 	for i := from; i < to; i++ {
-		if stmts[i].kind == stmtKeyValue {
-			at, indent = stmts[i].end, stmts[i].indent
+		st := stmts[i]
+		if st.kind != stmtKeyValue || isSecretKey(st.path[len(st.path)-1]) {
+			continue
 		}
+		if _, inNow := now[st.path[0]]; !inNow && len(st.path) == 1 && old[st.path[0]] != nil {
+			continue
+		}
+		at, indent = st.end, st.indent
 	}
 	// A last line without a newline gets one before the new keys follow.
 	var b strings.Builder

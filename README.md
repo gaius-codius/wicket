@@ -3,7 +3,11 @@
 Terminal UI for saved FreeRDP connections. Pick a profile, connect, come back
 when the session ends.
 
-![Wicket connection list](docs/screenshots/list.png)
+![Connection list](docs/screenshots/list.png)
+
+![Edit form](docs/screenshots/edit.png)
+
+![Help](docs/screenshots/help.png)
 
 ## Platform
 

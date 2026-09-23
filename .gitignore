@@ -26,3 +26,6 @@ Thumbs.db
 # Worktrees
 .worktrees/
 working-docs/
+
+# Maintainer-only screenshot capture
+scripts/capture-screenshots.sh

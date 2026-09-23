@@ -1,7 +1,7 @@
 # Contributing
 
 Bug reports and patches are welcome. Wicket is small and opinionated, so if
-you are planning something substantial, open an issue first — it is cheaper
+you are planning something substantial, open an issue first, it is cheaper
 than finding out after the fact that it does not fit.
 
 ## What you need

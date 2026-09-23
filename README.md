@@ -5,9 +5,10 @@ when the session ends.
 
 ![Connection list](docs/screenshots/list.png)
 
-![Edit form](docs/screenshots/edit.png)
-
-![Help](docs/screenshots/help.png)
+<p>
+  <img src="docs/screenshots/edit.png" alt="Edit form" width="49%">
+  <img src="docs/screenshots/help.png" alt="Help" width="49%">
+</p>
 
 ## Platform
 

@@ -1,0 +1,9 @@
+sdl-freerdp3
+/v:h
+/u:u
+/f
+/multimon
++dynamic-resolution
+-clipboard
++home-drive
+/from-stdin:force

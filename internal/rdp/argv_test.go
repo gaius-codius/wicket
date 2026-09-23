@@ -19,6 +19,7 @@ func TestBuildPlan_DefaultOrder(t *testing.T) {
 		Size:              "100%",
 		DynamicResolution: true,
 		Scale:             100,
+		Clipboard:         true,
 	}
 	plan, err := BuildPlan(p)
 	if err != nil {
@@ -52,6 +53,7 @@ func TestBuildPlan_Omits(t *testing.T) {
 		DynamicResolution: false,
 		Scale:             180,
 		Size:              "1920x1080",
+		Clipboard:         true,
 	}
 	plan, err := BuildPlan(p)
 	if err != nil {

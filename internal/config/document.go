@@ -164,6 +164,20 @@ func profileFromTable(m map[string]any) (Profile, error) {
 	if err := assignInt(m, "scale", &p.Scale); err != nil {
 		return Profile{}, err
 	}
+	if err := assignBool(m, "multimon", &p.Multimon); err != nil {
+		return Profile{}, err
+	}
+	if err := assignBool(m, "clipboard", &p.Clipboard); err != nil {
+		return Profile{}, err
+	}
+	if err := assignBool(m, "share_home", &p.ShareHome); err != nil {
+		return Profile{}, err
+	}
+	// A hand-edited multimon without fullscreen still spans the monitors,
+	// since FreeRDP only does that full screen; say so in the form too.
+	if p.Multimon {
+		p.Fullscreen = true
+	}
 	if err := ValidateProfile(p); err != nil {
 		return Profile{}, err
 	}
@@ -236,6 +250,20 @@ func applyProfile(table map[string]any, p Profile) map[string]any {
 	out["fullscreen"] = p.Fullscreen
 	out["dynamic_resolution"] = p.DynamicResolution
 	out["scale"] = int64(p.Scale)
+	// Settings added after v0.1 are written only when they differ from
+	// their default, so saving a profile that never touched them leaves the
+	// file as it was.
+	for key, v := range map[string]struct{ val, def bool }{
+		"multimon":   {p.Multimon, false},
+		"clipboard":  {p.Clipboard, DefaultClipboard},
+		"share_home": {p.ShareHome, false},
+	} {
+		if v.val == v.def {
+			delete(out, key)
+		} else {
+			out[key] = v.val
+		}
+	}
 	return out
 }
 

@@ -351,10 +351,13 @@ func TestSession_StoppedIsNotAFailure(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	m, cmd := startSession(t, h)
 	waitFile(t, os.Getenv("FAKERDP_TRAP_READY"))
-	for range 3 {
-		m, _ = updateKey(m, "ctrl+c")
-	}
+	// Each press waits for the last signal to land: sent back to back, the
+	// SIGKILL can beat the client's handler to logging the SIGTERM.
+	m, _ = updateKey(m, "ctrl+c")
+	waitLog(t, log, "client:interrupt")
+	m, _ = updateKey(m, "ctrl+c")
 	waitLog(t, log, "client:terminated")
+	m, _ = updateKey(m, "ctrl+c")
 	m = settle(m, cmd)
 	if m.view != viewList || !strings.Contains(m.status, "session stopped") {
 		t.Fatalf("view %v status %q, want a plain stop for a killed client", m.view, m.status)

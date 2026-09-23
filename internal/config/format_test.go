@@ -292,6 +292,25 @@ func TestSave_ReviewCases(t *testing.T) {
 			want: "# my wicket config\n" + prof("b"),
 		},
 		{
+			// A comment flush between two profiles could be about either,
+			// so deleting the second keeps it.
+			name: "delete keeps a comment flush under the profile before",
+			src:  prof("a") + "# trailing note on a\n" + prof("b"),
+			save: func(t *testing.T, c *Config) { remove(t, c, "b") },
+			want: prof("a") + "# trailing note on a\n",
+		},
+		{
+			name: "add goes after a comment flush under the last profile",
+			src:  prof("a") + "# about a\n\n[ui]\ntheme = \"auto\"\n",
+			save: func(t *testing.T, c *Config) {
+				upsert(t, c, Profile{Name: "b", Host: "h", User: "u", Client: DefaultClient,
+					DynamicResolution: true, Scale: 100, Clipboard: true}, "")
+			},
+			want: prof("a") + "# about a\n\n[[profiles]]\nname = \"b\"\nhost = \"h\"\nuser = \"u\"\n" +
+				"client = \"sdl-freerdp3\"\nfullscreen = false\ndynamic_resolution = true\nscale = 100\n" +
+				"\n[ui]\ntheme = \"auto\"\n",
+		},
+		{
 			// reflect.DeepEqual has NaN unequal to itself, which made every
 			// save of this file a full rewrite.
 			name: "nan elsewhere",
@@ -382,5 +401,41 @@ func TestSave_KeepsLocalDates(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if want := strings.Replace(src, `"u"`, `"u2"`, 1); string(got) != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// Adding a profile and deleting it again gives back the file as it was.
+func TestSave_AddThenDeleteIsANoOp(t *testing.T) {
+	t.Parallel()
+	hand, err := os.ReadFile(filepath.Join("testdata", "preserve", "hand.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prof := "[[profiles]]\nname = \"a\"\nhost = \"h\"\nuser = \"u\"\n"
+	for name, src := range map[string]string{
+		"hand":             strings.Replace(string(hand), "  password = \"hunter2\"   # never do this\n", "", 1),
+		"flush tail":       prof + "# tail\n",
+		"table after":      prof + "# about a\n\n[ui]\ntheme = \"auto\"\n",
+		"no final newline": strings.TrimSuffix(prof, "\n"),
+		"no profiles":      "# just a comment\n[general]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := writeTOML(t, src)
+			c, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			upsert(t, c, Profile{Name: "new", Host: "h", User: "u", Client: DefaultClient,
+				DynamicResolution: true, Scale: 100, Clipboard: true}, "")
+			remove(t, c, "new")
+			if c.Rewrote() {
+				t.Fatal("rewrote the file in full")
+			}
+			got, _ := os.ReadFile(path)
+			if string(got) != src && !(name == "no final newline" && string(got) == src+"\n") {
+				t.Fatalf("got:\n%q\nwant:\n%q", got, src)
+			}
+		})
 	}
 }

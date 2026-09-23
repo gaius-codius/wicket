@@ -190,9 +190,13 @@ func (d *document) patch() ([]byte, error) {
 	}
 
 	// Secret keys go wherever they are, with their line and any comment on
-	// it, as the decoder side already dropped them from the maps.
+	// it, as the decoder side already dropped them from the maps. A table
+	// named like one is beyond a line-by-line patch.
 	for i, st := range stmts {
-		if !gone[i] && st.kind == stmtKeyValue && isSecretKey(st.path[len(st.path)-1]) {
+		if (st.kind == stmtTable || st.kind == stmtArrayTable) && secretPath(st.path) {
+			return nil, errLayout
+		}
+		if !gone[i] && st.kind == stmtKeyValue && secretPath(st.path) {
 			gone[i] = true
 			edits = append(edits, edit{start: st.start, end: st.end})
 		}
@@ -216,6 +220,11 @@ func (d *document) patch() ([]byte, error) {
 	if len(heads) > 0 && !strayProfileTables(stmts, heads[len(heads)-1], len(stmts)) {
 		h := heads[len(heads)-1]
 		l := lastContent(stmts, h, blockEnd(stmts, h))
+		// Comments right under the last profile's last line, with no blank
+		// line between, stay with it.
+		for l+1 < len(stmts) && stmts[l+1].kind == stmtTrivia && stmts[l+1].comment {
+			l++
+		}
 		at = stmts[l].end
 		if l+1 < len(stmts) && !(stmts[l+1].kind == stmtTrivia && !stmts[l+1].comment) {
 			after = nl
@@ -246,7 +255,8 @@ func ownSection(stmts []stmt, h int) (from, to int) {
 }
 
 // deleteSpan is the part of the file a deleted profile takes with it: the
-// comment lines directly above its header, the profile and its own subtables
+// comment lines directly above its header, when a blank line sets them off
+// from what comes before, the profile and its own subtables
 // ([profiles.x]) to its last line, and the blank lines after that. Comments
 // after its last line stay, since they may be about whatever comes next: a
 // section divider, or notes on a table further down. So do comments at the
@@ -261,7 +271,9 @@ func deleteSpan(stmts []stmt, h, size int) (first, last, start, end int) {
 	for first > 0 && isComment(first-1) {
 		first--
 	}
-	if first == 0 {
+	// Comments at the top of the file are about the file, and ones with no
+	// blank line above them may as well be about what is above.
+	if first == 0 || !isBlank(first-1) {
 		first = h
 	}
 	last = lastContent(stmts, h, blockEnd(stmts, h)) + 1
@@ -378,7 +390,7 @@ func patchProfile(src []byte, stmts []stmt, h int, old, now map[string]any, nl s
 	at, indent := stmts[h].end, ""
 	for i := from; i < to; i++ {
 		st := stmts[i]
-		if st.kind != stmtKeyValue || isSecretKey(st.path[len(st.path)-1]) {
+		if st.kind != stmtKeyValue || secretPath(st.path) {
 			continue
 		}
 		if _, inNow := now[st.path[0]]; !inNow && len(st.path) == 1 && old[st.path[0]] != nil {
@@ -511,7 +523,13 @@ func separate(before []byte, nl string) string {
 	return s
 }
 
-func isSecretKey(k string) bool {
-	_, ok := secretKeyNames[strings.ToLower(k)]
-	return ok
+// secretPath reports whether a key or table path names a secret anywhere
+// along it, as the load strips pass.x along with pass.
+func secretPath(path []string) bool {
+	for _, k := range path {
+		if _, ok := secretKeyNames[strings.ToLower(k)]; ok {
+			return true
+		}
+	}
+	return false
 }

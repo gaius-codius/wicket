@@ -20,6 +20,7 @@ func TestBuildPlan_Goldens(t *testing.T) {
 			p: config.Profile{
 				Name: "work", Host: "192.168.1.20", User: "jdoe", Domain: "CORP",
 				Client: "sdl-freerdp3", Size: "100%", DynamicResolution: true, Scale: 100,
+				Clipboard: true,
 			},
 		},
 		{
@@ -27,7 +28,25 @@ func TestBuildPlan_Goldens(t *testing.T) {
 			p: config.Profile{
 				Name: "lab", Host: "h", User: "u",
 				Client: "xfreerdp3", Size: "1920x1080", Fullscreen: true,
-				DynamicResolution: true, Scale: 140,
+				DynamicResolution: true, Scale: 140, Clipboard: true,
+			},
+		},
+		// The sharing settings, each away from its default. Both clients
+		// take the same syntax for them.
+		{
+			file: "sdl-freerdp3-sharing.argv",
+			p: config.Profile{
+				Name: "work", Host: "h", User: "u", Client: "sdl-freerdp3",
+				DynamicResolution: true, Scale: 100,
+				Multimon: true, Clipboard: false, ShareHome: true,
+			},
+		},
+		{
+			file: "xfreerdp3-sharing.argv",
+			p: config.Profile{
+				Name: "lab", Host: "h", User: "u", Client: "xfreerdp3",
+				Fullscreen: true, Scale: 100,
+				Multimon: true, Clipboard: false, ShareHome: true,
 			},
 		},
 	}

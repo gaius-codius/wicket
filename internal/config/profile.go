@@ -5,6 +5,9 @@ const (
 	DefaultScale             = 100
 	DefaultDynamicResolution = true
 	DefaultFullscreen        = false
+	// FreeRDP 3 shares the clipboard unless told not to, so on is what a
+	// profile written before the setting existed has always had.
+	DefaultClipboard = true
 )
 
 // Profile is a v1 user-editable connection (REQ-005).
@@ -18,6 +21,14 @@ type Profile struct {
 	Fullscreen        bool
 	DynamicResolution bool
 	Scale             int
+	// Multimon spans the session across every monitor. Wicket does that only
+	// full screen, so it implies Fullscreen: a window across several
+	// monitors is not something the form offers.
+	Multimon  bool
+	Clipboard bool
+	// ShareHome offers the whole local home folder, read-write, to the
+	// remote machine as a drive.
+	ShareHome bool
 }
 
 func defaultProfile() Profile {
@@ -26,5 +37,6 @@ func defaultProfile() Profile {
 		DynamicResolution: DefaultDynamicResolution,
 		Fullscreen:        DefaultFullscreen,
 		Scale:             DefaultScale,
+		Clipboard:         DefaultClipboard,
 	}
 }

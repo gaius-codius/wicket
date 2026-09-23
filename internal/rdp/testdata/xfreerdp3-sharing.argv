@@ -1,0 +1,8 @@
+xfreerdp3
+/v:h
+/u:u
+/f
+/multimon
+-clipboard
++home-drive
+/from-stdin:force

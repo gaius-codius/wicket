@@ -271,8 +271,14 @@ func (m *Model) formValue(id, width int) string {
 	switch id {
 	case fieldFullscreen:
 		return m.onOff(f.p.Fullscreen, width)
+	case fieldMultimon:
+		return m.onOff(f.p.Multimon, width)
 	case fieldDynamic:
 		return m.onOff(f.p.DynamicResolution, width)
+	case fieldClipboard:
+		return m.onOff(f.p.Clipboard, width)
+	case fieldShareHome:
+		return m.onOff(f.p.ShareHome, width)
 	case fieldForget:
 		return m.onOff(f.forget, width)
 	case fieldScale:
@@ -424,8 +430,11 @@ var formHelp = [fieldCount]string{
 	fieldDomain:     "The Windows domain of the account, if it has one.",
 	fieldSize:       "WIDTHxHEIGHT or N%. Empty uses the client default.",
 	fieldFullscreen: "Start the session full screen. `space` switches.",
+	fieldMultimon:   "Full screen across every monitor. `space` switches.",
 	fieldDynamic:    "Resize the remote desktop with the window. `space` switches.",
 	fieldScale:      "`←/→` to choose.",
+	fieldClipboard:  "Copy and paste between here and there. `space` switches.",
+	fieldShareHome:  "All of your home folder, read-write, as a drive there. `space` switches.",
 	fieldPassword:   "Saved in the keyring on `ctrl+s`. Empty keeps what is stored.",
 	fieldForget:     "Deletes the stored password on save. `space` switches.",
 	fieldClient:     "`←/→` to choose.",

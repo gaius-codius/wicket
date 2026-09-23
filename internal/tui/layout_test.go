@@ -246,6 +246,7 @@ var _ = tea.WindowSizeMsg{}
 // target with an ellipsis and hid the password field altogether -- while
 // keystrokes still reached the invisible field and enter still connected.
 func TestDialogs_KeepWhatMatters(t *testing.T) {
+	withFakeRDP(t)
 	cfg := fixtureTOML("work", "host.invalid", "user")
 	for w := 20; w <= 130; w += 2 {
 		for h := heightTiny; h <= 30; h++ {
@@ -291,6 +292,7 @@ func TestRender_ShortTerminalKeepsTheStatus(t *testing.T) {
 // The blank line above the error is worth less than the error, so a panel
 // with one line to spare spends it on the message rather than the gap.
 func TestModal_ShowsTheErrorWhenOneLineIsLeft(t *testing.T) {
+	withFakeRDP(t)
 	m := sized(t, fixtureTOML("work", "host.invalid", "user"), 80, 9, "enter", "enter")
 	out := stripANSI(m.render())
 	if !strings.Contains(out, "password") || !strings.Contains(out, "✗ password required") {

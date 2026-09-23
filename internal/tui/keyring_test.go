@@ -113,6 +113,7 @@ func waitGaveUp(t *testing.T, s *stallStore, op string) {
 // than the ones that stop the wait do nothing -- a second Enter included --
 // and Esc stops waiting and asks for the password instead.
 func TestKeyring_StalledLookupKeepsTheUIResponsive(t *testing.T) {
+	withFakeRDP(t)
 	store := newStallStore()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 
@@ -162,6 +163,7 @@ func TestKeyring_StalledLookupKeepsTheUIResponsive(t *testing.T) {
 // Ctrl+C, or a SIGINT, stops the wait and goes back to the list; SIGTERM and
 // SIGHUP quit, and cancel the lookup on the way.
 func TestKeyring_CtrlCAndSignalsWhileWaiting(t *testing.T) {
+	withFakeRDP(t)
 	for _, stop := range []tea.Msg{keyMsg("ctrl+c"), signalMsg{sig: syscall.SIGINT}} {
 		store := newStallStore()
 		h := newHarness(t, fixtureTOML("work", "h", "u"), store)
@@ -191,6 +193,7 @@ func TestKeyring_CtrlCAndSignalsWhileWaiting(t *testing.T) {
 // Once the wait has gone on a while, the status line says what Wicket may be
 // waiting for.
 func TestKeyring_SlowWaitMentionsTheUnlockPrompt(t *testing.T) {
+	withFakeRDP(t)
 	h := newHarness(t, fixtureTOML("work", "h", "u"), newStallStore())
 	m, cmd := updateKey(h.m, "enter")
 	defer func() { m, _ = updateKey(m, "ctrl+c") }()
@@ -304,6 +307,7 @@ func TestKeyring_StalledDialogSaveFallsBackToConnectOnce(t *testing.T) {
 // terminal back. Before the lookup left the update loop, only SIGKILL could
 // end Wicket here, and that left the terminal in raw mode.
 func TestRun_SignalsEndAWaitOnAStalledKeyring(t *testing.T) {
+	withFakeRDP(t)
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGHUP} {
 		t.Run(sig.String(), func(t *testing.T) {
 			_, srv, cleanup := fakesecret.Start(t)

@@ -357,7 +357,7 @@ func TestForm_ArrowKeysMoveFields(t *testing.T) {
 	}
 	// Down works from text fields and from toggles alike.
 	h.m = press(h.m, "down", "down", "down", "down", "down", "down")
-	if h.m.form.field != fieldDynamic {
+	if h.m.form.field != fieldMultimon {
 		t.Fatalf("after 6 downs: %d", h.m.form.field)
 	}
 	h.m = press(h.m, "down", "down", "down", "down", "down", "down", "down")
@@ -540,9 +540,10 @@ func TestForm_ErrorAttachesToItsFieldByKey(t *testing.T) {
 
 // Tab walks the fields in the order the sections show them.
 func TestForm_TabFollowsTheSections(t *testing.T) {
-	m := sized(t, fixtureTOML("work", "h", "u"), 80, 30, "e")
+	m := sized(t, fixtureTOML("work", "h", "u"), 80, 36, "e")
 	want := []int{fieldName, fieldHost, fieldUser, fieldDomain, fieldSize, fieldFullscreen,
-		fieldDynamic, fieldScale, fieldPassword, fieldForget, fieldClient}
+		fieldMultimon, fieldDynamic, fieldScale, fieldClipboard, fieldShareHome,
+		fieldPassword, fieldForget, fieldClient}
 	for i, id := range want {
 		if m.form.field != id {
 			t.Fatalf("tab stop %d is %q, want %q", i, formLabels[m.form.field], formLabels[id])
@@ -557,7 +558,8 @@ func TestForm_TabFollowsTheSections(t *testing.T) {
 	out := stripANSI(m.render())
 	at := -1
 	for _, s := range []string{"CONNECTION", "name:", "host:", "user:", "domain:", "DISPLAY", "size:",
-		"fullscreen:", "dynamic resolution:", "scale:", "PASSWORD", "  password:", "forget password:",
+		"fullscreen:", "all monitors:", "dynamic resolution:", "scale:", "SHARING", "clipboard:",
+		"home folder:", "PASSWORD", "  password:", "forget password:",
 		"ADVANCED", "client:"} {
 		i := strings.Index(out, s)
 		if i <= at {
@@ -687,5 +689,77 @@ func TestForm_HeaderMarksUnsavedChanges(t *testing.T) {
 	nm, _ := m.Update(teaWin(30, 24))
 	if h := header(nm.(Model)); !strings.Contains(h, "● modified") {
 		t.Fatalf("30 wide dropped the marker: %q", h)
+	}
+}
+
+// A new profile shares the clipboard, as FreeRDP does, and nothing else.
+func TestForm_NewProfileSharingDefaults(t *testing.T) {
+	h := newHarness(t, "", nil)
+	h.m = press(h.m, "n")
+	p := h.m.form.p
+	if !p.Clipboard || p.Multimon || p.ShareHome {
+		t.Fatalf("clipboard %v multimon %v share home %v", p.Clipboard, p.Multimon, p.ShareHome)
+	}
+}
+
+// All monitors means full screen on each, so the two rows move together:
+// all monitors on turns fullscreen on, and fullscreen off turns all
+// monitors off. The other rows switch alone.
+func TestForm_MultimonAndFullscreenMoveTogether(t *testing.T) {
+	h := newHarness(t, fixtureTOML("work", "h", "u"), nil)
+	h.m = press(h.m, "e")
+	h.m = focusField(t, h.m, fieldMultimon)
+	h.m = press(h.m, "space")
+	if !h.m.form.p.Multimon || !h.m.form.p.Fullscreen {
+		t.Fatalf("multimon on: multimon %v fullscreen %v", h.m.form.p.Multimon, h.m.form.p.Fullscreen)
+	}
+	h.m = press(h.m, "space")
+	if h.m.form.p.Multimon || !h.m.form.p.Fullscreen {
+		t.Fatalf("multimon off: multimon %v fullscreen %v", h.m.form.p.Multimon, h.m.form.p.Fullscreen)
+	}
+	h.m = press(h.m, "space")
+	h.m = focusField(t, h.m, fieldFullscreen)
+	h.m = press(h.m, "space")
+	if h.m.form.p.Multimon || h.m.form.p.Fullscreen {
+		t.Fatalf("fullscreen off: multimon %v fullscreen %v", h.m.form.p.Multimon, h.m.form.p.Fullscreen)
+	}
+
+	for _, tc := range []struct {
+		id  int
+		get func(config.Profile) bool
+	}{
+		{fieldClipboard, func(p config.Profile) bool { return p.Clipboard }},
+		{fieldShareHome, func(p config.Profile) bool { return p.ShareHome }},
+	} {
+		h.m = focusField(t, h.m, tc.id)
+		before := h.m.form.p
+		h.m = press(h.m, "space")
+		after := h.m.form.p
+		if tc.get(after) == tc.get(before) {
+			t.Fatalf("%s did not switch", formLabels[tc.id])
+		}
+		// Only that field changed.
+		h.m = press(h.m, "space")
+		if h.m.form.p != before {
+			t.Fatalf("%s: %+v, want %+v", formLabels[tc.id], h.m.form.p, before)
+		}
+	}
+}
+
+// The rows reach the config file.
+func TestForm_SharingSaves(t *testing.T) {
+	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	h.m = press(h.m, "e")
+	for _, id := range []int{fieldMultimon, fieldClipboard, fieldShareHome} {
+		h.m = focusField(t, h.m, id)
+		h.m = press(h.m, "space")
+	}
+	h.m = press(h.m, "ctrl+s")
+	if h.m.view != viewList {
+		t.Fatalf("save failed: %s", h.m.form.err)
+	}
+	got, _ := h.m.app.Cfg.Profile("work")
+	if !got.Multimon || !got.Fullscreen || got.Clipboard || !got.ShareHome {
+		t.Fatalf("saved %+v", got)
 	}
 }

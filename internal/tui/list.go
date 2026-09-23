@@ -39,6 +39,7 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 		return m.openForm("", config.Profile{
 			Scale:             config.DefaultScale,
 			DynamicResolution: config.DefaultDynamicResolution,
+			Clipboard:         config.DefaultClipboard,
 		})
 	case "e":
 		if empty {
@@ -410,8 +411,10 @@ func (m Model) detailLine(d detail, width int) string {
 }
 
 // details lists the selected profile's fields. The host and last-used time
-// are left out when the row already shows them. The password line is last,
-// so a short card drops it first.
+// are left out when the row already shows them. The password line comes
+// after everything a profile always has, so a short card drops it first; only
+// a sharing line comes later, and only when the profile has changed what it
+// shares, so a card that fitted before still does.
 func (m Model) details(p config.Profile, withHost, withLast bool) []detail {
 	var ds []detail
 	if withHost {
@@ -430,6 +433,9 @@ func (m Model) details(p config.Profile, withHost, withLast bool) []detail {
 	}
 	text, st := m.presenceLine(p)
 	ds = append(ds, detail{key: "password", value: text, style: &st})
+	if p.Clipboard != config.DefaultClipboard || p.ShareHome {
+		ds = append(ds, detail{key: "sharing", value: sharingLine(p)})
+	}
 	return ds
 }
 
@@ -481,15 +487,33 @@ func displayLine(p config.Profile) string {
 	if p.Size != "" {
 		parts = append(parts, p.Size)
 	}
-	if p.Fullscreen {
+	switch {
+	case p.Multimon:
+		parts = append(parts, "fullscreen", "all monitors")
+	case p.Fullscreen:
 		parts = append(parts, "fullscreen")
-	} else {
+	default:
 		parts = append(parts, "window")
 	}
 	if p.DynamicResolution {
 		parts = append(parts, "dynamic resolution")
 	}
 	parts = append(parts, fmt.Sprintf("scale %d%%", p.Scale))
+	return strings.Join(parts, " · ")
+}
+
+// sharingLine says what the session shares with the remote machine.
+func sharingLine(p config.Profile) string {
+	var parts []string
+	if p.Clipboard {
+		parts = append(parts, "clipboard")
+	}
+	if p.ShareHome {
+		parts = append(parts, "home folder")
+	}
+	if len(parts) == 0 {
+		return "nothing"
+	}
 	return strings.Join(parts, " · ")
 }
 

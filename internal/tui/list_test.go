@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -255,6 +256,26 @@ func TestDisplayLine(t *testing.T) {
 	if got := displayLine(p); got != "1920x1080 · fullscreen · scale 140%" {
 		t.Fatalf("got %q", got)
 	}
+	p = config.Profile{Fullscreen: true, Multimon: true, Scale: 100}
+	if got := displayLine(p); got != "fullscreen · all monitors · scale 100%" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSharingLine(t *testing.T) {
+	for _, c := range []struct {
+		p    config.Profile
+		want string
+	}{
+		{config.Profile{Clipboard: true}, "clipboard"},
+		{config.Profile{Clipboard: true, ShareHome: true}, "clipboard · home folder"},
+		{config.Profile{ShareHome: true}, "home folder"},
+		{config.Profile{}, "nothing"},
+	} {
+		if got := sharingLine(c.p); got != c.want {
+			t.Errorf("sharingLine(%+v) = %q, want %q", c.p, got, c.want)
+		}
+	}
 }
 
 func twoProfiles() string {
@@ -373,6 +394,33 @@ func TestList_FitsShortTerminal(t *testing.T) {
 		}
 		if !strings.Contains(out, "p00") || !strings.Contains(out, "session ended") || !strings.Contains(out, "quit") {
 			t.Fatalf("%dx%d: selection, status, or footer missing:\n%s", size[0], size[1], out)
+		}
+	}
+}
+
+// The sharing line shows only a profile that changed what it shares, and
+// comes after the password line, so a card that fitted before this setting
+// existed still shows the password.
+func TestDetails_SharingOnlyWhenChanged(t *testing.T) {
+	h := newHarness(t, "", nil)
+	keys := func(p config.Profile) []string {
+		var out []string
+		for _, d := range h.m.details(p, true, true) {
+			out = append(out, d.key)
+		}
+		return out
+	}
+	p := config.Profile{Name: "n", Host: "h", User: "u", Client: config.DefaultClient, Scale: 100, Clipboard: true}
+	if got := keys(p); slices.Contains(got, "sharing") || got[len(got)-1] != "password" {
+		t.Fatalf("default sharing: %v", got)
+	}
+	for _, changed := range []config.Profile{
+		func() config.Profile { q := p; q.Clipboard = false; return q }(),
+		func() config.Profile { q := p; q.ShareHome = true; return q }(),
+	} {
+		got := keys(changed)
+		if got[len(got)-1] != "sharing" || got[len(got)-2] != "password" {
+			t.Fatalf("clipboard %v share home %v: %v", changed.Clipboard, changed.ShareHome, got)
 		}
 	}
 }

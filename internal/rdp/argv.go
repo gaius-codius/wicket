@@ -36,14 +36,27 @@ func BuildPlan(p config.Profile) (Plan, error) {
 		// FreeRDP would take the spaces as part of the value.
 		args = append(args, "/size:"+size)
 	}
-	if p.Fullscreen {
+	if p.Fullscreen || p.Multimon {
 		args = append(args, "/f")
+	}
+	if p.Multimon {
+		args = append(args, "/multimon")
 	}
 	if p.DynamicResolution {
 		args = append(args, "+dynamic-resolution")
 	}
 	if p.Scale == 140 || p.Scale == 180 {
 		args = append(args, "/scale:"+strconv.Itoa(p.Scale))
+	}
+	if !p.Clipboard {
+		// FreeRDP 3 shares the clipboard by default; only "-clipboard"
+		// turns it off.
+		args = append(args, "-clipboard")
+	}
+	if p.ShareHome {
+		// FreeRDP finds the home folder itself, as it launches, so no path
+		// is put on the command line or needs checking here.
+		args = append(args, "+home-drive")
 	}
 	args = append(args, stdinFlag)
 	for _, a := range args {

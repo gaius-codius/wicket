@@ -20,8 +20,11 @@ const (
 	fieldDomain
 	fieldSize
 	fieldFullscreen
+	fieldMultimon
 	fieldDynamic
 	fieldScale
+	fieldClipboard
+	fieldShareHome
 	fieldPassword
 	fieldForget
 	fieldClient
@@ -42,8 +45,11 @@ var formLabels = [fieldCount]string{
 	fieldDomain:     "domain",
 	fieldSize:       "size",
 	fieldFullscreen: "fullscreen",
+	fieldMultimon:   "all monitors",
 	fieldDynamic:    "dynamic resolution",
 	fieldScale:      "scale",
+	fieldClipboard:  "clipboard",
+	fieldShareHome:  "home folder",
 	fieldPassword:   "password",
 	fieldForget:     "forget password",
 	fieldClient:     "client",
@@ -59,8 +65,11 @@ var fieldKeys = [fieldCount]string{
 	fieldDomain:     "domain",
 	fieldSize:       "size",
 	fieldFullscreen: "fullscreen",
+	fieldMultimon:   "multimon",
 	fieldDynamic:    "dynamic_resolution",
 	fieldScale:      "scale",
+	fieldClipboard:  "clipboard",
+	fieldShareHome:  "share_home",
 	fieldPassword:   "password",
 	fieldClient:     "client",
 }
@@ -85,7 +94,8 @@ type formSection struct {
 // the order tab walks them.
 var formSections = []formSection{
 	{"CONNECTION", []int{fieldName, fieldHost, fieldUser, fieldDomain}},
-	{"DISPLAY", []int{fieldSize, fieldFullscreen, fieldDynamic, fieldScale}},
+	{"DISPLAY", []int{fieldSize, fieldFullscreen, fieldMultimon, fieldDynamic, fieldScale}},
+	{"SHARING", []int{fieldClipboard, fieldShareHome}},
 	{"PASSWORD", []int{fieldPassword, fieldForget}},
 	{"ADVANCED", []int{fieldClient}},
 }
@@ -460,6 +470,20 @@ func (m *Model) toggleFormField(f *formState) {
 	switch f.field {
 	case fieldFullscreen:
 		f.p.Fullscreen = !f.p.Fullscreen
+		// All monitors means full screen on each of them, so a window is
+		// one monitor.
+		if !f.p.Fullscreen {
+			f.p.Multimon = false
+		}
+	case fieldMultimon:
+		f.p.Multimon = !f.p.Multimon
+		if f.p.Multimon {
+			f.p.Fullscreen = true
+		}
+	case fieldClipboard:
+		f.p.Clipboard = !f.p.Clipboard
+	case fieldShareHome:
+		f.p.ShareHome = !f.p.ShareHome
 	case fieldDynamic:
 		f.p.DynamicResolution = !f.p.DynamicResolution
 	case fieldScale:

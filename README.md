@@ -65,6 +65,20 @@ fine; unknown keys are kept. A save from the TUI rewrites the file, so
 comments and formatting are lost. Keys named `password`, `pass`, `secret`, or
 `passwd` are stripped on save.
 
+Sharing is per profile, set in the form or by hand:
+
+```toml
+[[profiles]]
+name = "work"
+host = "192.168.1.20"
+user = "jdoe"
+clipboard = false   # on unless turned off, as in FreeRDP
+multimon = true     # full screen across every monitor
+share_home = true   # your home folder as a drive on the remote machine
+```
+
+Keys left out keep their default, and a save only writes the ones changed.
+
 ## Theme
 
 ```toml

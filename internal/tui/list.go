@@ -39,6 +39,7 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 		return m.openForm("", config.Profile{
 			Scale:             config.DefaultScale,
 			DynamicResolution: config.DefaultDynamicResolution,
+			Clipboard:         config.DefaultClipboard,
 		})
 	case "e":
 		if empty {
@@ -425,6 +426,7 @@ func (m Model) details(p config.Profile, withHost, withLast bool) []detail {
 		ds = append(ds, detail{key: "last used", value: m.lastUsed(p.Name)})
 	}
 	ds = append(ds, detail{key: "display", value: displayLine(p)})
+	ds = append(ds, detail{key: "sharing", value: sharingLine(p)})
 	if p.Client != "" && p.Client != config.DefaultClient {
 		ds = append(ds, detail{key: "client", value: p.Client})
 	}
@@ -481,15 +483,33 @@ func displayLine(p config.Profile) string {
 	if p.Size != "" {
 		parts = append(parts, p.Size)
 	}
-	if p.Fullscreen {
+	switch {
+	case p.Multimon:
+		parts = append(parts, "fullscreen", "all monitors")
+	case p.Fullscreen:
 		parts = append(parts, "fullscreen")
-	} else {
+	default:
 		parts = append(parts, "window")
 	}
 	if p.DynamicResolution {
 		parts = append(parts, "dynamic resolution")
 	}
 	parts = append(parts, fmt.Sprintf("scale %d%%", p.Scale))
+	return strings.Join(parts, " · ")
+}
+
+// sharingLine says what the session shares with the remote machine.
+func sharingLine(p config.Profile) string {
+	var parts []string
+	if p.Clipboard {
+		parts = append(parts, "clipboard")
+	}
+	if p.ShareHome {
+		parts = append(parts, "home folder")
+	}
+	if len(parts) == 0 {
+		return "nothing"
+	}
 	return strings.Join(parts, " · ")
 }
 

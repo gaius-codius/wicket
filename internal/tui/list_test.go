@@ -255,6 +255,26 @@ func TestDisplayLine(t *testing.T) {
 	if got := displayLine(p); got != "1920x1080 · fullscreen · scale 140%" {
 		t.Fatalf("got %q", got)
 	}
+	p = config.Profile{Fullscreen: true, Multimon: true, Scale: 100}
+	if got := displayLine(p); got != "fullscreen · all monitors · scale 100%" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSharingLine(t *testing.T) {
+	for _, c := range []struct {
+		p    config.Profile
+		want string
+	}{
+		{config.Profile{Clipboard: true}, "clipboard"},
+		{config.Profile{Clipboard: true, ShareHome: true}, "clipboard · home folder"},
+		{config.Profile{ShareHome: true}, "home folder"},
+		{config.Profile{}, "nothing"},
+	} {
+		if got := sharingLine(c.p); got != c.want {
+			t.Errorf("sharingLine(%+v) = %q, want %q", c.p, got, c.want)
+		}
+	}
 }
 
 func twoProfiles() string {

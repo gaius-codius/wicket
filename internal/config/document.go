@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -25,6 +26,14 @@ type document struct {
 	profiles []map[string]any
 	extras   map[string]any
 	warnings []string
+
+	// src is the file as read, which a save patches rather than replaces.
+	src []byte
+	// origProfiles are the profiles as read, and origIdx says which of
+	// them each entry of profiles started as, or -1 for one added since.
+	// Together they tell the patch what a save changed.
+	origProfiles []map[string]any
+	origIdx      []int
 }
 
 func parseDocument(data []byte) (*document, error) {
@@ -56,7 +65,28 @@ func parseDocument(data []byte) (*document, error) {
 	}
 	d.extras = raw
 	d.stripSecrets()
+	d.src = data
+	d.origProfiles = slices.Clone(d.profiles)
+	d.origIdx = make([]int, len(d.profiles))
+	for i := range d.origIdx {
+		d.origIdx[i] = i
+	}
 	return d, nil
+}
+
+// setProfile replaces the profile at idx.
+func (d *document) setProfile(idx int, table map[string]any) { d.profiles[idx] = table }
+
+// addProfile appends a profile.
+func (d *document) addProfile(table map[string]any) {
+	d.profiles = append(d.profiles, table)
+	d.origIdx = append(d.origIdx, -1)
+}
+
+// removeProfile deletes the profile at idx.
+func (d *document) removeProfile(idx int) {
+	d.profiles = slices.Delete(d.profiles, idx, idx+1)
+	d.origIdx = slices.Delete(d.origIdx, idx, idx+1)
 }
 
 func (d *document) stripSecrets() {
@@ -236,7 +266,6 @@ func applyProfile(table map[string]any, p Profile) map[string]any {
 	out["name"] = p.Name
 	out["host"] = p.Host
 	out["user"] = p.User
-	out["client"] = p.Client
 	// Optional keys left empty are left out, rather than written as
 	// `size = ""`: an empty value means the same as no key, and a hand-edited
 	// file reads better without them. Unknown keys are still kept.
@@ -247,9 +276,24 @@ func applyProfile(table map[string]any, p Profile) map[string]any {
 			out[key] = v
 		}
 	}
-	out["fullscreen"] = p.Fullscreen
-	out["dynamic_resolution"] = p.DynamicResolution
-	out["scale"] = int64(p.Scale)
+	// A new profile spells these out, so a hand-editor finds them. An
+	// existing one that leaves one out, at its default, keeps leaving it out:
+	// a save should not grow a hand-written profile by lines that change
+	// nothing.
+	adding := len(table) == 0
+	for _, kv := range []struct {
+		key      string
+		val, def any
+	}{
+		{"client", p.Client, DefaultClient},
+		{"fullscreen", p.Fullscreen, DefaultFullscreen},
+		{"dynamic_resolution", p.DynamicResolution, DefaultDynamicResolution},
+		{"scale", int64(p.Scale), int64(DefaultScale)},
+	} {
+		if _, had := out[kv.key]; had || adding || kv.val != kv.def {
+			out[kv.key] = kv.val
+		}
+	}
 	// Settings added after v0.1 are written only when they differ from
 	// their default, so saving a profile that never touched them leaves the
 	// file as it was.

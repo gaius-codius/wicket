@@ -17,7 +17,14 @@ type Config struct {
 	path     string
 	doc      *document
 	profiles []Profile
+	// rewrote is set when the last save could not patch the file and wrote
+	// it out in full, losing its comments and formatting.
+	rewrote bool
 }
+
+// Rewrote reports whether the last save rewrote the file in full rather than
+// editing it in place, so comments and formatting in it were lost.
+func (c *Config) Rewrote() bool { return c.rewrote }
 
 // Path is the canonical config path.
 func (c *Config) Path() string { return c.path }
@@ -123,15 +130,10 @@ func (c *Config) Upsert(p Profile, except string) error {
 				return fmt.Errorf("profile %q not found", except)
 			}
 		}
-		table := map[string]any{}
 		if idx >= 0 {
-			table = c.doc.profiles[idx]
-		}
-		table = applyProfile(table, p)
-		if idx >= 0 {
-			c.doc.profiles[idx] = table
+			c.doc.setProfile(idx, applyProfile(c.doc.profiles[idx], p))
 		} else {
-			c.doc.profiles = append(c.doc.profiles, table)
+			c.doc.addProfile(applyProfile(nil, p))
 		}
 		return nil
 	})
@@ -144,7 +146,7 @@ func (c *Config) Remove(name string) error {
 		if idx < 0 {
 			return fmt.Errorf("profile %q not found", name)
 		}
-		c.doc.profiles = append(c.doc.profiles[:idx], c.doc.profiles[idx+1:]...)
+		c.doc.removeProfile(idx)
 		return nil
 	})
 }
@@ -188,11 +190,15 @@ func (c *Config) mutate(edit func() error) error {
 
 // save writes the document atomically at 0600. Callers must hold the lock.
 func (c *Config) save() error {
-	data, err := c.doc.encode()
+	data, patched, err := c.doc.render()
 	if err != nil {
 		return err
 	}
-	return atomicWrite(c.path, data)
+	if err := atomicWrite(c.path, data); err != nil {
+		return err
+	}
+	c.rewrote = !patched
+	return nil
 }
 
 func (c *Config) lock() (func(), error) {

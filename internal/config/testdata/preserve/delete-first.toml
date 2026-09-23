@@ -1,0 +1,23 @@
+# Wicket connections. Hand-edited; keep the comments.
+
+[general]
+note = "kept"   # an unknown key, with a comment
+
+# --- Work machines ---------------------------------------------------------
+
+# The lab box. Somebody once put its password in here.
+[[profiles]]
+  name = 'lab'
+  host = "lab.example.com:3390"
+  user = "admin"
+  size = "1920x1080"
+  fullscreen = true
+
+[[profiles]]
+name = "spare"
+host = "10.0.0.9"
+user = "u"
+[profiles.extra]
+colour = "green"
+
+# Trailing notes stay at the end.

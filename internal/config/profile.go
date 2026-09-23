@@ -21,12 +21,13 @@ type Profile struct {
 	Fullscreen        bool
 	DynamicResolution bool
 	Scale             int
-	// Multimon spans the session across every monitor. FreeRDP only does
-	// that full screen, so it implies Fullscreen.
+	// Multimon spans the session across every monitor. Wicket does that only
+	// full screen, so it implies Fullscreen: a window across several
+	// monitors is not something the form offers.
 	Multimon  bool
 	Clipboard bool
-	// ShareHome offers the local home folder to the remote machine as a
-	// drive.
+	// ShareHome offers the whole local home folder, read-write, to the
+	// remote machine as a drive.
 	ShareHome bool
 }
 

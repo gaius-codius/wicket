@@ -77,7 +77,7 @@ func TestSharing_RoundTrip(t *testing.T) {
 	}
 }
 
-// FreeRDP spans monitors only full screen, so a hand-edited multimon
+// All monitors means full screen on each, so a hand-edited multimon
 // without fullscreen loads as fullscreen, which is what it will do.
 func TestSharing_MultimonImpliesFullscreen(t *testing.T) {
 	t.Parallel()

@@ -77,6 +77,9 @@ multimon = true     # full screen across every monitor
 share_home = true   # your home folder as a drive on the remote machine
 ```
 
+`share_home` shares all of your home folder, read-write, dotfiles and
+`~/.ssh` included. Only turn it on for machines you trust.
+
 Keys left out keep their default, and a save only writes the ones changed.
 
 ## Theme

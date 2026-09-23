@@ -470,8 +470,8 @@ func (m *Model) toggleFormField(f *formState) {
 	switch f.field {
 	case fieldFullscreen:
 		f.p.Fullscreen = !f.p.Fullscreen
-		// FreeRDP spans monitors only full screen, so a window is one
-		// monitor.
+		// All monitors means full screen on each of them, so a window is
+		// one monitor.
 		if !f.p.Fullscreen {
 			f.p.Multimon = false
 		}

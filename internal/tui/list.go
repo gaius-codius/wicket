@@ -411,8 +411,10 @@ func (m Model) detailLine(d detail, width int) string {
 }
 
 // details lists the selected profile's fields. The host and last-used time
-// are left out when the row already shows them. The password line is last,
-// so a short card drops it first.
+// are left out when the row already shows them. The password line comes
+// after everything a profile always has, so a short card drops it first; only
+// a sharing line comes later, and only when the profile has changed what it
+// shares, so a card that fitted before still does.
 func (m Model) details(p config.Profile, withHost, withLast bool) []detail {
 	var ds []detail
 	if withHost {
@@ -426,12 +428,14 @@ func (m Model) details(p config.Profile, withHost, withLast bool) []detail {
 		ds = append(ds, detail{key: "last used", value: m.lastUsed(p.Name)})
 	}
 	ds = append(ds, detail{key: "display", value: displayLine(p)})
-	ds = append(ds, detail{key: "sharing", value: sharingLine(p)})
 	if p.Client != "" && p.Client != config.DefaultClient {
 		ds = append(ds, detail{key: "client", value: p.Client})
 	}
 	text, st := m.presenceLine(p)
 	ds = append(ds, detail{key: "password", value: text, style: &st})
+	if p.Clipboard != config.DefaultClipboard || p.ShareHome {
+		ds = append(ds, detail{key: "sharing", value: sharingLine(p)})
+	}
 	return ds
 }
 

@@ -173,8 +173,8 @@ func profileFromTable(m map[string]any) (Profile, error) {
 	if err := assignBool(m, "share_home", &p.ShareHome); err != nil {
 		return Profile{}, err
 	}
-	// A hand-edited multimon without fullscreen still spans the monitors,
-	// since FreeRDP only does that full screen; say so in the form too.
+	// Multimon is full screen across every monitor, so a hand-edited one
+	// without fullscreen loads with it, and the form shows what will run.
 	if p.Multimon {
 		p.Fullscreen = true
 	}

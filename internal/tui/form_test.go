@@ -702,7 +702,7 @@ func TestForm_NewProfileSharingDefaults(t *testing.T) {
 	}
 }
 
-// FreeRDP spans monitors only full screen, so the two rows move together:
+// All monitors means full screen on each, so the two rows move together:
 // all monitors on turns fullscreen on, and fullscreen off turns all
 // monitors off. The other rows switch alone.
 func TestForm_MultimonAndFullscreenMoveTogether(t *testing.T) {

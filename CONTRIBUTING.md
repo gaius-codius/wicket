@@ -55,6 +55,39 @@ static linux/amd64 and linux/arm64 binaries, and publishes them with
 git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0
 ```
 
+### AUR
+
+`packaging/aur/wicket-bin/PKGBUILD` is the template for the `wicket-bin` AUR
+package. When the `AUR_SSH_PRIVATE_KEY` secret is set, the `release` workflow
+sets `pkgver`, `pkgrel=1` and the checksums from the tag and `SHA256SUMS`,
+test-builds the package, and pushes `PKGBUILD` and a fresh `.SRCINFO` to the
+AUR. Without the secret those steps are skipped. Pre-release tags are always
+skipped.
+
+First-time setup:
+
+1. Register an AUR account and add an SSH public key to it.
+2. Create the package with a first push:
+
+   ```
+   git clone ssh://aur@aur.archlinux.org/wicket-bin.git
+   cp packaging/aur/wicket-bin/{PKGBUILD,.SRCINFO} wicket-bin/
+   cd wicket-bin && git add PKGBUILD .SRCINFO
+   git commit -m "Initial import" && git push
+   ```
+
+3. Add the matching private key as the `AUR_SSH_PRIVATE_KEY` repository
+   secret.
+
+Manual update, if the workflow fails: in a clone of the AUR repo, bump
+`pkgver`, reset `pkgrel=1`, then
+
+```
+updpkgsums
+makepkg --printsrcinfo > .SRCINFO
+git commit -am "Update to vX.Y.Z" && git push
+```
+
 ## Commits
 
 One change per commit, and a message that explains the problem rather than

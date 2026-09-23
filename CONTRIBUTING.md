@@ -45,6 +45,16 @@ fix is reverted.
   `internal/rdp`, `internal/secret` and `internal/theme` know nothing about the
   TUI. `cmd/wicket` wires them together.
 
+## Releasing
+
+Push a `vX.Y.Z` tag from `main`. The `release` workflow runs the tests, builds
+static linux/amd64 and linux/arm64 binaries, and publishes them with
+`SHA256SUMS` as a GitHub release, which is what `install.sh` downloads.
+
+```
+git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0
+```
+
 ## Commits
 
 One change per commit, and a message that explains the problem rather than

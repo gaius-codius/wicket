@@ -1,0 +1,21 @@
+pkgbase = wicket-bin
+	pkgdesc = Terminal UI for saved FreeRDP connections
+	pkgver = 0.1.1
+	pkgrel = 1
+	url = https://github.com/gaius-codius/wicket
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	depends = freerdp
+	optdepends = gnome-keyring: Secret Service provider for saved passwords
+	optdepends = kwallet: Secret Service provider for saved passwords
+	provides = wicket
+	conflicts = wicket
+	options = !debug
+	options = !strip
+	source_x86_64 = https://github.com/gaius-codius/wicket/releases/download/v0.1.1/wicket_0.1.1_linux_amd64.tar.gz
+	sha256sums_x86_64 = c8c97d637b1757ffeeb429b80be8c769321bec7bebf6053f32772495c362d228
+	source_aarch64 = https://github.com/gaius-codius/wicket/releases/download/v0.1.1/wicket_0.1.1_linux_arm64.tar.gz
+	sha256sums_aarch64 = 5513cbbc70d7d89ebf559fa90ec665656c899b809660e034b709767f3109a430
+
+pkgname = wicket-bin

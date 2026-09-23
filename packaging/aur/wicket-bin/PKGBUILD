@@ -1,0 +1,33 @@
+# Maintainer: gaius-codius
+
+# The release workflow rewrites pkgver, pkgrel and both sha256sums lines from
+# the tag and dist/SHA256SUMS, so keep each of them on a single line.
+pkgname=wicket-bin
+pkgver=0.1.1
+pkgrel=1
+pkgdesc='Terminal UI for saved FreeRDP connections'
+arch=('x86_64' 'aarch64')
+url='https://github.com/gaius-codius/wicket'
+license=('MIT')
+depends=('freerdp')
+optdepends=('gnome-keyring: Secret Service provider for saved passwords'
+            'kwallet: Secret Service provider for saved passwords')
+provides=('wicket')
+conflicts=('wicket')
+options=('!debug' '!strip')
+source_x86_64=("$url/releases/download/v$pkgver/wicket_${pkgver}_linux_amd64.tar.gz")
+source_aarch64=("$url/releases/download/v$pkgver/wicket_${pkgver}_linux_arm64.tar.gz")
+sha256sums_x86_64=('c8c97d637b1757ffeeb429b80be8c769321bec7bebf6053f32772495c362d228')
+sha256sums_aarch64=('5513cbbc70d7d89ebf559fa90ec665656c899b809660e034b709767f3109a430')
+
+# Release tarballs use Go's arch names.
+_goarch_x86_64=amd64
+_goarch_aarch64=arm64
+
+package() {
+  local goarch="_goarch_$CARCH"
+  cd "wicket_${pkgver}_linux_${!goarch}"
+  install -Dm755 wicket "$pkgdir/usr/bin/wicket"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

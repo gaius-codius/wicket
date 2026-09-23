@@ -53,3 +53,80 @@ jobs:
         run: |
           gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS \
             --title "$TAG" --generate-notes --verify-tag
+
+  # A job of its own, so the third-party AUR action never shares a runner
+  # with the release job's write token, and a failed AUR push can be re-run
+  # without trying to create the release again. It stays inert until the
+  # AUR_SSH_PRIVATE_KEY secret is added.
+  aur:
+    name: update-aur
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Only plain vX.Y.Z tags: a pre-release suffix is not a valid pkgver,
+      # and the version is spliced into sed below, so nothing else gets in.
+      - name: Check AUR key and tag
+        id: aur
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "AUR_SSH_PRIVATE_KEY not set; skipping the AUR update"
+          elif ! [[ "$TAG" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "$TAG is not a plain vX.Y.Z tag; skipping the AUR update"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.aur.outputs.enabled == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # packaging/aur/wicket-bin/PKGBUILD is the template: only pkgver,
+      # pkgrel and the checksums change per release. The checksums come from
+      # the SHA256SUMS the release job published.
+      - name: Update PKGBUILD
+        if: steps.aur.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir dist
+          sum() {
+            awk -v f="wicket_${version}_linux_$1.tar.gz" '$2 == f { print $1 }' dist/SHA256SUMS
+          }
+          amd64="$(sum amd64)"
+          arm64="$(sum arm64)"
+          for s in "$amd64" "$arm64"; do
+            if ! [[ "$s" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "missing or malformed checksum in SHA256SUMS"
+              exit 1
+            fi
+          done
+          sed -i \
+            -e "s/^pkgver=.*/pkgver=${version}/" \
+            -e "s/^pkgrel=.*/pkgrel=1/" \
+            -e "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${amd64}')/" \
+            -e "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('${arm64}')/" \
+            packaging/aur/wicket-bin/PKGBUILD
+          git diff -- packaging/aur/wicket-bin/PKGBUILD
+
+      # Builds the package from the published release (test: true),
+      # regenerates .SRCINFO and pushes both files to the AUR.
+      - name: Publish to AUR
+        if: steps.aur.outputs.enabled == 'true'
+        uses: KSXGitHub/github-actions-deploy-aur@084b0d9b15415bf9cdb65d44dad1efe37a354050 # v4.2.0
+        with:
+          pkgname: wicket-bin
+          pkgbuild: packaging/aur/wicket-bin/PKGBUILD
+          test: true
+          commit_username: gaius-codius
+          commit_email: gaius-codius@users.noreply.github.com
+          commit_message: Update to ${{ github.ref_name }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

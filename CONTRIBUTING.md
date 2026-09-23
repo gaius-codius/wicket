@@ -6,7 +6,7 @@ than finding out after the fact that it does not fit.
 
 ## What you need
 
-- Go 1.24 or newer.
+- Go 1.26 or newer.
 - Linux. Wicket compiles for macOS and the BSDs but has no keyring backend
   there; see [#1](https://github.com/gaius-codius/wicket/issues/1).
 - `dbus-daemon` on `PATH`. The `internal/secret` tests start a private session

@@ -61,8 +61,9 @@ git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0
 package. When the `AUR_SSH_PRIVATE_KEY` secret is set, the `release` workflow
 sets `pkgver`, `pkgrel=1` and the checksums from the tag and `SHA256SUMS`,
 test-builds the package, and pushes `PKGBUILD` and a fresh `.SRCINFO` to the
-AUR. Without the secret those steps are skipped. Pre-release tags are always
-skipped.
+AUR, in an `update-aur` job after the release. Without the secret the job
+does nothing, and it skips any tag that is not a plain `vX.Y.Z`. If the push
+fails, re-run that job alone from the Actions page.
 
 First-time setup:
 
@@ -70,10 +71,10 @@ First-time setup:
 2. Create the package with a first push:
 
    ```
-   git clone ssh://aur@aur.archlinux.org/wicket-bin.git
+   git -c init.defaultBranch=master clone ssh://aur@aur.archlinux.org/wicket-bin.git
    cp packaging/aur/wicket-bin/{PKGBUILD,.SRCINFO} wicket-bin/
    cd wicket-bin && git add PKGBUILD .SRCINFO
-   git commit -m "Initial import" && git push
+   git commit -m "Initial import" && git push origin master
    ```
 
 3. Add the matching private key as the `AUR_SSH_PRIVATE_KEY` repository

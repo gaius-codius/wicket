@@ -16,13 +16,20 @@ MacOS coming soon; Windows does not build.
 
 ## Install
 
-From a clone:
-
 ```
-./scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/gaius-codius/wicket/main/install.sh | sh
 ```
 
-Or with Go alone:
+This installs the latest release for amd64 or arm64 into `~/.local/bin` (set
+`WICKET_BINDIR` to change it) after checking it against the release's
+`SHA256SUMS`. Run the same command again to update.
+
+```
+... | sh -s -- --version v0.1.0   # a given release
+... | sh -s -- --uninstall        # remove the binary
+```
+
+Config, state, and keyring entries are never touched. Or, with Go:
 
 ```
 go install github.com/gaius-codius/wicket/cmd/wicket@latest
@@ -30,9 +37,6 @@ go install github.com/gaius-codius/wicket/cmd/wicket@latest
 
 Needs a FreeRDP 3 client on `PATH`: `sdl-freerdp3` or `xfreerdp3`. New profiles
 use the first one found, in that order.
-
-Update with `./scripts/update.sh`. Remove the binary with
-`./scripts/uninstall.sh` (config, state, and keyring entries are left alone).
 
 ## Run
 

@@ -197,6 +197,7 @@ func (a *App) commitSave(plan savePlan) (warnings []string, err error) {
 	if err := a.Cfg.Upsert(plan.p, plan.oldName); err != nil {
 		return nil, err
 	}
+	warnings = append(warnings, a.rewroteWarning()...)
 	if plan.old != nil && plan.old.Name != plan.p.Name && a.State != nil {
 		if err := a.State.Rename(plan.old.Name, plan.p.Name); err != nil {
 			warnings = append(warnings, "last_used: "+err.Error())
@@ -287,12 +288,24 @@ func (a *App) removeProfile(name string) (id secret.Identity, warnings []string,
 	if err := a.Cfg.Remove(name); err != nil {
 		return id, nil, err
 	}
+	warnings = append(warnings, a.rewroteWarning()...)
 	if a.State != nil {
 		if err := a.State.Forget(name); err != nil {
 			warnings = append(warnings, "last_used: "+err.Error())
 		}
 	}
 	return id, warnings, nil
+}
+
+// rewroteWarning says when a save could not edit config.toml in place and
+// wrote it out in full, which drops its comments and formatting. It happens
+// only for a layout the patch does not follow, and then once: the rewritten
+// file is one it does.
+func (a *App) rewroteWarning() []string {
+	if a.Cfg.Rewrote() {
+		return []string{"config.toml was rewritten in full; its comments and formatting were not kept"}
+	}
+	return nil
 }
 
 // forgetSecret removes a deleted profile's password.

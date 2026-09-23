@@ -554,3 +554,29 @@ func TestSave_SpacedHostIsRefusedBeforeTheKeyring(t *testing.T) {
 		t.Fatalf("BuildPlan error = %v, want a host field error", err)
 	}
 }
+
+// A save that has to rewrite config.toml in full says so, since the user's
+// comments went with it; one that edits it in place says nothing.
+func TestSaveProfile_WarnsWhenTheConfigIsRewritten(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		warn       bool
+	}{
+		{"patched", fixtureTOML("work", "h", "u"), false},
+		{"rewritten", "profiles = [{ name = \"work\", host = \"h\", user = \"u\" }]\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := testApp(t, tc.body, nil)
+			p, _ := a.Cfg.Profile("work")
+			p.User = "u2"
+			warns, err := a.SaveProfile(bg, "work", p, PasswordIntent{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Contains(strings.Join(warns, "\n"), "rewritten in full")
+			if got != tc.warn {
+				t.Fatalf("warnings %q, want the rewrite warning: %v", warns, tc.warn)
+			}
+		})
+	}
+}

@@ -61,9 +61,10 @@ first. Press `?` in the TUI for keys and field help.
 | Theme | `WICKET_THEME`, else `[ui] theme` in config, else `auto` |
 
 Passwords live in libsecret, never in TOML. Hand-editing `config.toml` is
-fine; unknown keys are kept. A save from the TUI rewrites the file, so
-comments and formatting are lost. Keys named `password`, `pass`, `secret`, or
-`passwd` are stripped on save.
+fine: a save from the TUI changes only the values, keys and profiles it has
+to, and leaves comments, formatting and unknown keys as they are. Keys named
+`password`, `pass`, `secret`, or `passwd` are stripped on save, with their
+line.
 
 Sharing is per profile, set in the form or by hand:
 

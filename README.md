@@ -3,6 +3,8 @@
 Terminal UI for saved FreeRDP connections. Pick a profile, connect, come back
 when the session ends.
 
+![Wicket connection list](docs/screenshots/list.png)
+
 ## Platform
 
 Linux. Passwords go in the Secret Service keyring (`org.freedesktop.secrets`).
@@ -10,13 +12,23 @@ MacOS coming soon; Windows does not build.
 
 ## Install
 
+From a clone:
+
+```
+./scripts/install.sh
+```
+
+Or with Go alone:
+
 ```
 go install github.com/gaius-codius/wicket/cmd/wicket@latest
 ```
 
-Or from a clone: `go build -o wicket ./cmd/wicket`, then put the binary on
-your `PATH`. Needs a FreeRDP 3 client: `sdl-freerdp3` or `xfreerdp3`. New
-profiles use the first one installed, in that order.
+Needs a FreeRDP 3 client on `PATH`: `sdl-freerdp3` or `xfreerdp3`. New profiles
+use the first one found, in that order.
+
+Update with `./scripts/update.sh`. Remove the binary with
+`./scripts/uninstall.sh` (config, state, and keyring entries are left alone).
 
 ## Run
 
@@ -92,6 +104,9 @@ retry or enter a new password. A logoff or disconnect goes back to the list.
 See [CONTRIBUTING.md](CONTRIBUTING.md). Security:
 [advisories](https://github.com/gaius-codius/wicket/security/advisories/new)
 and [SECURITY.md](SECURITY.md).
+
+CI runs `gofmt`, `go vet`, `go test ./...`, and `go test -race ./internal/secret`
+on pushes and pull requests to `main`.
 
 ## License
 

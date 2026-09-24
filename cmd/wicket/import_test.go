@@ -55,10 +55,11 @@ func TestImportRDP_RenameCollision(t *testing.T) {
 
 	rdp := filepath.Join("..", "..", "internal", "importer", "testdata", "work.rdp")
 	got := runCLI(t, []string{"import", "rdp", rdp})
-	if got.code != 0 {
+	// First import of basename "work" collides with existing profile, and
+	// nothing imported is exit 1.
+	if got.code != 1 {
 		t.Fatalf("exit %d stderr %q", got.code, got.stderr)
 	}
-	// First import of basename "work" collides with existing profile.
 	if !strings.Contains(got.stdout, "name already used") {
 		t.Fatalf("expected collision skip: %q", got.stdout)
 	}
@@ -110,5 +111,24 @@ func TestHelpMentionsImport(t *testing.T) {
 	}
 	if !strings.Contains(got.stdout, "import") {
 		t.Fatalf("help missing import:\n%s", got.stdout)
+	}
+}
+
+// After "--" an argument is a path even when it starts with '-'.
+func TestImport_DoubleDashEndsFlags(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WICKET_CONFIG", filepath.Join(dir, "config.toml"))
+	t.Setenv("WICKET_STATE", filepath.Join(dir, "state.toml"))
+	t.Chdir(dir)
+	if err := os.WriteFile("-odd.rdp", []byte("full address:s:odd.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := runCLI(t, []string{"import", "rdp", "-odd.rdp"}); got.code != 2 {
+		t.Fatalf("without --: exit %d", got.code)
+	}
+	// The file is read, and its name, "-odd", is then refused as a profile name.
+	got := runCLI(t, []string{"import", "rdp", "--dry-run", "--", "-odd.rdp"})
+	if got.code != 1 || !strings.Contains(got.stdout, "-odd (name: must not start with '-')") {
+		t.Fatalf("exit %d stdout %q stderr %q", got.code, got.stdout, got.stderr)
 	}
 }

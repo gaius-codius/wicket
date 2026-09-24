@@ -13,9 +13,6 @@ func TestParseRemmina_Work(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "IGNORE_ME") {
-		// Fixture still has the key; the parser must not keep the value.
-	}
 	p, skip, err := ParseRemmina(data, "work.remmina")
 	if err != nil {
 		t.Fatal(err)
@@ -76,12 +73,9 @@ func TestParseRemmina_IgnoresPasswordValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vals, saw, err := parseINISection(data, "remmina")
+	vals, err := parseINISection(data, "remmina")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !saw {
-		t.Fatal("expected password key detected")
 	}
 	if _, ok := vals["password"]; ok {
 		t.Fatal("password value must not be stored")
@@ -108,5 +102,46 @@ func TestParseRemminaDir(t *testing.T) {
 	}
 	if !sawVNC {
 		t.Fatalf("expected old-vnc skip, got %+v", skipped)
+	}
+}
+
+// Remmina writes through GKeyFile, which escapes a backslash; lab.remmina
+// holds "CORP\\alice" as Remmina saves it.
+func TestUnescapeKeyFile(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		`CORP\\alice`:  `CORP\alice`,
+		`\sa\tb\nc\rd`: " a\tb\nc\rd",
+		`odd\q`:        `odd\q`,
+		`trail\`:       `trail\`,
+		"plain":        "plain",
+	} {
+		if got := unescapeKeyFile(in); got != want {
+			t.Errorf("unescapeKeyFile(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The size is imported only for Remmina's custom resolution mode, or from a
+// file older than resolution_mode that has both values.
+func TestParseRemmina_ResolutionMode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		mode, want string
+	}{
+		{"", "1280x720"},
+		{"resolution_mode=0\n", "1280x720"},
+		{"resolution_mode=1\n", ""},
+		{"resolution_mode=2\n", ""},
+	} {
+		doc := "[remmina]\nname=r\nprotocol=RDP\nserver=h\n" + tc.mode +
+			"resolution_width=1280\nresolution_height=720\n"
+		p, _, err := ParseRemmina([]byte(doc), "r.remmina")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Size != tc.want {
+			t.Errorf("%q: size %q, want %q", tc.mode, p.Size, tc.want)
+		}
 	}
 }

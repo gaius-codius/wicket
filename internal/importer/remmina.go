@@ -17,6 +17,11 @@ const (
 	remminaViewportFullscreenMode = 4
 )
 
+// remminaResCustom is Remmina's RES_USE_CUSTOM resolution_mode: only then
+// are resolution_width and resolution_height the size to ask for. The other
+// modes (client resolution, initial window size) keep stale values there.
+const remminaResCustom = 0
+
 // DefaultRemminaDir is Remmina's usual profile directory.
 func DefaultRemminaDir() string {
 	home, err := os.UserHomeDir()
@@ -68,7 +73,7 @@ func ParseRemminaFile(path string) (config.Profile, Skip, error) {
 // ParseRemmina maps a Remmina INI document to a wicket profile.
 // Only protocol=RDP is accepted. Password-family keys are never stored.
 func ParseRemmina(data []byte, sourceName string) (config.Profile, Skip, error) {
-	vals, _, err := parseINISection(data, "remmina")
+	vals, err := parseINISection(data, "remmina")
 	if err != nil {
 		return config.Profile{}, Skip{}, err
 	}
@@ -98,7 +103,7 @@ func ParseRemmina(data []byte, sourceName string) (config.Profile, Skip, error) 
 		}
 	}
 	p.Fullscreen = remminaFullscreen(vals["viewmode"])
-	p.Size = remminaSize(vals["resolution_width"], vals["resolution_height"])
+	p.Size = remminaSize(vals["resolution_mode"], vals["resolution_width"], vals["resolution_height"])
 	return p, Skip{}, nil
 }
 
@@ -115,7 +120,15 @@ func remminaFullscreen(viewmode string) bool {
 	}
 }
 
-func remminaSize(w, h string) string {
+// remminaSize is the custom size, when the profile asks for one. A file from
+// before resolution_mode has only the width and height, which Remmina reads
+// as custom when both are set.
+func remminaSize(mode, w, h string) string {
+	if m := strings.TrimSpace(mode); m != "" {
+		if n, err := strconv.Atoi(m); err != nil || n != remminaResCustom {
+			return ""
+		}
+	}
 	ww, errW := strconv.Atoi(strings.TrimSpace(w))
 	hh, errH := strconv.Atoi(strings.TrimSpace(h))
 	if errW != nil || errH != nil || ww < 1 || hh < 1 {

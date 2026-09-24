@@ -162,7 +162,7 @@ func (d *document) typedProfiles() ([]Profile, error) {
 }
 
 func profileFromTable(m map[string]any) (Profile, error) {
-	p := defaultProfile()
+	p := DefaultProfile()
 	if err := assignString(m, "name", &p.Name, false); err != nil {
 		return Profile{}, err
 	}

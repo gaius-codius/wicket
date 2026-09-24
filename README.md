@@ -58,7 +58,8 @@ first. Press `?` in the TUI for keys and field help.
 files into wicket profiles. Import only — there is no export or sync.
 Passwords are never imported; you enter them on first connect. Use
 `--dry-run` to preview, and `--rename` to append `-2`, `-3`… on name
-collisions (otherwise collisions are skipped).
+collisions (otherwise collisions are skipped). It exits 1 when entries were
+found but none was imported.
 
 ## Config
 

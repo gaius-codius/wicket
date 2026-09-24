@@ -7,12 +7,10 @@ import (
 )
 
 // parseINISection returns key/value pairs from the named section of a
-// GKeyFile-style INI document. Password-family keys are detected but their
-// values are never stored: the returned map omits them, and sawPassword is
-// set when any such key was present.
-func parseINISection(data []byte, section string) (vals map[string]string, sawPassword bool, err error) {
-	vals = make(map[string]string)
-	section = strings.ToLower(section)
+// GKeyFile-style INI document, with GKeyFile's escapes undone. Values of
+// password-family keys are never stored: the returned map omits them.
+func parseINISection(data []byte, section string) (map[string]string, error) {
+	vals := make(map[string]string)
 	in := false
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	for sc.Scan() {
@@ -37,16 +35,44 @@ func parseINISection(data []byte, section string) (vals map[string]string, sawPa
 			continue
 		}
 		key = strings.TrimSpace(key)
-		if key == "" {
+		if key == "" || isPasswordKey(key) {
 			continue
 		}
-		if isPasswordKey(key) {
-			sawPassword = true
-			continue
-		}
-		vals[key] = strings.TrimSpace(value)
+		vals[key] = unescapeKeyFile(strings.TrimSpace(value))
 	}
-	return vals, sawPassword, sc.Err()
+	return vals, sc.Err()
+}
+
+// unescapeKeyFile undoes the escapes g_key_file_set_string writes: Remmina
+// saves "CORP\alice" as "CORP\\alice". An unknown escape is kept as written.
+func unescapeKeyFile(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i == len(s)-1 {
+			b.WriteByte(s[i])
+			continue
+		}
+		i++
+		switch s[i] {
+		case '\\':
+			b.WriteByte('\\')
+		case 's':
+			b.WriteByte(' ')
+		case 'n':
+			b.WriteByte('\n')
+		case 't':
+			b.WriteByte('\t')
+		case 'r':
+			b.WriteByte('\r')
+		default:
+			b.WriteByte('\\')
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
 
 func isPasswordKey(key string) bool {

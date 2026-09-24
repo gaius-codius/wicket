@@ -21,6 +21,9 @@ Import RDP connections into wicket profiles (no export).
 Flags:
   --dry-run   parse and report without writing
   --rename    on name collision, append -2, -3… instead of skipping
+  --          end of flags; later arguments are paths even if they start with -
+
+Exits 1 when entries were found but none was imported.
 `
 
 func runImport(args []string, stdout, stderr io.Writer) int {
@@ -74,8 +77,10 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 var errImportHelp = fmt.Errorf("help")
 
 func parseImportFlags(args []string) (dryRun, rename bool, rest []string, err error) {
-	for _, a := range args {
+	for i, a := range args {
 		switch {
+		case a == "--":
+			return dryRun, rename, append(rest, args[i+1:]...), nil
 		case a == "--dry-run":
 			dryRun = true
 		case a == "--rename":
@@ -112,15 +117,13 @@ func doImport(stdout, stderr io.Writer, dryRun, rename bool, parse func() ([]con
 		imported []config.Profile
 		skipped  []importer.Skip
 	)
-	skipped = append(skipped, parseSkipped...)
-
 	if dryRun {
-		existing, werr := existingProfiles(paths.Config, stderr)
-		if werr != nil {
-			fmt.Fprintln(stderr, werr)
+		existing, err := existingProfiles(paths.Config, stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
 			return 2
 		}
-		imported, skipped = planImport(existing, profiles, rename, skipped)
+		imported, skipped = config.PlanProfiles(existing, profiles, rename)
 	} else {
 		cfg, err := config.OpenOrCreate(paths.Config)
 		if err != nil {
@@ -130,17 +133,17 @@ func doImport(stdout, stderr io.Writer, dryRun, rename bool, parse func() ([]con
 		for _, w := range cfg.Warnings() {
 			fmt.Fprintln(stderr, "warning:", w)
 		}
-		added, addSkipped, err := cfg.AddProfiles(profiles, rename)
+		imported, skipped, err = cfg.AddProfiles(profiles, rename)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 2
 		}
-		imported = added
-		for _, s := range addSkipped {
-			skipped = append(skipped, importer.Skip{Name: s.Name, Reason: s.Reason})
-		}
 	}
+	skipped = append(parseSkipped, skipped...)
 	importer.WriteSummary(stdout, imported, skipped)
+	if len(imported) == 0 && len(skipped) > 0 {
+		return 1
+	}
 	return 0
 }
 
@@ -156,50 +159,4 @@ func existingProfiles(path string, stderr io.Writer) ([]config.Profile, error) {
 		fmt.Fprintln(stderr, "warning:", w)
 	}
 	return cfg.Profiles(), nil
-}
-
-// planImport mirrors AddProfiles collision and validation rules without writing.
-func planImport(existing []config.Profile, profiles []config.Profile, rename bool, skipped []importer.Skip) ([]config.Profile, []importer.Skip) {
-	taken := make(map[string]bool, len(existing)+len(profiles))
-	for _, p := range existing {
-		taken[p.Name] = true
-	}
-	var imported []config.Profile
-	for _, p := range profiles {
-		if err := config.ValidateProfileInUse(p); err != nil {
-			name := p.Name
-			if name == "" {
-				name = p.Host
-			}
-			if name == "" {
-				name = "(unnamed)"
-			}
-			skipped = append(skipped, importer.Skip{Name: name, Reason: err.Error()})
-			continue
-		}
-		name := p.Name
-		if taken[name] {
-			if !rename {
-				skipped = append(skipped, importer.Skip{Name: name, Reason: "name already used"})
-				continue
-			}
-			name = nextImportName(name, taken)
-			p.Name = name
-		}
-		taken[name] = true
-		imported = append(imported, p)
-	}
-	return imported, skipped
-}
-
-func nextImportName(name string, taken map[string]bool) string {
-	if !taken[name] {
-		return name
-	}
-	for n := 2; ; n++ {
-		cand := fmt.Sprintf("%s-%d", name, n)
-		if !taken[cand] {
-			return cand
-		}
-	}
 }

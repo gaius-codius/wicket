@@ -3,11 +3,13 @@ package importer
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/gaius-codius/wicket/internal/config"
 )
@@ -88,9 +90,30 @@ func ParseRDP(data []byte, name string) (config.Profile, Skip, error) {
 	return p, Skip{}, nil
 }
 
+// decodeRDP returns the file as UTF-8 text. The Windows client saves .rdp
+// files as UTF-16LE with a byte-order mark; other tools write UTF-8, with or
+// without one.
+func decodeRDP(data []byte) []byte {
+	var order binary.ByteOrder
+	switch {
+	case bytes.HasPrefix(data, []byte{0xFF, 0xFE}):
+		order = binary.LittleEndian
+	case bytes.HasPrefix(data, []byte{0xFE, 0xFF}):
+		order = binary.BigEndian
+	default:
+		return bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+	}
+	data = data[2:]
+	units := make([]uint16, len(data)/2)
+	for i := range units {
+		units[i] = order.Uint16(data[2*i:])
+	}
+	return []byte(string(utf16.Decode(units)))
+}
+
 func parseRDP(data []byte) (map[string]string, error) {
 	vals := make(map[string]string)
-	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc := bufio.NewScanner(bytes.NewReader(decodeRDP(data)))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {

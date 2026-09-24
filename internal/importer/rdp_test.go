@@ -1,10 +1,12 @@
 package importer
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 func TestParseRDP_Work(t *testing.T) {
@@ -83,5 +85,33 @@ func TestParseRDPFiles_HardFailureWhenNoneReadable(t *testing.T) {
 	}
 	if len(skipped) != 1 {
 		t.Fatalf("skipped %+v", skipped)
+	}
+}
+
+// The Windows client saves .rdp files as UTF-16LE with a byte-order mark;
+// other tools write UTF-8, sometimes with one.
+func TestParseRDP_Encodings(t *testing.T) {
+	t.Parallel()
+	const doc = "full address:s:srv.example\r\nusername:s:CORP\\bob\r\n"
+	utf16With := func(order binary.AppendByteOrder, bom []byte) []byte {
+		b := append([]byte(nil), bom...)
+		for _, u := range utf16.Encode([]rune(doc)) {
+			b = order.AppendUint16(b, u)
+		}
+		return b
+	}
+	for name, data := range map[string][]byte{
+		"utf-16le":  utf16With(binary.LittleEndian, []byte{0xFF, 0xFE}),
+		"utf-16be":  utf16With(binary.BigEndian, []byte{0xFE, 0xFF}),
+		"utf-8 bom": append([]byte{0xEF, 0xBB, 0xBF}, doc...),
+		"utf-8":     []byte(doc),
+	} {
+		p, _, err := ParseRDP(data, "srv")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if p.Host != "srv.example" || p.User != "bob" || p.Domain != "CORP" {
+			t.Errorf("%s: %+v", name, p)
+		}
 	}
 }

@@ -150,48 +150,51 @@ type Skip struct {
 var errNoSave = errors.New("config: no save needed")
 
 // AddProfiles validates each profile and appends the accepted ones in a
-// single locked reload/save. Name collisions against the reloaded config are
-// skipped unless rename is set, in which case "-2", "-3", … are tried until
-// free. Invalid profiles are reported and skipped, never written half-valid.
-// An empty input, or an input that yields nothing to write, does not touch
-// the file.
+// single locked reload/save, by the rules of PlanProfiles against the
+// reloaded config. An empty input, or an input that yields nothing to write,
+// does not touch the file.
 func (c *Config) AddProfiles(profiles []Profile, rename bool) (added []Profile, skipped []Skip, err error) {
 	if len(profiles) == 0 {
 		return nil, nil, nil
 	}
 	err = c.mutate(func() error {
-		taken := make(map[string]bool, len(c.profiles)+len(profiles))
-		for _, p := range c.profiles {
-			taken[p.Name] = true
-		}
-		var batch []Profile
-		for _, p := range profiles {
-			if verr := ValidateProfileInUse(p); verr != nil {
-				skipped = append(skipped, Skip{Name: skipName(p), Reason: verr.Error()})
-				continue
-			}
-			name := p.Name
-			if taken[name] {
-				if !rename {
-					skipped = append(skipped, Skip{Name: name, Reason: "name already used"})
-					continue
-				}
-				name = nextFreeName(name, taken)
-				p.Name = name
-			}
-			taken[name] = true
-			batch = append(batch, p)
-		}
-		if len(batch) == 0 {
+		added, skipped = PlanProfiles(c.profiles, profiles, rename)
+		if len(added) == 0 {
 			return errNoSave
 		}
-		for _, p := range batch {
+		for _, p := range added {
 			c.doc.addProfile(applyProfile(nil, p))
 		}
-		added = batch
 		return nil
 	})
 	return added, skipped, err
+}
+
+// PlanProfiles decides which of profiles would be added next to existing,
+// without writing: invalid profiles are skipped, never written half-valid,
+// and a name collision is skipped unless rename is set, in which case
+// "-2", "-3", … are tried until free. AddProfiles and a dry run share it.
+func PlanProfiles(existing, profiles []Profile, rename bool) (accepted []Profile, skipped []Skip) {
+	taken := make(map[string]bool, len(existing)+len(profiles))
+	for _, p := range existing {
+		taken[p.Name] = true
+	}
+	for _, p := range profiles {
+		if err := ValidateProfileInUse(p); err != nil {
+			skipped = append(skipped, Skip{Name: skipName(p), Reason: err.Error()})
+			continue
+		}
+		if taken[p.Name] {
+			if !rename {
+				skipped = append(skipped, Skip{Name: p.Name, Reason: "name already used"})
+				continue
+			}
+			p.Name = nextFreeName(p.Name, taken)
+		}
+		taken[p.Name] = true
+		accepted = append(accepted, p)
+	}
+	return accepted, skipped
 }
 
 func skipName(p Profile) string {

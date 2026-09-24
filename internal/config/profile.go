@@ -44,5 +44,3 @@ func DefaultProfile() Profile {
 		Clipboard:         DefaultClipboard,
 	}
 }
-
-func defaultProfile() Profile { return DefaultProfile() }

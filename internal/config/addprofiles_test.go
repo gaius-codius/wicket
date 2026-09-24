@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -105,5 +106,41 @@ func TestNextFreeName(t *testing.T) {
 	}
 	if got := nextFreeName("lab", taken); got != "lab" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// PlanProfiles is what a dry run shows; it must match what AddProfiles writes.
+func TestPlanProfiles_MatchesAddProfiles(t *testing.T) {
+	t.Parallel()
+	path := writeTOML(t, `[general]
+[[profiles]]
+name = "work"
+host = "h"
+user = "u"
+`)
+	c, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(name, host string) Profile {
+		p := DefaultProfile()
+		p.Name, p.Host, p.User = name, host, "u"
+		return p
+	}
+	in := []Profile{mk("work", "h2"), mk("work", "h3"), mk("bad", "bad host"), mk("lab", "h4")}
+	planned, planSkipped := PlanProfiles(c.Profiles(), in, true)
+	added, skipped, err := c.AddProfiles(in, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(planned) != fmt.Sprint(added) || fmt.Sprint(planSkipped) != fmt.Sprint(skipped) {
+		t.Fatalf("plan %v %v, add %v %v", planned, planSkipped, added, skipped)
+	}
+	var names []string
+	for _, p := range added {
+		names = append(names, p.Name)
+	}
+	if fmt.Sprint(names) != "[work-2 work-3 lab]" || len(skipped) != 1 || skipped[0].Name != "bad" {
+		t.Fatalf("added %v skipped %v", names, skipped)
 	}
 }

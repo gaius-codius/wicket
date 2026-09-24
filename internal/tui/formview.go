@@ -19,7 +19,7 @@ type formBlock struct {
 }
 
 // formValueMin is the narrowest value column the labels leave: room for a
-// short hostname or "● 100%". With six cells the scale still fits that form.
+// short hostname or "● 100%", the scale's six-cell marked form.
 const formValueMin = 10
 
 // formLabelMin is the narrowest the label column gets, so a label still says
@@ -324,7 +324,7 @@ func (m *Model) clientValue(width int) string {
 		for i, c := range choices {
 			var part string
 			if i == f.clientAt {
-				part = m.styles.accent.Render("● " + c)
+				part = m.styles.onSelection(m.styles.accent.Bold(true)).Render("● " + c)
 			} else {
 				part = m.styles.muted.Render("○ " + c)
 			}
@@ -381,7 +381,7 @@ func (m Model) scaleValue(cur, width int) string {
 	for _, s := range []int{100, 140, 180} {
 		txt := strconv.Itoa(s) + "%"
 		if s == cur {
-			parts = append(parts, m.styles.accent.Render("● "+txt))
+			parts = append(parts, m.styles.onSelection(m.styles.accent.Bold(true)).Render("● "+txt))
 		} else {
 			parts = append(parts, m.styles.muted.Render("○ "+txt))
 		}

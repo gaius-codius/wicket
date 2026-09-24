@@ -139,6 +139,87 @@ func (c *Config) Upsert(p Profile, except string) error {
 	})
 }
 
+// Skip is a profile that AddProfiles did not write, with a short reason
+// suitable for a one-line import summary.
+type Skip struct {
+	Name   string
+	Reason string
+}
+
+// errNoSave tells mutate the edit made no change, so the file must not be written.
+var errNoSave = errors.New("config: no save needed")
+
+// AddProfiles validates each profile and appends the accepted ones in a
+// single locked reload/save, by the rules of PlanProfiles against the
+// reloaded config. An empty input, or an input that yields nothing to write,
+// does not touch the file.
+func (c *Config) AddProfiles(profiles []Profile, rename bool) (added []Profile, skipped []Skip, err error) {
+	if len(profiles) == 0 {
+		return nil, nil, nil
+	}
+	err = c.mutate(func() error {
+		added, skipped = PlanProfiles(c.profiles, profiles, rename)
+		if len(added) == 0 {
+			return errNoSave
+		}
+		for _, p := range added {
+			c.doc.addProfile(applyProfile(nil, p))
+		}
+		return nil
+	})
+	return added, skipped, err
+}
+
+// PlanProfiles decides which of profiles would be added next to existing,
+// without writing: invalid profiles are skipped, never written half-valid,
+// and a name collision is skipped unless rename is set, in which case
+// "-2", "-3", … are tried until free. AddProfiles and a dry run share it.
+func PlanProfiles(existing, profiles []Profile, rename bool) (accepted []Profile, skipped []Skip) {
+	taken := make(map[string]bool, len(existing)+len(profiles))
+	for _, p := range existing {
+		taken[p.Name] = true
+	}
+	for _, p := range profiles {
+		if err := ValidateProfileInUse(p); err != nil {
+			skipped = append(skipped, Skip{Name: skipName(p), Reason: err.Error()})
+			continue
+		}
+		if taken[p.Name] {
+			if !rename {
+				skipped = append(skipped, Skip{Name: p.Name, Reason: "name already used"})
+				continue
+			}
+			p.Name = nextFreeName(p.Name, taken)
+		}
+		taken[p.Name] = true
+		accepted = append(accepted, p)
+	}
+	return accepted, skipped
+}
+
+func skipName(p Profile) string {
+	if p.Name != "" {
+		return p.Name
+	}
+	if p.Host != "" {
+		return p.Host
+	}
+	return "(unnamed)"
+}
+
+// nextFreeName returns name when free, otherwise name-2, name-3, … until free.
+func nextFreeName(name string, taken map[string]bool) string {
+	if !taken[name] {
+		return name
+	}
+	for n := 2; ; n++ {
+		cand := fmt.Sprintf("%s-%d", name, n)
+		if !taken[cand] {
+			return cand
+		}
+	}
+}
+
 // Remove deletes the named profile and saves.
 func (c *Config) Remove(name string) error {
 	return c.mutate(func() error {
@@ -180,6 +261,9 @@ func (c *Config) mutate(edit func() error) error {
 		return fmt.Errorf("re-read config before saving: %w", err)
 	}
 	if err := edit(); err != nil {
+		if errors.Is(err, errNoSave) {
+			return nil
+		}
 		return err
 	}
 	if err := c.save(); err != nil {

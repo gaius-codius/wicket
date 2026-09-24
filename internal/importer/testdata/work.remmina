@@ -1,0 +1,12 @@
+[remmina]
+name=work
+protocol=RDP
+server=192.168.1.20:3389
+username=jdoe
+domain=CORP
+viewmode=4
+resolution_width=1920
+resolution_height=1080
+password=IGNORE_ME_NOT_STORED
+gateway_server=gw.example.com
+colordepth=32

@@ -1,0 +1,6 @@
+[remmina]
+name=windowed
+protocol=RDP
+server=desk.local
+username=sam
+viewmode=1

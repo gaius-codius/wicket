@@ -31,7 +31,11 @@ type Profile struct {
 	ShareHome bool
 }
 
-func defaultProfile() Profile {
+// DefaultProfile is the field set a new profile starts with in the TUI
+// and on import: scale 100, dynamic resolution and clipboard on, and the
+// compiled-in default client (overridden at import time with the first
+// FreeRDP client found on PATH).
+func DefaultProfile() Profile {
 	return Profile{
 		Client:            DefaultClient,
 		DynamicResolution: DefaultDynamicResolution,

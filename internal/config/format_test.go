@@ -404,6 +404,62 @@ func TestSave_KeepsLocalDates(t *testing.T) {
 	}
 }
 
+// A full rewrite must keep local dates and times. BurntSushi's encoder
+// shifts them by the zone offset on date-local / time-local /
+// datetime-local locations; encode wraps those values so they do not drift.
+// Locations are built with a +10h offset so the regression shows even when
+// the process itself runs in UTC (as CI usually does).
+func TestEncode_KeepsLocalDates(t *testing.T) {
+	t.Parallel()
+	const offset = 10 * 60 * 60
+	locDate := time.FixedZone("date-local", offset)
+	locTime := time.FixedZone("time-local", offset)
+	locDT := time.FixedZone("datetime-local", offset)
+	d := &document{
+		general: map[string]any{
+			"d":   time.Date(1979, time.May, 27, 0, 0, 0, 0, locDate),
+			"t":   time.Date(0, time.January, 1, 7, 32, 0, 0, locTime),
+			"ldt": time.Date(1979, time.May, 27, 7, 32, 0, 0, locDT),
+		},
+		extras: map[string]any{},
+	}
+	first, err := d.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(first)
+	for _, want := range []string{
+		"d = 1979-05-27",
+		"t = 07:32:00",
+		"ldt = 1979-05-27T07:32:00",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q in:\n%s", want, body)
+		}
+	}
+	for _, bad := range []string{
+		"1979-05-26",
+		"21:32:00",
+	} {
+		if strings.Contains(body, bad) {
+			t.Fatalf("shifted value %q in:\n%s", bad, body)
+		}
+	}
+
+	// A second full rewrite must not keep drifting.
+	again, err := parseDocument(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := again.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(second) != body {
+		t.Fatalf("second encode drifted:\n%s\nvs\n%s", second, body)
+	}
+}
+
 // Adding a profile and deleting it again gives back the file as it was.
 func TestSave_AddThenDeleteIsANoOp(t *testing.T) {
 	t.Parallel()

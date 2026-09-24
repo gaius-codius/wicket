@@ -48,7 +48,7 @@ func TestFormClient_CyclesInstalledClientsOnly(t *testing.T) {
 	if m.form.textFocused() {
 		t.Fatal("a picked client should not be a text field")
 	}
-	if row := clientRow(t, m); !strings.Contains(row, "‹sdl-freerdp3›") || !strings.Contains(row, " xfreerdp3 ") ||
+	if row := clientRow(t, m); !strings.Contains(row, "● sdl-freerdp3") || !strings.Contains(row, "○ xfreerdp3") ||
 		!strings.Contains(row, customChoice) || strings.Contains(row, "wlfreerdp3") {
 		t.Fatalf("row %q", row)
 	}
@@ -64,7 +64,7 @@ func TestFormClient_CyclesInstalledClientsOnly(t *testing.T) {
 			t.Fatalf("after %s: client %q, want %q", step.key, m.form.p.Client, step.want)
 		}
 	}
-	if row := clientRow(t, m); !strings.Contains(row, "‹xfreerdp3›") {
+	if row := clientRow(t, m); !strings.Contains(row, "● xfreerdp3") {
 		t.Fatalf("current choice not marked: %q", row)
 	}
 	// Only xfreerdp3 installed: it is the only client offered.
@@ -98,7 +98,7 @@ func TestFormClient_CustomSwitchesToTextInput(t *testing.T) {
 	if m.form.p.Client != "hl-rdp" || !m.form.clientCustom() {
 		t.Fatalf("typed %q custom=%v", m.form.p.Client, m.form.clientCustom())
 	}
-	if row := clientRow(t, m); !strings.Contains(row, "hl-rdp") || strings.Contains(row, "‹") {
+	if row := clientRow(t, m); !strings.Contains(row, "hl-rdp") || strings.Contains(row, "●") || strings.Contains(row, "○") {
 		t.Fatalf("row %q", row)
 	}
 	// ← inside the text moves the cursor; only from the start does it leave.
@@ -277,12 +277,12 @@ func TestFormClient_ChoiceReadsWithoutColour(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	h := clientHarness(t, clientTOML("xfreerdp3"), rdp.ClientSDL, rdp.ClientX11)
 	m := focusField(t, press(h.m, "e"), fieldClient)
-	if row := clientRow(t, m); !strings.Contains(row, "‹xfreerdp3›") || !strings.Contains(row, " sdl-freerdp3 ") {
+	if row := clientRow(t, m); !strings.Contains(row, "● xfreerdp3") || !strings.Contains(row, "○ sdl-freerdp3") {
 		t.Fatalf("row %q", row)
 	}
 	// Narrow: only the current choice, still marked.
 	nm, _ := m.Update(teaWin(40, 24))
-	if row := clientRow(t, nm.(Model)); !strings.Contains(row, "‹ xfreerdp3 ›") || strings.Contains(row, "sdl") {
+	if row := clientRow(t, nm.(Model)); !strings.Contains(row, "● xfreerdp3") || strings.Contains(row, "sdl") {
 		t.Fatalf("narrow row %q", row)
 	}
 }

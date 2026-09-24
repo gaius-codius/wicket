@@ -19,7 +19,7 @@ type formBlock struct {
 }
 
 // formValueMin is the narrowest value column the labels leave: room for a
-// short hostname or "‹ 100% ›". With six cells the scale read "‹ 1…".
+// short hostname or "● 100%", the scale's six-cell marked form.
 const formValueMin = 10
 
 // formLabelMin is the narrowest the label column gets, so a label still says
@@ -42,7 +42,7 @@ func formColumns(inner int) (labelW, valueW int) {
 
 // scaleChoices is the width the three scale choices need side by side;
 // below it the row shows only the current one. Each choice is six cells
-// ("‹140%›" or " 100% ") and a space separates them.
+// ("● 100%" or "○ 140%") and a space separates them.
 const scaleChoices = 3*6 + 2
 
 // viewForm draws the form in lo.Budget lines.
@@ -296,10 +296,10 @@ const customChoice = "custom…"
 // opened.
 const notFound = "not found"
 
-// clientValue draws the client row: the choices with the current one marked,
-// as the scale row does, or only the current one when they do not fit; or,
-// on "custom…", the text input. A configured client PATH did not have is
-// marked, from the search made as the form opened.
+// clientValue draws the client row: the choices with the current one marked
+// with ●/○ like on/off and scale, or only the current one when they do not
+// fit; or, on "custom…", the text input. A configured client PATH did not
+// have is marked, from the search made as the form opened.
 func (m *Model) clientValue(width int) string {
 	f := &m.form
 	if f.clientCustom() {
@@ -324,9 +324,9 @@ func (m *Model) clientValue(width int) string {
 		for i, c := range choices {
 			var part string
 			if i == f.clientAt {
-				part = m.styles.onSelection(m.styles.primary.Bold(true)).Render("‹" + c + "›")
+				part = m.styles.onSelection(m.styles.accent.Bold(true)).Render("● " + c)
 			} else {
-				part = m.styles.muted.Render(" " + c + " ")
+				part = m.styles.muted.Render("○ " + c)
 			}
 			if c == f.clientMissing {
 				part += " " + m.styles.muted.Render(notFound)
@@ -338,19 +338,19 @@ func (m *Model) clientValue(width int) string {
 	// Only the current choice, in the tightest form that still marks it,
 	// and with its marker while there is room for one.
 	cur := choices[f.clientAt]
-	forms := []string{"‹ " + cur + " ›", "‹" + cur + "›", cur}
+	forms := []string{"● " + cur, cur}
 	if cur == f.clientMissing {
-		forms = []string{"‹" + cur + "› " + notFound, "‹" + cur + "›", cur}
+		forms = []string{"● " + cur + " " + notFound, "● " + cur, cur}
 	}
 	for _, s := range forms {
 		if lipgloss.Width(s) <= width {
 			if head, ok := strings.CutSuffix(s, " "+notFound); ok {
-				return m.styles.primary.Render(head) + " " + m.styles.muted.Render(notFound)
+				return m.styles.accent.Render(head) + " " + m.styles.muted.Render(notFound)
 			}
-			return m.styles.primary.Render(s)
+			return m.styles.accent.Render(s)
 		}
 	}
-	return m.styles.primary.Render(truncate(cur, width))
+	return m.styles.accent.Render(truncate(cur, width))
 }
 
 // onOff draws a boolean. The words carry the value, so it still reads with
@@ -363,27 +363,27 @@ func (m Model) onOff(v bool, width int) string {
 }
 
 // scaleValue shows the three scales with the current one marked, or only the
-// current one when the three do not fit. The ‹ › around the current choice
-// marks it without colour.
+// current one when the three do not fit. The ●/○ dots match on/off fields so
+// the live value still reads without colour.
 func (m Model) scaleValue(cur, width int) string {
 	if width < scaleChoices {
-		// Tighter forms of the current choice before any cut: "‹ 1…" did
+		// Tighter forms of the current choice before any cut: a bare "1…" did
 		// not say which scale it was.
 		pct := strconv.Itoa(cur) + "%"
-		for _, s := range []string{"‹ " + pct + " ›", "‹" + pct + "›", pct} {
+		for _, s := range []string{"● " + pct, pct} {
 			if lipgloss.Width(s) <= width {
-				return m.styles.primary.Render(s)
+				return m.styles.accent.Render(s)
 			}
 		}
-		return m.styles.primary.Render(truncate(pct, width))
+		return m.styles.accent.Render(truncate(pct, width))
 	}
 	parts := make([]string, 0, 3)
 	for _, s := range []int{100, 140, 180} {
 		txt := strconv.Itoa(s) + "%"
 		if s == cur {
-			parts = append(parts, m.styles.onSelection(m.styles.primary.Bold(true)).Render("‹"+txt+"›"))
+			parts = append(parts, m.styles.onSelection(m.styles.accent.Bold(true)).Render("● "+txt))
 		} else {
-			parts = append(parts, m.styles.muted.Render(" "+txt+" "))
+			parts = append(parts, m.styles.muted.Render("○ "+txt))
 		}
 	}
 	return strings.Join(parts, " ")

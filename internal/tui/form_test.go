@@ -645,7 +645,7 @@ func TestForm_FailedSaveFocusesTheInvalidField(t *testing.T) {
 }
 
 // The three scales are shown side by side where they fit, and only the
-// current one, between arrows, where they do not.
+// current one, with a filled dot, where they do not.
 func TestForm_ScaleFallsBackWhenNarrow(t *testing.T) {
 	scaleRow := func(w int) string {
 		m := sized(t, fixtureTOML("work", "h", "u"), w, 30, "e")
@@ -658,10 +658,10 @@ func TestForm_ScaleFallsBackWhenNarrow(t *testing.T) {
 		t.Fatalf("%d wide: no scale row", w)
 		return ""
 	}
-	if row := scaleRow(80); !strings.Contains(row, "‹100%›") || !strings.Contains(row, "140%") || !strings.Contains(row, "180%") {
-		t.Fatalf("80 wide shows %q, want all three choices", row)
+	if row := scaleRow(80); !strings.Contains(row, "● 100%") || !strings.Contains(row, "○ 140%") || !strings.Contains(row, "○ 180%") {
+		t.Fatalf("80 wide shows %q, want all three choices with dots", row)
 	}
-	if row := scaleRow(44); !strings.Contains(row, "‹ 100% ›") || strings.Contains(row, "180%") {
+	if row := scaleRow(44); !strings.Contains(row, "● 100%") || strings.Contains(row, "180%") {
 		t.Fatalf("44 wide shows %q, want only the current scale", row)
 	}
 }

@@ -416,7 +416,7 @@ func TestForm_NarrowTextIsMarkedAsCut(t *testing.T) {
 		if strings.Contains(ln, "host:") {
 			host = ln
 		}
-		if strings.Contains(ln, "scale:") && !strings.Contains(ln, "‹ 100% ›") {
+		if strings.Contains(ln, "scale:") && !strings.Contains(ln, "● 100%") {
 			t.Errorf("30 wide: the scale does not say which: %q", ln)
 		}
 	}

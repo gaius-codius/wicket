@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -314,15 +315,15 @@ func applyProfile(table map[string]any, p Profile) map[string]any {
 func (d *document) encode() ([]byte, error) {
 	out := map[string]any{}
 	for k, v := range d.extras {
-		out[k] = v
+		out[k] = fixLocalTimes(v)
 	}
 	if d.general == nil {
 		out[keyGeneral] = map[string]any{}
 	} else {
-		out[keyGeneral] = d.general
+		out[keyGeneral] = fixLocalTimes(d.general)
 	}
 	if len(d.profiles) > 0 {
-		out[keyProfiles] = d.profiles
+		out[keyProfiles] = fixLocalTimes(d.profiles)
 	}
 	var buf bytes.Buffer
 	enc := toml.NewEncoder(&buf)
@@ -341,6 +342,61 @@ func (d *document) encode() ([]byte, error) {
 		b = append(b, []byte("["+keyGeneral+"]\n")...)
 	}
 	return b, nil
+}
+
+// localTOML is a decoded TOML local date, time, or datetime. BurntSushi's
+// encoder runs these through time.UTC, which shifts the wall clock by the
+// zone offset baked into date-local / time-local / datetime-local (see
+// BurntSushi/toml internal.LocalDate). MarshalTOML keeps the wall clock.
+type localTOML time.Time
+
+func (t localTOML) MarshalTOML() ([]byte, error) {
+	tt := time.Time(t)
+	var s string
+	switch tt.Location().String() {
+	case "date-local":
+		s = tt.Format("2006-01-02")
+	case "time-local":
+		s = tt.Format("15:04:05.999999999")
+	case "datetime-local":
+		s = tt.Format("2006-01-02T15:04:05.999999999")
+	default:
+		s = tt.Format(time.RFC3339Nano)
+	}
+	return []byte(s), nil
+}
+
+// fixLocalTimes wraps decoded local date/time values so encode does not
+// shift them. Values with an explicit offset are left alone.
+func fixLocalTimes(v any) any {
+	switch t := v.(type) {
+	case time.Time:
+		switch t.Location().String() {
+		case "date-local", "time-local", "datetime-local":
+			return localTOML(t)
+		}
+		return t
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, item := range t {
+			out[k] = fixLocalTimes(item)
+		}
+		return out
+	case []map[string]any:
+		out := make([]map[string]any, len(t))
+		for i, m := range t {
+			out[i] = fixLocalTimes(m).(map[string]any)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, item := range t {
+			out[i] = fixLocalTimes(item)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 func cloneMap(m map[string]any) map[string]any {

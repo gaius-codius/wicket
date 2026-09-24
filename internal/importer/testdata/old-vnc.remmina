@@ -1,0 +1,6 @@
+[remmina]
+name=old-vnc
+protocol=VNC
+server=vnc.example
+username=bob
+password=vnc-secret

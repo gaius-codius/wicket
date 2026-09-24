@@ -139,6 +139,84 @@ func (c *Config) Upsert(p Profile, except string) error {
 	})
 }
 
+// Skip is a profile that AddProfiles did not write, with a short reason
+// suitable for a one-line import summary.
+type Skip struct {
+	Name   string
+	Reason string
+}
+
+// errNoSave tells mutate the edit made no change, so the file must not be written.
+var errNoSave = errors.New("config: no save needed")
+
+// AddProfiles validates each profile and appends the accepted ones in a
+// single locked reload/save. Name collisions against the reloaded config are
+// skipped unless rename is set, in which case "-2", "-3", … are tried until
+// free. Invalid profiles are reported and skipped, never written half-valid.
+// An empty input, or an input that yields nothing to write, does not touch
+// the file.
+func (c *Config) AddProfiles(profiles []Profile, rename bool) (added []Profile, skipped []Skip, err error) {
+	if len(profiles) == 0 {
+		return nil, nil, nil
+	}
+	err = c.mutate(func() error {
+		taken := make(map[string]bool, len(c.profiles)+len(profiles))
+		for _, p := range c.profiles {
+			taken[p.Name] = true
+		}
+		var batch []Profile
+		for _, p := range profiles {
+			if verr := ValidateProfileInUse(p); verr != nil {
+				skipped = append(skipped, Skip{Name: skipName(p), Reason: verr.Error()})
+				continue
+			}
+			name := p.Name
+			if taken[name] {
+				if !rename {
+					skipped = append(skipped, Skip{Name: name, Reason: "name already used"})
+					continue
+				}
+				name = nextFreeName(name, taken)
+				p.Name = name
+			}
+			taken[name] = true
+			batch = append(batch, p)
+		}
+		if len(batch) == 0 {
+			return errNoSave
+		}
+		for _, p := range batch {
+			c.doc.addProfile(applyProfile(nil, p))
+		}
+		added = batch
+		return nil
+	})
+	return added, skipped, err
+}
+
+func skipName(p Profile) string {
+	if p.Name != "" {
+		return p.Name
+	}
+	if p.Host != "" {
+		return p.Host
+	}
+	return "(unnamed)"
+}
+
+// nextFreeName returns name when free, otherwise name-2, name-3, … until free.
+func nextFreeName(name string, taken map[string]bool) string {
+	if !taken[name] {
+		return name
+	}
+	for n := 2; ; n++ {
+		cand := fmt.Sprintf("%s-%d", name, n)
+		if !taken[cand] {
+			return cand
+		}
+	}
+}
+
 // Remove deletes the named profile and saves.
 func (c *Config) Remove(name string) error {
 	return c.mutate(func() error {
@@ -180,6 +258,9 @@ func (c *Config) mutate(edit func() error) error {
 		return fmt.Errorf("re-read config before saving: %w", err)
 	}
 	if err := edit(); err != nil {
+		if errors.Is(err, errNoSave) {
+			return nil
+		}
 		return err
 	}
 	if err := c.save(); err != nil {

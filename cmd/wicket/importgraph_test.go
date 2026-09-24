@@ -72,6 +72,17 @@ func TestImportGraph(t *testing.T) {
 					t.Errorf("internal/theme imports Lipgloss (%s)", imp)
 				}
 			}
+		case path == internalPrefix+"importer" || strings.HasPrefix(path, internalPrefix+"importer/"):
+			for imp := range imports {
+				switch {
+				case imp == internalPrefix+"config" || strings.HasPrefix(imp, internalPrefix+"config/"):
+					// parsers may use config.Profile and defaults only
+				case strings.HasPrefix(imp, internalPrefix):
+					t.Errorf("internal/importer imports %s; may import only config among internal packages", imp)
+				case isCharm(imp):
+					t.Errorf("internal/importer imports a Charm library (%s)", imp)
+				}
+			}
 		case path == internalPrefix+"rdp" || strings.HasPrefix(path, internalPrefix+"rdp/"):
 			for imp := range imports {
 				switch {

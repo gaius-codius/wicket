@@ -44,6 +44,8 @@ use the first one found, in that order.
 ```
 wicket                 # TUI
 wicket connect work    # named profile, no TUI
+wicket import remmina  # from ~/.local/share/remmina
+wicket import rdp FILE...
 wicket --help
 wicket --version
 ```
@@ -51,6 +53,12 @@ wicket --version
 `wicket connect` is for keybindings and scripts. It does not create a config.
 On a non-TTY there is no password prompt, so save the password from the TUI
 first. Press `?` in the TUI for keys and field help.
+
+`wicket import` brings Remmina (`*.remmina`, RDP only) or Microsoft `.rdp`
+files into wicket profiles. Import only — there is no export or sync.
+Passwords are never imported; you enter them on first connect. Use
+`--dry-run` to preview, and `--rename` to append `-2`, `-3`… on name
+collisions (otherwise collisions are skipped).
 
 ## Config
 

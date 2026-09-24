@@ -23,6 +23,8 @@ the list by most recent use.
 Commands:
   connect <profile>   Connect to a named profile without the TUI
                       (requires a stored password when stdin is not a terminal)
+  import remmina|rdp  Import RDP connections from Remmina or .rdp files
+                      (import only; no export)
 
 Options:
   -h, --help          Show this help
@@ -98,6 +100,8 @@ func run(args []string, stdout, stderr io.Writer, runTUI func() error) int {
 		return 0
 	case "connect":
 		return runConnect(args[1:], stdout, stderr)
+	case "import":
+		return runImport(args[1:], stdout, stderr)
 	default:
 		if strings.HasPrefix(args[0], "-") {
 			fmt.Fprintf(stderr, "unknown flag: %s\n", args[0])

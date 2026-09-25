@@ -207,6 +207,17 @@ func skipName(p Profile) string {
 	return "(unnamed)"
 }
 
+// NextFreeName returns name when no profile uses it, otherwise name-2,
+// name-3, … until free. AddProfiles uses the unexported helper with its own
+// taken map so a batch can claim names as it goes.
+func (c *Config) NextFreeName(name string) string {
+	taken := make(map[string]bool, len(c.profiles))
+	for _, p := range c.Profiles() {
+		taken[p.Name] = true
+	}
+	return nextFreeName(name, taken)
+}
+
 // nextFreeName returns name when free, otherwise name-2, name-3, … until free.
 func nextFreeName(name string, taken map[string]bool) string {
 	if !taken[name] {

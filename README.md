@@ -125,6 +125,7 @@ theme = "auto"
 | `s` | Sort by recent use (not saved) |
 | `Enter` | Connect |
 | `n` / `e` / `D` | New / edit / delete |
+| `y` | Copy to a new profile (password not copied) |
 | `?` | Help |
 | `q`, Ctrl+C | Quit |
 

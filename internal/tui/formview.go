@@ -285,6 +285,10 @@ func (m *Model) formValue(id, width int) string {
 		return m.scaleValue(f.p.Scale, width)
 	case fieldClient:
 		return m.clientValue(width)
+	case fieldName:
+		if f.nameSelected && f.field == fieldName && f.p.Name != "" {
+			return m.styles.onSelection(m.styles.primary).Render(truncate(f.p.Name, width))
+		}
 	}
 	return inputView(f.inputs[id], width)
 }

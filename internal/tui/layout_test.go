@@ -39,7 +39,7 @@ func TestRender_NeverOverflowsTheWindow(t *testing.T) {
 			// "e" matters as much as "n": the edit form is the only one whose
 			// fields hold values, and a value wider than its column is what
 			// used to wrap the row and push the bottom border off screen.
-			for _, keys := range [][]string{nil, {"/"}, {"n"}, {"e"}, {"?"}, {"D"}, {"enter"}} {
+			for _, keys := range [][]string{nil, {"/"}, {"n"}, {"e"}, {"y"}, {"?"}, {"D"}, {"enter"}} {
 				m := sized(t, cfg, w, h, keys...)
 				gotW, gotH := measure(m.render())
 				if gotW > w || gotH > h {

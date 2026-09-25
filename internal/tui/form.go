@@ -426,13 +426,17 @@ func (f *formState) editText(msg tea.Msg) {
 			return
 		}
 	}
+	beforeVal, beforePos := in.Value(), in.Position()
 	in, err := updateInput(in, msg, id == fieldPassword)
 	if err != nil {
 		// A refused paste leaves the name, and its selection, as they were.
 		f.err, f.errField = err.Error(), id
 		return
 	}
-	if id == fieldName {
+	// Harmless keys (F1, ctrl+x, disabled paste, …) must not drop the
+	// selection the way a real edit would. Clear it only when the value or
+	// the cursor actually moved.
+	if id == fieldName && (in.Value() != beforeVal || in.Position() != beforePos) {
 		f.nameSelected = false
 	}
 	f.inputs[id] = in

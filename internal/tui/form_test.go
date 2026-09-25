@@ -934,7 +934,7 @@ func TestCopy_SaveAddsProfileAndLeavesOriginal(t *testing.T) {
 
 // An untouched copy saves as it is: the suggested name is a new profile's.
 func TestCopy_SaveUntouched(t *testing.T) {
-	h := newHarness(t, copySource, secret.NewMemory())
+	h := newHarness(t, copySource, panicStore{})
 	h.m = press(h.m, "y", "ctrl+s")
 	if h.m.view != viewList {
 		t.Fatalf("view %v err %s", h.m.view, h.m.form.err)
@@ -963,5 +963,70 @@ func TestCopy_EscWritesNothing(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(h.cfg); string(after) != string(before) {
 		t.Fatalf("config written:\n%s", after)
+	}
+}
+
+// A typed password on a copy is stored under the copy's identity; the
+// original's keyring entry is left alone.
+func TestCopy_SaveTypedPassword(t *testing.T) {
+	store := secret.NewMemory()
+	h := newHarness(t, copySource, store)
+	orig, _ := h.m.app.Cfg.Profile("work")
+	origID := secret.IdentityFor(h.m.app.Cfg.Path(), orig)
+	if err := store.Upsert(bg, origID, mustPassword(t, "orig-secret")); err != nil {
+		t.Fatal(err)
+	}
+	h.m = press(h.m, "y")
+	h.m = typeInto(h.m, "lab")
+	h.m = focusField(t, h.m, fieldPassword)
+	h.m = typeInto(h.m, "copy-secret")
+	h.m = press(h.m, "ctrl+s")
+	if h.m.view != viewList {
+		t.Fatalf("view %v err %s", h.m.view, h.m.form.err)
+	}
+	cp, ok := h.m.app.Cfg.Profile("lab")
+	if !ok {
+		t.Fatal("copy not saved")
+	}
+	res, err := store.Lookup(bg, secret.IdentityFor(h.m.app.Cfg.Path(), cp))
+	if err != nil || !res.Password.OccursIn("copy-secret") {
+		t.Fatalf("copy's password: %v", err)
+	}
+	res, err = store.Lookup(bg, origID)
+	if err != nil || !res.Password.OccursIn("orig-secret") {
+		t.Fatalf("original's password: %v", err)
+	}
+}
+
+// The selected name is drawn the way a selected list row is: reverse video
+// in terminal mode, or the theme's selection background otherwise.
+func TestCopy_NameSelectedIsHighlighted(t *testing.T) {
+	t.Setenv("WICKET_THEME", "terminal")
+	h := newHarness(t, copySource, panicStore{})
+	h.m = press(h.m, "y")
+	if !h.m.form.nameSelected {
+		t.Fatal("expected name selected")
+	}
+	got := h.m.formValue(fieldName, 40)
+	want := h.m.styles.onSelection(h.m.styles.primary).Render("work-copy")
+	if got != want {
+		t.Fatalf("selected name draw:\n got %q\nwant %q", got, want)
+	}
+	// And it shows up that way on the screen the user sees.
+	raw := h.m.View().Content
+	if !strings.Contains(raw, want) {
+		t.Fatalf("form view missing highlighted name:\n%s", raw)
+	}
+}
+
+// Keys that neither change the name nor move the cursor leave the selection
+// alone, the way a real text selection would.
+func TestCopy_NoopKeyKeepsNameSelected(t *testing.T) {
+	for _, key := range []string{"f1", "ctrl+x", "insert"} {
+		h := newHarness(t, copySource, panicStore{})
+		h.m = press(h.m, "y", key)
+		if !h.m.form.nameSelected || h.m.form.p.Name != "work-copy" {
+			t.Fatalf("%s: selected %v name %q", key, h.m.form.nameSelected, h.m.form.p.Name)
+		}
 	}
 }

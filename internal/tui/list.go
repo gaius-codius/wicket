@@ -104,15 +104,7 @@ func (m Model) openCopy(p config.Profile) (tea.Model, tea.Cmd) {
 // copyName suggests "<name>-copy", or "<name>-copy-2" and on, the first no
 // profile uses.
 func (m Model) copyName(name string) string {
-	base := name + "-copy"
-	if m.app == nil || m.app.Cfg == nil || !m.app.Cfg.NameTaken(base, "") {
-		return base
-	}
-	for n := 2; ; n++ {
-		if cand := fmt.Sprintf("%s-%d", base, n); !m.app.Cfg.NameTaken(cand, "") {
-			return cand
-		}
-	}
+	return m.app.Cfg.NextFreeName(name + "-copy")
 }
 
 // listKeepRows is how many rows the list holds on to before its own details

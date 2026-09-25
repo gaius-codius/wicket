@@ -12,7 +12,7 @@ func TestHelp_ListKeysAndClose(t *testing.T) {
 		t.Fatal("want help")
 	}
 	out := screen(h.m)
-	for _, k := range []string{"j/k", "enter", "n", "e", "D", "?", "q"} {
+	for _, k := range []string{"j/k", "enter", "n", "e", "copy selected", "D", "?", "q"} {
 		if !strings.Contains(out, k) {
 			t.Fatalf("help missing %q:\n%s", k, out)
 		}

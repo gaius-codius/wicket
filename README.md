@@ -1,6 +1,6 @@
 # Wicket
 
-Terminal UI for saved FreeRDP connections. Pick a profile, connect, come back
+Terminal UI for FreeRDP connections. Pick a profile, connect, come back
 when the session ends.
 
 ![Connection list](docs/screenshots/list.png)

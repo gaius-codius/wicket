@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/gaius-codius/wicket/internal/config"
@@ -120,6 +121,10 @@ type formState struct {
 	// quitOnDiscard is set when ctrl+c raised the question, so a yes quits
 	// Wicket, as the ctrl+c meant, rather than going back to the list.
 	quitOnDiscard bool
+	// nameSelected is set while the name's whole text is selected, as it is
+	// when a copy opens, so typing replaces the suggested name. The text
+	// input has no selection of its own; see takeSelection.
+	nameSelected bool
 
 	// clients are the choices the client row cycles through, "custom…"
 	// aside: the known FreeRDP clients found on PATH when the form opened,
@@ -411,10 +416,28 @@ func (m Model) handleFormKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 // explicit of the pair.
 func (f *formState) editText(msg tea.Msg) {
 	id := f.field
-	in, err := updateInput(f.inputs[id], msg, id == fieldPassword)
+	in := f.inputs[id]
+	if id == fieldName && f.nameSelected {
+		var used bool
+		if in, used = takeSelection(in, msg); used {
+			f.nameSelected = false
+			f.inputs[id] = in
+			f.p.Name = in.Value()
+			return
+		}
+	}
+	beforeVal, beforePos := in.Value(), in.Position()
+	in, err := updateInput(in, msg, id == fieldPassword)
 	if err != nil {
+		// A refused paste leaves the name, and its selection, as they were.
 		f.err, f.errField = err.Error(), id
 		return
+	}
+	// Harmless keys (F1, ctrl+x, disabled paste, …) must not drop the
+	// selection the way a real edit would. Clear it only when the value or
+	// the cursor actually moved.
+	if id == fieldName && (in.Value() != beforeVal || in.Position() != beforePos) {
+		f.nameSelected = false
 	}
 	f.inputs[id] = in
 	if f.err != "" && f.errField == id {
@@ -428,8 +451,39 @@ func (f *formState) editText(msg tea.Msg) {
 	}
 }
 
+// takeSelection applies msg to an input whose whole text is selected. Text or
+// a paste replaces the selection, so the input comes back empty for msg to
+// type into. A deletion clears it, and a movement puts the cursor at the
+// selection's start or end; either uses msg up.
+func takeSelection(in textinput.Model, msg tea.Msg) (textinput.Model, bool) {
+	switch k := msg.(type) {
+	case tea.PasteMsg:
+		in.SetValue("")
+	case tea.KeyPressMsg:
+		km := in.KeyMap
+		switch {
+		case key.Matches(k, km.DeleteCharacterBackward, km.DeleteCharacterForward, km.DeleteWordBackward,
+			km.DeleteWordForward, km.DeleteBeforeCursor, km.DeleteAfterCursor):
+			in.SetValue("")
+			return in, true
+		case key.Matches(k, km.CharacterBackward, km.WordBackward, km.LineStart):
+			in.CursorStart()
+			return in, true
+		case key.Matches(k, km.CharacterForward, km.WordForward, km.LineEnd):
+			in.CursorEnd()
+			return in, true
+		case k.Text != "":
+			in.SetValue("")
+		}
+	}
+	return in, false
+}
+
 // focus moves to field id, moving the text cursor with it.
 func (f *formState) focus(id int) {
+	if id != fieldName {
+		f.nameSelected = false
+	}
 	if f.textValue(f.field) != nil {
 		f.inputs[f.field].Blur()
 	}

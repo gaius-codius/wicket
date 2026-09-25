@@ -763,3 +763,270 @@ func TestForm_SharingSaves(t *testing.T) {
 		t.Fatalf("saved %+v", got)
 	}
 }
+
+// copySource has every field away from its default, and a key Wicket does
+// not know, which only the original may keep: it may be a note about it.
+const copySource = `[general]
+[[profiles]]
+name = "work"
+host = "10.0.0.5:3390"
+user = "jdoe"
+domain = "CORP"
+client = "xfreerdp3"
+size = "1920x1080"
+fullscreen = true
+multimon = true
+dynamic_resolution = false
+scale = 140
+clipboard = false
+share_home = true
+notes = "about the original"
+`
+
+func TestCopy_OpensNewProfileFormWithFieldsButNameAndPassword(t *testing.T) {
+	h := newHarness(t, copySource, panicStore{})
+	orig, _ := h.m.app.Cfg.Profile("work")
+	if out := screen(h.m); !strings.Contains(out, "y copy") {
+		t.Fatalf("list footer does not offer y:\n%s", out)
+	}
+	h.m = press(h.m, "y")
+	f := h.m.form
+	if h.m.view != viewForm || f.oldName != "" {
+		t.Fatalf("view %v oldName %q, want the new-profile form", h.m.view, f.oldName)
+	}
+	want := orig
+	want.Name = "work-copy"
+	if f.p != want {
+		t.Fatalf("copy %+v, want %+v", f.p, want)
+	}
+	if f.password != "" || f.inputs[fieldPassword].Value() != "" || f.shows(fieldForget) {
+		t.Fatalf("password row: %q forget row %v", f.password, f.shows(fieldForget))
+	}
+	if f.field != fieldName || !f.inputs[fieldName].Focused() || !f.nameSelected {
+		t.Fatalf("field %d focused %v selected %v, want the name focused and selected",
+			f.field, f.inputs[fieldName].Focused(), f.nameSelected)
+	}
+	if f.dirty() {
+		t.Fatal("an untouched copy reads as modified")
+	}
+	out := screen(h.m)
+	if !strings.Contains(out, "new connection") || !strings.Contains(out, "work-copy") {
+		t.Fatalf("copy form:\n%s", out)
+	}
+}
+
+func TestCopy_NameNeverCollides(t *testing.T) {
+	body := copySource + `
+[[profiles]]
+name = "work-copy"
+host = "h"
+user = "u"
+[[profiles]]
+name = "work-copy-2"
+host = "h"
+user = "u"
+[[profiles]]
+name = "work-copy-4"
+host = "h"
+user = "u"
+`
+	h := newHarness(t, body, panicStore{})
+	for _, c := range []struct{ from, want string }{
+		{"work", "work-copy-3"},
+		{"work-copy", "work-copy-copy"},
+		{"work-copy-2", "work-copy-2-copy"},
+	} {
+		if got := h.m.copyName(c.from); got != c.want || h.m.app.Cfg.NameTaken(got, "") {
+			t.Errorf("copyName(%q) = %q, want %q", c.from, got, c.want)
+		}
+	}
+	h.m = press(h.m, "y")
+	if h.m.form.p.Name != "work-copy-3" {
+		t.Fatalf("y named the copy %q", h.m.form.p.Name)
+	}
+}
+
+// The suggested name is selected: typing replaces it rather than adding to
+// it, and the keys that act on a selection act on it.
+func TestCopy_TypingReplacesSelectedName(t *testing.T) {
+	// Each case starts from a form of its own: copies of one model share
+	// their text inputs' storage, so typing into one can show in another.
+	copied := func() Model { return press(newHarness(t, copySource, panicStore{}).m, "y") }
+	if typed := typeInto(copied(), "lab"); typed.form.p.Name != "lab" || typed.form.nameSelected {
+		t.Fatalf("typing over the selection: %q selected %v", typed.form.p.Name, typed.form.nameSelected)
+	}
+	if pasted := paste(copied(), "lab\n"); pasted.form.p.Name != "lab" || pasted.form.inputs[fieldName].Value() != "lab" {
+		t.Fatalf("paste over the selection: %q", pasted.form.p.Name)
+	}
+	if refused := paste(copied(), "a\nb"); refused.form.p.Name != "work-copy" || !refused.form.nameSelected || refused.form.err == "" {
+		t.Fatalf("a refused paste: %q selected %v err %q", refused.form.p.Name, refused.form.nameSelected, refused.form.err)
+	}
+	if cleared := press(copied(), "backspace"); cleared.form.p.Name != "" || cleared.form.inputs[fieldName].Value() != "" {
+		t.Fatalf("backspace on the selection: %q", cleared.form.p.Name)
+	}
+	// ← drops the selection with the cursor at its start, so the name is
+	// kept and typing goes in front of it; → and end, after it.
+	if kept := typeInto(press(copied(), "left"), "my-"); kept.form.p.Name != "my-work-copy" {
+		t.Fatalf("left then type: %q", kept.form.p.Name)
+	}
+	if kept := typeInto(press(copied(), "end"), "-b"); kept.form.p.Name != "work-copy-b" {
+		t.Fatalf("end then type: %q", kept.form.p.Name)
+	}
+	// Leaving the row drops the selection, so coming back types after it.
+	if back := typeInto(press(copied(), "tab", "shift+tab"), "x"); back.form.p.Name != "work-copyx" {
+		t.Fatalf("tab away and back then type: %q", back.form.p.Name)
+	}
+}
+
+func TestCopy_SaveAddsProfileAndLeavesOriginal(t *testing.T) {
+	store := secret.NewMemory()
+	h := newHarness(t, copySource, store)
+	orig, _ := h.m.app.Cfg.Profile("work")
+	origID := secret.IdentityFor(h.m.app.Cfg.Path(), orig)
+	if err := store.Upsert(bg, origID, mustPassword(t, "orig-secret")); err != nil {
+		t.Fatal(err)
+	}
+	h.m = press(h.m, "y")
+	h.m = typeInto(h.m, "lab")
+	h.m = focusField(t, h.m, fieldHost)
+	h.m = press(h.m, "ctrl+u")
+	h.m = typeInto(h.m, "10.0.0.6")
+	h.m = press(h.m, "ctrl+s")
+	if h.m.view != viewList {
+		t.Fatalf("view %v err %s", h.m.view, h.m.form.err)
+	}
+	if n := len(h.m.profiles()); n != 2 {
+		t.Fatalf("%d profiles, want the original and its copy", n)
+	}
+	if p, ok := h.m.selected(); !ok || p.Name != "lab" {
+		t.Fatalf("selected %q, want the copy", p.Name)
+	}
+	if got, _ := h.m.app.Cfg.Profile("work"); got != orig {
+		t.Fatalf("original changed: %+v, was %+v", got, orig)
+	}
+	cp, _ := h.m.app.Cfg.Profile("lab")
+	want := orig
+	want.Name, want.Host = "lab", "10.0.0.6"
+	if cp != want {
+		t.Fatalf("copy saved as %+v, want %+v", cp, want)
+	}
+	res, err := store.Lookup(bg, origID)
+	if err != nil || !res.Password.OccursIn("orig-secret") {
+		t.Fatalf("original's password: %v", err)
+	}
+	if _, err := store.Lookup(bg, secret.IdentityFor(h.m.app.Cfg.Path(), cp)); !errors.Is(err, secret.ErrNotFound) {
+		t.Fatalf("the copy has a stored password: %v", err)
+	}
+	// The unknown key stays with the original and only there.
+	var raw struct {
+		Profiles []map[string]any `toml:"profiles"`
+	}
+	if _, err := toml.DecodeFile(h.cfg, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.Profiles) != 2 || raw.Profiles[0]["notes"] != "about the original" {
+		t.Fatalf("profiles on disk: %v", raw.Profiles)
+	}
+	if _, ok := raw.Profiles[1]["notes"]; ok {
+		t.Fatalf("the copy took the original's unknown key: %v", raw.Profiles[1])
+	}
+}
+
+// An untouched copy saves as it is: the suggested name is a new profile's.
+func TestCopy_SaveUntouched(t *testing.T) {
+	h := newHarness(t, copySource, panicStore{})
+	h.m = press(h.m, "y", "ctrl+s")
+	if h.m.view != viewList {
+		t.Fatalf("view %v err %s", h.m.view, h.m.form.err)
+	}
+	if _, ok := h.m.app.Cfg.Profile("work-copy"); !ok || len(h.m.profiles()) != 2 {
+		t.Fatalf("profiles %+v", h.m.profiles())
+	}
+}
+
+func TestCopy_EscWritesNothing(t *testing.T) {
+	h := newHarness(t, copySource, panicStore{})
+	before, _ := os.ReadFile(h.cfg)
+	h.m = press(h.m, "y", "esc")
+	if h.m.view != viewList {
+		t.Fatalf("esc on an untouched copy: view %v", h.m.view)
+	}
+	h.m = press(h.m, "y")
+	h.m = typeInto(h.m, "lab")
+	h.m = press(h.m, "esc")
+	if !h.m.form.confirmDiscard {
+		t.Fatal("esc on an edited copy should ask first")
+	}
+	h.m = press(h.m, "y")
+	if h.m.view != viewList || len(h.m.profiles()) != 1 {
+		t.Fatalf("view %v profiles %d", h.m.view, len(h.m.profiles()))
+	}
+	if after, _ := os.ReadFile(h.cfg); string(after) != string(before) {
+		t.Fatalf("config written:\n%s", after)
+	}
+}
+
+// A typed password on a copy is stored under the copy's identity; the
+// original's keyring entry is left alone.
+func TestCopy_SaveTypedPassword(t *testing.T) {
+	store := secret.NewMemory()
+	h := newHarness(t, copySource, store)
+	orig, _ := h.m.app.Cfg.Profile("work")
+	origID := secret.IdentityFor(h.m.app.Cfg.Path(), orig)
+	if err := store.Upsert(bg, origID, mustPassword(t, "orig-secret")); err != nil {
+		t.Fatal(err)
+	}
+	h.m = press(h.m, "y")
+	h.m = typeInto(h.m, "lab")
+	h.m = focusField(t, h.m, fieldPassword)
+	h.m = typeInto(h.m, "copy-secret")
+	h.m = press(h.m, "ctrl+s")
+	if h.m.view != viewList {
+		t.Fatalf("view %v err %s", h.m.view, h.m.form.err)
+	}
+	cp, ok := h.m.app.Cfg.Profile("lab")
+	if !ok {
+		t.Fatal("copy not saved")
+	}
+	res, err := store.Lookup(bg, secret.IdentityFor(h.m.app.Cfg.Path(), cp))
+	if err != nil || !res.Password.OccursIn("copy-secret") {
+		t.Fatalf("copy's password: %v", err)
+	}
+	res, err = store.Lookup(bg, origID)
+	if err != nil || !res.Password.OccursIn("orig-secret") {
+		t.Fatalf("original's password: %v", err)
+	}
+}
+
+// The selected name is drawn the way a selected list row is: reverse video
+// in terminal mode, or the theme's selection background otherwise.
+func TestCopy_NameSelectedIsHighlighted(t *testing.T) {
+	t.Setenv("WICKET_THEME", "terminal")
+	h := newHarness(t, copySource, panicStore{})
+	h.m = press(h.m, "y")
+	if !h.m.form.nameSelected {
+		t.Fatal("expected name selected")
+	}
+	got := h.m.formValue(fieldName, 40)
+	want := h.m.styles.onSelection(h.m.styles.primary).Render("work-copy")
+	if got != want {
+		t.Fatalf("selected name draw:\n got %q\nwant %q", got, want)
+	}
+	// And it shows up that way on the screen the user sees.
+	raw := h.m.View().Content
+	if !strings.Contains(raw, want) {
+		t.Fatalf("form view missing highlighted name:\n%s", raw)
+	}
+}
+
+// Keys that neither change the name nor move the cursor leave the selection
+// alone, the way a real text selection would.
+func TestCopy_NoopKeyKeepsNameSelected(t *testing.T) {
+	for _, key := range []string{"f1", "ctrl+x", "insert"} {
+		h := newHarness(t, copySource, panicStore{})
+		h.m = press(h.m, "y", key)
+		if !h.m.form.nameSelected || h.m.form.p.Name != "work-copy" {
+			t.Fatalf("%s: selected %v name %q", key, h.m.form.nameSelected, h.m.form.p.Name)
+		}
+	}
+}

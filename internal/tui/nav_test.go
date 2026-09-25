@@ -253,10 +253,34 @@ func TestList_FilterNoMatches(t *testing.T) {
 	if !strings.Contains(screen(h.m), "No matches.") {
 		t.Fatal(screen(h.m))
 	}
-	for _, k := range []string{"enter", "e", "D"} {
+	for _, k := range []string{"enter", "e", "y", "D"} {
 		if m := press(h.m, k); m.view != viewList {
 			t.Fatalf("%s acted on a hidden profile (view %v)", k, m.view)
 		}
+	}
+}
+
+// y does what e does wherever e does nothing: on an empty list, and while
+// the filter has focus, where it is typed into the filter.
+func TestList_CopyActsLikeEdit(t *testing.T) {
+	for _, k := range []string{"e", "y"} {
+		h := newHarness(t, "", panicStore{})
+		if m := press(h.m, k); m.view != viewList {
+			t.Fatalf("%s on an empty list: view %v", k, m.view)
+		}
+		h = newHarness(t, manyProfiles(12), panicStore{})
+		m := press(h.m, "/", k)
+		if m.view != viewList || !m.filtering || m.filter.Value() != k {
+			t.Fatalf("%s while filtering: view %v filter %q", k, m.view, m.filter.Value())
+		}
+	}
+	// With a filter applied, both act on the selected match.
+	h := newHarness(t, manyProfiles(12), panicStore{})
+	h.m = press(h.m, "/")
+	h.m = typeInto(h.m, "h11")
+	h.m = press(h.m, "enter", "y")
+	if h.m.view != viewForm || h.m.form.oldName != "" || h.m.form.p.Name != "p11-copy" || h.m.form.p.Host != "h11" {
+		t.Fatalf("y on a filtered match: view %v form %+v", h.m.view, h.m.form.p)
 	}
 }
 

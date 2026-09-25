@@ -50,6 +50,15 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.openForm(p.Name, p)
+	case "y":
+		if empty {
+			return m, nil
+		}
+		p, ok := m.selected()
+		if !ok {
+			return m, nil
+		}
+		return m.openCopy(p)
 	case "D", "shift+d":
 		if empty {
 			return m, nil
@@ -76,6 +85,33 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 		return m.beginConnect()
 	default:
 		return m, nil
+	}
+}
+
+// openCopy opens the new-profile form on a copy of p under a free name, the
+// name selected so typing replaces it. The password is not copied: it is
+// keyed by the profile's identity, and a second entry appearing in the
+// keyring unasked would be a surprise. The copy is a new profile, so it
+// starts from the typed fields alone, never the source's unknown keys.
+func (m Model) openCopy(p config.Profile) (tea.Model, tea.Cmd) {
+	p.Name = m.copyName(p.Name)
+	nm, cmd := m.openForm("", p)
+	out := nm.(Model)
+	out.form.nameSelected = true
+	return out, cmd
+}
+
+// copyName suggests "<name>-copy", or "<name>-copy-2" and on, the first no
+// profile uses.
+func (m Model) copyName(name string) string {
+	base := name + "-copy"
+	if m.app == nil || m.app.Cfg == nil || !m.app.Cfg.NameTaken(base, "") {
+		return base
+	}
+	for n := 2; ; n++ {
+		if cand := fmt.Sprintf("%s-%d", base, n); !m.app.Cfg.NameTaken(cand, "") {
+			return cand
+		}
 	}
 }
 
@@ -536,7 +572,7 @@ func (m Model) listHints() []keyHint {
 			{"esc", "clear filter", intentNormal}, {"?", "help", intentNormal}, {"q", "quit", intentNormal}}
 	}
 	return []keyHint{{"enter", "connect", intentPrimary}, {"n", "new", intentNormal}, {"e", "edit", intentNormal},
-		{"D", "delete", intentNormal}, {"/", "filter", intentNormal}, {"s", "sort", intentNormal},
+		{"y", "copy", intentNormal}, {"D", "delete", intentNormal}, {"/", "filter", intentNormal}, {"s", "sort", intentNormal},
 		{"?", "help", intentNormal}, {"q", "quit", intentNormal}}
 }
 

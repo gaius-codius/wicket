@@ -107,6 +107,7 @@ func helpKeys(v view) []hint {
 			{"enter", "connect (ctrl+c stops the session)"},
 			{"n", "new"},
 			{"e", "edit selected"},
+			{"y", "copy selected to a new profile"},
 			{"D", "delete selected"},
 			{"?", "help"},
 			{"q, ctrl+c", "quit"},

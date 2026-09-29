@@ -19,7 +19,7 @@ import (
 var profileKeyOrder = []string{
 	"name", "host", "user", "domain", "client", "size",
 	"fullscreen", "dynamic_resolution", "scale",
-	"multimon", "clipboard", "share_home",
+	"multimon", "clipboard", "share_home", "shares",
 }
 
 // render is the file a save writes. Where it can, it is the file as read
@@ -451,11 +451,13 @@ func orderKeys(keys []string) []string {
 	return out
 }
 
-// formatValue writes v as TOML, the way the encoder would. Wicket only sets
-// strings, booleans and integers.
+// formatValue writes v as TOML, the way the encoder would. Wicket sets
+// strings, booleans, integers, and the shares array of inline tables.
 func formatValue(v any) (string, error) {
-	switch v.(type) {
+	switch x := v.(type) {
 	case string, bool, int64, int:
+	case []map[string]any:
+		return formatShareArray(x)
 	default:
 		return "", errLayout
 	}
@@ -468,6 +470,36 @@ func formatValue(v any) (string, error) {
 		return "", fmt.Errorf("format %T: %w", v, errLayout)
 	}
 	return out, nil
+}
+
+// formatShareArray writes shares as one inline array so a patch can replace
+// the value in place without rewriting the rest of the profile.
+func formatShareArray(shares []map[string]any) (string, error) {
+	if len(shares) == 0 {
+		return "[]", nil
+	}
+	parts := make([]string, 0, len(shares))
+	for _, s := range shares {
+		var fields []string
+		if name, ok := s["name"].(string); ok && name != "" {
+			n, err := formatValue(name)
+			if err != nil {
+				return "", err
+			}
+			fields = append(fields, "name = "+n)
+		}
+		path, ok := s["path"].(string)
+		if !ok {
+			return "", errLayout
+		}
+		p, err := formatValue(path)
+		if err != nil {
+			return "", err
+		}
+		fields = append(fields, "path = "+p)
+		parts = append(parts, "{ "+strings.Join(fields, ", ")+" }")
+	}
+	return "[" + strings.Join(parts, ", ") + "]", nil
 }
 
 // literalString writes v the way old, the value it replaces, was written

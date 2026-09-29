@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode"
@@ -48,7 +50,10 @@ func ValidateProfile(p Profile) error {
 	if err := validateSize(p.Size); err != nil {
 		return err
 	}
-	return validateScale(p.Scale)
+	if err := validateScale(p.Scale); err != nil {
+		return err
+	}
+	return validateSharesShape(p)
 }
 
 // hasControl reports whether s holds a control character. These fields reach
@@ -244,6 +249,81 @@ func ValidateProfileInUse(p Profile) error {
 	// "/v:bad host" as one argument and fail on it at connect time.
 	if strings.ContainsFunc(strings.TrimSpace(p.Host), unicode.IsSpace) {
 		return &FieldError{Field: "host", Msg: "must not contain spaces"}
+	}
+	return validateSharesExist(p)
+}
+
+// validateSharesShape checks share paths and names without touching the
+// filesystem, so a config still opens when a shared folder has gone.
+func validateSharesShape(p Profile) error {
+	seen := map[string]bool{}
+	for i, s := range p.Shares {
+		path := strings.TrimSpace(s.Path)
+		if path == "" {
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: path must not be empty", i+1)}
+		}
+		if hasControl(path) {
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: path must not contain control characters", i+1)}
+		}
+		if strings.ContainsRune(path, ',') {
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: path must not contain ','", i+1)}
+		}
+		expanded, err := ExpandPath(path)
+		if err != nil {
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %v", i+1, err)}
+		}
+		if !filepath.IsAbs(expanded) {
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: path must be absolute or ~/…", i+1)}
+		}
+		name := strings.TrimSpace(s.Name)
+		if name != "" {
+			if hasControl(name) {
+				return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: name must not contain control characters", i+1)}
+			}
+			if strings.ContainsAny(name, ",/") || strings.Contains(name, string(filepath.Separator)) {
+				return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: name must not contain ',' or '/'", i+1)}
+			}
+			if name != sanitizeShareName(name) {
+				return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: name must be letters, digits, '_' or '-'", i+1)}
+			}
+		}
+		drive := name
+		if drive == "" {
+			drive = ShareNameFromPath(expanded)
+		}
+		if p.ShareHome && strings.EqualFold(drive, "home") {
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: name %q clashes with share_home", i+1, drive)}
+		}
+		key := strings.ToLower(drive)
+		if seen[key] {
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("duplicate share name %q", drive)}
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+// validateSharesExist requires each share path to name an existing directory
+// after ~ expansion. Save and connect ask; load does not.
+func validateSharesExist(p Profile) error {
+	if err := validateSharesShape(p); err != nil {
+		return err
+	}
+	for i, s := range p.Shares {
+		expanded, err := ExpandPath(strings.TrimSpace(s.Path))
+		if err != nil {
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %v", i+1, err)}
+		}
+		info, err := os.Stat(expanded)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %s is not a directory", i+1, expanded)}
+			}
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %v", i+1, err)}
+		}
+		if !info.IsDir() {
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %s is not a directory", i+1, expanded)}
+		}
 	}
 	return nil
 }

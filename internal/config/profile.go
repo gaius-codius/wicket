@@ -1,5 +1,7 @@
 package config
 
+import "reflect"
+
 const (
 	DefaultClient            = "sdl-freerdp3"
 	DefaultScale             = 100
@@ -9,6 +11,16 @@ const (
 	// profile written before the setting existed has always had.
 	DefaultClipboard = true
 )
+
+// Share is one local folder offered to the remote session as a named drive.
+type Share struct {
+	// Path is absolute, or "~" / "~/…". It is expanded when connecting and
+	// when checking that the folder exists.
+	Path string
+	// Name is the FreeRDP share name. Empty means derive one from Path's
+	// base name when connecting.
+	Name string
+}
 
 // Profile is a v1 user-editable connection (REQ-005).
 type Profile struct {
@@ -29,6 +41,9 @@ type Profile struct {
 	// ShareHome offers the whole local home folder, read-write, to the
 	// remote machine as a drive.
 	ShareHome bool
+	// Shares are specific local folders offered as named drives. Empty means
+	// none beyond ShareHome.
+	Shares []Share
 }
 
 // DefaultProfile is the field set a new profile starts with in the TUI
@@ -43,4 +58,10 @@ func DefaultProfile() Profile {
 		Scale:             DefaultScale,
 		Clipboard:         DefaultClipboard,
 	}
+}
+
+// Equal reports whether p and o hold the same fields. Profile contains a
+// slice, so callers cannot use ==.
+func (p Profile) Equal(o Profile) bool {
+	return reflect.DeepEqual(p, o)
 }

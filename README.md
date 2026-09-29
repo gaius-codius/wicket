@@ -90,10 +90,19 @@ user = "jdoe"
 clipboard = false   # on unless turned off, as in FreeRDP
 multimon = true     # full screen across every monitor
 share_home = true   # your home folder as a drive on the remote machine
+shares = [
+  { path = "~/Documents" },
+  { path = "/data/projects", name = "projects" },
+]
 ```
 
 `share_home` shares all of your home folder, read-write, dotfiles and
 `~/.ssh` included. Only turn it on for machines you trust.
+
+`shares` lists specific local folders as named drives (`/drive:name,path` in
+FreeRDP). Paths must be absolute or `~/…`, and must exist as directories when
+you save or connect. Leave `name` out to derive it from the folder name.
+`share_home` and a share named `home` cannot both be set.
 
 Keys left out keep their default, and a save only writes the ones changed.
 

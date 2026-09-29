@@ -104,6 +104,7 @@ func ParseRemmina(data []byte, sourceName string) (config.Profile, Skip, error) 
 	}
 	p.Fullscreen = remminaFullscreen(vals["viewmode"])
 	p.Size = remminaSize(vals["resolution_mode"], vals["resolution_width"], vals["resolution_height"])
+	p.Shares = remminaShares(vals["sharefolder"], vals["drive"])
 	return p, Skip{}, nil
 }
 
@@ -142,4 +143,48 @@ func splitDomainUser(user string) (domain, bare string, ok bool) {
 		return user[:i], user[i+1:], true
 	}
 	return "", user, false
+}
+
+// remminaShares maps Remmina's sharefolder (one path) and drive
+// (name,path;name,path or a bare path) into wicket shares. Paths that are
+// empty or not absolute / ~/… are skipped; existence is left to save time.
+func remminaShares(sharefolder, drive string) []config.Share {
+	var out []config.Share
+	seen := map[string]bool{}
+	add := func(name, path string) {
+		path = strings.TrimSpace(path)
+		name = strings.TrimSpace(name)
+		if path == "" {
+			return
+		}
+		if !strings.HasPrefix(path, "/") && path != "~" && !strings.HasPrefix(path, "~/") {
+			return
+		}
+		key := strings.ToLower(path) + "\x00" + strings.ToLower(name)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, config.Share{Path: path, Name: name})
+	}
+	if sf := strings.TrimSpace(sharefolder); sf != "" {
+		add("", sf)
+	}
+	for _, part := range strings.Split(drive, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		// FreeRDP / Remmina: name,path — or a bare path starting with /.
+		if strings.HasPrefix(part, "/") || part == "~" || strings.HasPrefix(part, "~/") {
+			add("", part)
+			continue
+		}
+		name, path, ok := strings.Cut(part, ",")
+		if !ok {
+			continue
+		}
+		add(name, path)
+	}
+	return out
 }

@@ -35,6 +35,8 @@ func formColumns(inner int) (labelW, valueW int) {
 	for _, l := range formLabels {
 		longest = max(longest, lipgloss.Width(l)+1)
 	}
+	// Share rows use "folder" or a short name; keep room for "add folder".
+	longest = max(longest, lipgloss.Width("add folder")+1)
 	labelW = min(longest, max(inner-2-2-formValueMin, formLabelMin), max(inner-2-2-1, 1))
 	valueW = max(inner-2-labelW-2, 1)
 	return labelW, valueW
@@ -261,7 +263,7 @@ func (m *Model) formRow(id, labelW, valueW int) string {
 	if f.err != "" && f.errField == id {
 		labelStyle = m.styles.danger
 	}
-	label := labelStyle.Render(padRight(truncate(formLabels[id]+":", labelW), labelW))
+	label := labelStyle.Render(padRight(truncate(f.label(id)+":", labelW), labelW))
 	return mark + label + "  " + m.formValue(id, valueW)
 }
 
@@ -279,6 +281,12 @@ func (m *Model) formValue(id, width int) string {
 		return m.onOff(f.p.Clipboard, width)
 	case fieldShareHome:
 		return m.onOff(f.p.ShareHome, width)
+	case fieldShareAdd:
+		n := len(f.p.Shares)
+		if n == 0 {
+			return m.styles.muted.Render(truncate("none yet", width))
+		}
+		return m.styles.muted.Render(truncate(shareCountLabel(n)+" — enter to add", width))
 	case fieldForget:
 		return m.onOff(f.forget, width)
 	case fieldScale:
@@ -289,6 +297,16 @@ func (m *Model) formValue(id, width int) string {
 		if f.nameSelected && f.field == fieldName && f.p.Name != "" {
 			return m.styles.onSelection(m.styles.primary).Render(truncate(f.p.Name, width))
 		}
+	}
+	if i, ok := shareIndex(id); ok {
+		if f.shareEdit == i {
+			return inputView(f.shareInput, width)
+		}
+		val := f.shareValue(i)
+		if f.field == id {
+			return m.styles.primary.Render(truncate(val, width))
+		}
+		return m.styles.muted.Render(truncate(val, width))
 	}
 	return inputView(f.inputs[id], width)
 }
@@ -439,6 +457,7 @@ var formHelp = [fieldCount]string{
 	fieldScale:      "`←/→` to choose.",
 	fieldClipboard:  "Copy and paste between here and there. `space` switches.",
 	fieldShareHome:  "All of your home folder, read-write, as a drive there. `space` switches.",
+	fieldShareAdd:   "Share another local folder as a drive. `enter` adds one.",
 	fieldPassword:   "Saved in the keyring on `ctrl+s`. Empty keeps what is stored.",
 	fieldForget:     "Deletes the stored password on save. `space` switches.",
 	fieldClient:     "`←/→` to choose.",
@@ -463,7 +482,7 @@ func (f *formState) clientHelp() string {
 
 // formHelpLine is the help for field id on one line of width cells.
 func (m *Model) formHelpLine(id, width int) string {
-	text := formHelp[id]
+	text := m.form.help(id)
 	if id == fieldPassword && m.form.oldName == "" {
 		text = "Saved in the keyring on `ctrl+s`. Empty asks when connecting."
 	}

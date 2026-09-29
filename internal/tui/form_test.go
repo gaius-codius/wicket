@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/BurntSushi/toml"
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
@@ -233,7 +234,7 @@ func TestForm_EditFieldsRoundTrip(t *testing.T) {
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
 	got, _ := h.m.app.Cfg.Profile("work")
-	if got != p {
+	if !got.Equal(p) {
 		t.Fatalf("got %+v want %+v", got, p)
 	}
 }
@@ -542,7 +543,7 @@ func TestForm_ErrorAttachesToItsFieldByKey(t *testing.T) {
 func TestForm_TabFollowsTheSections(t *testing.T) {
 	m := sized(t, fixtureTOML("work", "h", "u"), 80, 36, "e")
 	want := []int{fieldName, fieldHost, fieldUser, fieldDomain, fieldSize, fieldFullscreen,
-		fieldMultimon, fieldDynamic, fieldScale, fieldClipboard, fieldShareHome,
+		fieldMultimon, fieldDynamic, fieldScale, fieldClipboard, fieldShareHome, fieldShareAdd,
 		fieldPassword, fieldForget, fieldClient}
 	for i, id := range want {
 		if m.form.field != id {
@@ -559,7 +560,7 @@ func TestForm_TabFollowsTheSections(t *testing.T) {
 	at := -1
 	for _, s := range []string{"CONNECTION", "name:", "host:", "user:", "domain:", "DISPLAY", "size:",
 		"fullscreen:", "all monitors:", "dynamic resolution:", "scale:", "SHARING", "clipboard:",
-		"home folder:", "PASSWORD", "  password:", "forget password:",
+		"home folder:", "add folder:", "PASSWORD", "  password:", "forget password:",
 		"ADVANCED", "client:"} {
 		i := strings.Index(out, s)
 		if i <= at {
@@ -740,7 +741,7 @@ func TestForm_MultimonAndFullscreenMoveTogether(t *testing.T) {
 		}
 		// Only that field changed.
 		h.m = press(h.m, "space")
-		if h.m.form.p != before {
+		if !h.m.form.p.Equal(before) {
 			t.Fatalf("%s: %+v, want %+v", formLabels[tc.id], h.m.form.p, before)
 		}
 	}
@@ -796,7 +797,7 @@ func TestCopy_OpensNewProfileFormWithFieldsButNameAndPassword(t *testing.T) {
 	}
 	want := orig
 	want.Name = "work-copy"
-	if f.p != want {
+	if !f.p.Equal(want) {
 		t.Fatalf("copy %+v, want %+v", f.p, want)
 	}
 	if f.password != "" || f.inputs[fieldPassword].Value() != "" || f.shows(fieldForget) {
@@ -901,13 +902,13 @@ func TestCopy_SaveAddsProfileAndLeavesOriginal(t *testing.T) {
 	if p, ok := h.m.selected(); !ok || p.Name != "lab" {
 		t.Fatalf("selected %q, want the copy", p.Name)
 	}
-	if got, _ := h.m.app.Cfg.Profile("work"); got != orig {
+	if got, _ := h.m.app.Cfg.Profile("work"); !got.Equal(orig) {
 		t.Fatalf("original changed: %+v, was %+v", got, orig)
 	}
 	cp, _ := h.m.app.Cfg.Profile("lab")
 	want := orig
 	want.Name, want.Host = "lab", "10.0.0.6"
-	if cp != want {
+	if !cp.Equal(want) {
 		t.Fatalf("copy saved as %+v, want %+v", cp, want)
 	}
 	res, err := store.Lookup(bg, origID)
@@ -1028,5 +1029,52 @@ func TestCopy_NoopKeyKeepsNameSelected(t *testing.T) {
 		if !h.m.form.nameSelected || h.m.form.p.Name != "work-copy" {
 			t.Fatalf("%s: selected %v name %q", key, h.m.form.nameSelected, h.m.form.p.Name)
 		}
+	}
+}
+
+func TestForm_AddEditRemoveShare(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	h.m = press(h.m, "e")
+	h.m = focusField(t, h.m, fieldShareAdd)
+	h.m = press(h.m, "enter")
+	if len(h.m.form.p.Shares) != 1 || h.m.form.shareEdit != 0 {
+		t.Fatalf("add: shares=%+v edit=%d", h.m.form.p.Shares, h.m.form.shareEdit)
+	}
+	var cmd tea.Cmd
+	h.m, cmd = act(h.m, tea.PasteMsg{Content: dir})
+	_ = cmd
+	h.m = press(h.m, "enter")
+	if h.m.form.shareEdit >= 0 || h.m.form.p.Shares[0].Path != dir {
+		t.Fatalf("after path: edit=%d share=%+v", h.m.form.shareEdit, h.m.form.p.Shares[0])
+	}
+	h.m = press(h.m, "n")
+	if h.m.form.sharePart != "name" {
+		t.Fatalf("name edit: %q", h.m.form.sharePart)
+	}
+	h.m, _ = act(h.m, tea.PasteMsg{Content: "docs"})
+	h.m = press(h.m, "enter")
+	if h.m.form.p.Shares[0].Name != "docs" {
+		t.Fatalf("name: %+v", h.m.form.p.Shares[0])
+	}
+	h.m = press(h.m, "ctrl+s")
+	if h.m.view != viewList {
+		t.Fatalf("save failed: %s", h.m.form.err)
+	}
+	got, _ := h.m.app.Cfg.Profile("work")
+	if len(got.Shares) != 1 || got.Shares[0].Path != dir || got.Shares[0].Name != "docs" {
+		t.Fatalf("saved %+v", got.Shares)
+	}
+
+	h.m = press(h.m, "e")
+	h.m = focusField(t, h.m, shareRow(0))
+	h.m = press(h.m, "d")
+	if len(h.m.form.p.Shares) != 0 {
+		t.Fatalf("remove left %+v", h.m.form.p.Shares)
+	}
+	h.m = press(h.m, "ctrl+s")
+	got, _ = h.m.app.Cfg.Profile("work")
+	if len(got.Shares) != 0 {
+		t.Fatalf("cleared shares still there: %+v", got.Shares)
 	}
 }

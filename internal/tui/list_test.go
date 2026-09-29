@@ -270,6 +270,8 @@ func TestSharingLine(t *testing.T) {
 		{config.Profile{Clipboard: true}, "clipboard"},
 		{config.Profile{Clipboard: true, ShareHome: true}, "clipboard · home folder"},
 		{config.Profile{ShareHome: true}, "home folder"},
+		{config.Profile{Shares: []config.Share{{Path: "/tmp/docs", Name: "docs"}}}, "docs"},
+		{config.Profile{Clipboard: true, Shares: []config.Share{{Path: "/tmp/docs"}}}, "clipboard · docs"},
 		{config.Profile{}, "nothing"},
 	} {
 		if got := sharingLine(c.p); got != c.want {
@@ -417,6 +419,7 @@ func TestDetails_SharingOnlyWhenChanged(t *testing.T) {
 	for _, changed := range []config.Profile{
 		func() config.Profile { q := p; q.Clipboard = false; return q }(),
 		func() config.Profile { q := p; q.ShareHome = true; return q }(),
+		func() config.Profile { q := p; q.Shares = []config.Share{{Path: "/tmp/x"}}; return q }(),
 	} {
 		got := keys(changed)
 		if got[len(got)-1] != "sharing" || got[len(got)-2] != "password" {

@@ -1078,3 +1078,78 @@ func TestForm_AddEditRemoveShare(t *testing.T) {
 		t.Fatalf("cleared shares still there: %+v", got.Shares)
 	}
 }
+
+func TestForm_ExistingShareEditDoesNotAliasConfig(t *testing.T) {
+	dir := t.TempDir()
+	other := t.TempDir()
+	body := fixtureTOML("work", "h", "u") + "shares = [{ path = " + strconv.Quote(dir) + " }]\n"
+	h := newHarness(t, body, secret.NewMemory())
+	h.m = press(h.m, "e")
+	h.m = focusField(t, h.m, shareRow(0))
+	h.m = press(h.m, "enter")
+	h.m = press(h.m, "ctrl+u")
+	h.m, _ = act(h.m, tea.PasteMsg{Content: other})
+	h.m = press(h.m, "enter")
+	if !h.m.form.dirty() {
+		t.Fatal("path change should be dirty")
+	}
+	got, _ := h.m.app.Cfg.Profile("work")
+	if len(got.Shares) != 1 || got.Shares[0].Path != dir {
+		t.Fatalf("config mutated before save: %+v", got.Shares)
+	}
+	h.m = press(h.m, "esc")
+	if !h.m.form.confirmDiscard {
+		t.Fatal("esc should ask to discard")
+	}
+	h.m = press(h.m, "y")
+	if h.m.view != viewList {
+		t.Fatalf("view %v", h.m.view)
+	}
+	got, _ = h.m.app.Cfg.Profile("work")
+	if len(got.Shares) != 1 || got.Shares[0].Path != dir {
+		t.Fatalf("discarded edit stuck: %+v", got.Shares)
+	}
+}
+
+func TestForm_EscCancelsNewShare(t *testing.T) {
+	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
+	h.m = press(h.m, "e")
+	h.m = focusField(t, h.m, fieldShareAdd)
+	h.m = press(h.m, "enter")
+	if len(h.m.form.p.Shares) != 1 {
+		t.Fatalf("add: %+v", h.m.form.p.Shares)
+	}
+	h.m = press(h.m, "esc")
+	if len(h.m.form.p.Shares) != 0 {
+		t.Fatalf("esc left %+v", h.m.form.p.Shares)
+	}
+	if h.m.form.confirmDiscard || h.m.view != viewForm {
+		t.Fatalf("view=%v discard=%v", h.m.view, h.m.form.confirmDiscard)
+	}
+}
+
+func TestForm_BackspaceDoesNotRemoveShare(t *testing.T) {
+	dir := t.TempDir()
+	body := fixtureTOML("work", "h", "u") + "shares = [{ path = " + strconv.Quote(dir) + " }]\n"
+	h := newHarness(t, body, secret.NewMemory())
+	h.m = press(h.m, "e")
+	h.m = focusField(t, h.m, shareRow(0))
+	h.m = press(h.m, "backspace")
+	if len(h.m.form.p.Shares) != 1 {
+		t.Fatalf("backspace removed %+v", h.m.form.p.Shares)
+	}
+	h.m = press(h.m, "d")
+	if len(h.m.form.p.Shares) != 0 {
+		t.Fatalf("d left %+v", h.m.form.p.Shares)
+	}
+}
+
+func TestForm_ShareErrorAttachesToTheRow(t *testing.T) {
+	dir := t.TempDir()
+	body := fixtureTOML("work", "h", "u") + "shares = [{ path = " + strconv.Quote(dir) + " }]\n"
+	m := sized(t, body, 80, 36, "e")
+	m.form.setError(&config.FieldError{Field: "shares", Msg: "entry 1: path must not contain ','"})
+	if m.form.errField != shareRow(0) {
+		t.Fatalf("errField %d, want share row 0", m.form.errField)
+	}
+}

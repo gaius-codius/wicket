@@ -54,6 +54,23 @@ func (f formState) help(id int) string {
 	return ""
 }
 
+func shareErrorField(f formState, fe *config.FieldError) (int, bool) {
+	if fe == nil || fe.Field != "shares" {
+		return 0, false
+	}
+	var n int
+	if _, err := fmt.Sscanf(fe.Msg, "entry %d:", &n); err == nil && n >= 1 {
+		id := shareRow(n - 1)
+		if f.shows(id) {
+			return id, true
+		}
+	}
+	if f.shows(fieldShareAdd) {
+		return fieldShareAdd, true
+	}
+	return 0, false
+}
+
 func (f *formState) beginShareEdit(i int, part string) {
 	if i < 0 || i >= len(f.p.Shares) {
 		return
@@ -80,19 +97,25 @@ func (f *formState) endShareEdit(keep bool) {
 		f.shareInput.Blur()
 		return
 	}
+	i := f.shareEdit
 	if keep {
 		v := strings.TrimSpace(f.shareInput.Value())
-		s := f.p.Shares[f.shareEdit]
+		s := f.p.Shares[i]
 		if f.sharePart == "name" {
 			s.Name = v
 		} else {
 			s.Path = v
 		}
-		f.p.Shares[f.shareEdit] = s
+		f.p.Shares[i] = s
 	}
+	s := f.p.Shares[i]
+	empty := !keep && strings.TrimSpace(s.Path) == "" && strings.TrimSpace(s.Name) == ""
 	f.shareEdit = -1
 	f.sharePart = ""
 	f.shareInput.Blur()
+	if empty {
+		f.removeShare(i)
+	}
 }
 
 func (f *formState) addShare() {
@@ -105,7 +128,9 @@ func (f *formState) removeShare(i int) {
 		return
 	}
 	if f.shareEdit == i {
-		f.endShareEdit(false)
+		f.shareEdit = -1
+		f.sharePart = ""
+		f.shareInput.Blur()
 	} else if f.shareEdit > i {
 		f.shareEdit--
 	}
@@ -124,14 +149,10 @@ func (f formState) shareValue(i int) string {
 	if i < 0 || i >= len(f.p.Shares) {
 		return ""
 	}
-	s := f.p.Shares[i]
-	if s.Path == "" {
+	if f.p.Shares[i].Path == "" {
 		return "set a path"
 	}
-	if s.Name != "" {
-		return s.Path
-	}
-	return s.Path
+	return f.p.Shares[i].Path
 }
 
 func (f *formState) editShareText(msg tea.Msg) {
@@ -164,7 +185,11 @@ func shareSummary(shares []config.Share) string {
 			continue
 		}
 		if s.Path != "" {
-			parts = append(parts, config.ShareNameFromPath(s.Path))
+			path := s.Path
+			if expanded, err := config.ExpandPath(path); err == nil {
+				path = expanded
+			}
+			parts = append(parts, config.ShareNameFromPath(path))
 			continue
 		}
 		parts = append(parts, "folder")

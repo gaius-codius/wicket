@@ -49,7 +49,7 @@ func TestHelp_FormKeys(t *testing.T) {
 	}
 	h.m = press(h.m, "?")
 	out := screen(h.m)
-	for _, k := range []string{"tab", "ctrl+s", "esc"} {
+	for _, k := range []string{"tab", "ctrl+s", "esc", "folder share name", "remove folder share"} {
 		if !strings.Contains(out, k) {
 			t.Fatalf("form help missing %q:\n%s", k, out)
 		}

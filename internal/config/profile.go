@@ -1,6 +1,9 @@
 package config
 
-import "reflect"
+import (
+	"reflect"
+	"slices"
+)
 
 const (
 	DefaultClient            = "sdl-freerdp3"
@@ -58,6 +61,13 @@ func DefaultProfile() Profile {
 		Scale:             DefaultScale,
 		Clipboard:         DefaultClipboard,
 	}
+}
+
+// Clone is p with its own share list. A plain assignment still shares
+// Shares, so an edit of one copy would change the other.
+func (p Profile) Clone() Profile {
+	p.Shares = slices.Clone(p.Shares)
+	return p
 }
 
 // Equal reports whether p and o hold the same fields. Profile contains a

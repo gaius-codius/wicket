@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -251,6 +252,49 @@ func ValidateProfileInUse(p Profile) error {
 		return &FieldError{Field: "host", Msg: "must not contain spaces"}
 	}
 	return validateSharesExist(p)
+}
+
+// validateImported is what AddProfiles holds a profile to: the same as a
+// save, except a shared folder that is not on disk yet is kept. Import
+// writes a config that would still load; connect will refuse until the
+// folder is there.
+func validateImported(p Profile) error {
+	if err := ValidateProfile(p); err != nil {
+		return err
+	}
+	if strings.ContainsFunc(strings.TrimSpace(p.Host), unicode.IsSpace) {
+		return &FieldError{Field: "host", Msg: "must not contain spaces"}
+	}
+	return nil
+}
+
+// dropUnimportableShares keeps shares a loaded config would accept, and
+// drops the rest, so one bad Remmina folder does not skip the connection.
+// Names that are almost valid are cleaned the way ShareNameFromPath is.
+func dropUnimportableShares(p Profile) Profile {
+	if len(p.Shares) == 0 {
+		return p
+	}
+	kept := make([]Share, 0, len(p.Shares))
+	for _, s := range p.Shares {
+		s.Path = strings.TrimSpace(s.Path)
+		s.Name = strings.TrimSpace(s.Name)
+		if s.Name != "" && s.Name != sanitizeShareName(s.Name) {
+			if cleaned := sanitizeShareName(s.Name); cleaned == "share" {
+				s.Name = ""
+			} else {
+				s.Name = cleaned
+			}
+		}
+		trial := p
+		trial.Shares = append(slices.Clone(kept), s)
+		if validateSharesShape(trial) != nil {
+			continue
+		}
+		kept = append(kept, s)
+	}
+	p.Shares = kept
+	return p
 }
 
 // validateSharesShape checks share paths and names without touching the

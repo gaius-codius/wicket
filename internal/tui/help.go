@@ -66,6 +66,8 @@ func helpKeys(v view) []hint {
 			{"ctrl+w / ctrl+u", "delete word / line"},
 			{"space, enter", "switch on/off"},
 			{"←/→, h/l", "change scale or client"},
+			{"n", "folder share name"},
+			{"d", "remove folder share"},
 			{"ctrl+s", "save"},
 			{"esc", "cancel; asks first if changed"},
 			{"?", "help (off a text field)"},

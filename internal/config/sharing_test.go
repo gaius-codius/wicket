@@ -280,4 +280,39 @@ func TestShareNameFromPath(t *testing.T) {
 	if got := ShareNameFromPath("/"); got != "share" {
 		t.Fatalf("root: %q", got)
 	}
+	if got := ShareNameFromPath("/home/u/Документы"); got != "share" {
+		t.Fatalf("non-ASCII: %q", got)
+	}
+}
+
+func TestProfile_CloneSharesAreIndependent(t *testing.T) {
+	t.Parallel()
+	p := validProfile()
+	p.Shares = []Share{{Path: "/a", Name: "a"}}
+	c := p.Clone()
+	c.Shares[0].Path = "/b"
+	if p.Shares[0].Path != "/a" {
+		t.Fatalf("clone aliased shares: %q", p.Shares[0].Path)
+	}
+}
+
+func TestConfig_ProfileClonesShares(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := writeTOML(t, "[general]\n")
+	c, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := validProfile()
+	p.Shares = []Share{{Path: dir, Name: "docs"}}
+	if err := c.Upsert(p, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := c.Profile("work")
+	got.Shares[0].Path = filepath.Join(dir, "other")
+	again, _ := c.Profile("work")
+	if again.Shares[0].Path != dir {
+		t.Fatalf("Profile aliased shares: %+v", again.Shares)
+	}
 }

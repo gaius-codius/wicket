@@ -254,10 +254,15 @@ func (f formState) shows(id int) bool {
 func (f *formState) setError(err error) {
 	f.err, f.errField = err.Error(), fieldNone
 	var fe *config.FieldError
-	if errors.As(err, &fe) {
-		if id, ok := fieldForKey(fe.Field); ok && f.shows(id) {
-			f.err, f.errField = fe.Msg, id
-		}
+	if !errors.As(err, &fe) {
+		return
+	}
+	if id, ok := shareErrorField(*f, fe); ok {
+		f.err, f.errField = fe.Msg, id
+		return
+	}
+	if id, ok := fieldForKey(fe.Field); ok && f.shows(id) {
+		f.err, f.errField = fe.Msg, id
 	}
 }
 
@@ -302,7 +307,10 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 	if p.Scale == 0 {
 		p.Scale = config.DefaultScale
 	}
-	f := formState{oldName: oldName, p: p, orig: p, errField: fieldNone, shareEdit: -1, shareInput: newShareInput()}
+	// Two clones: the working copy and the dirty snapshot must not share
+	// Shares with each other or with the loaded config.
+	p = p.Clone()
+	f := formState{oldName: oldName, p: p, orig: p.Clone(), errField: fieldNone, shareEdit: -1, shareInput: newShareInput()}
 	for _, c := range installed {
 		f.clients = append(f.clients, c.Name)
 	}
@@ -429,7 +437,7 @@ func (m Model) handleFormKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 			if i, ok := shareIndex(f.field); ok {
 				f.beginShareEdit(i, "name")
 			}
-		case "d", "delete", "backspace":
+		case "d":
 			if i, ok := shareIndex(f.field); ok {
 				f.removeShare(i)
 			}

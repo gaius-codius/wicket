@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -263,6 +264,11 @@ func TestDisplayLine(t *testing.T) {
 }
 
 func TestSharingLine(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tildeName := config.ShareNameFromPath(home)
 	for _, c := range []struct {
 		p    config.Profile
 		want string
@@ -272,6 +278,7 @@ func TestSharingLine(t *testing.T) {
 		{config.Profile{ShareHome: true}, "home folder"},
 		{config.Profile{Shares: []config.Share{{Path: "/tmp/docs", Name: "docs"}}}, "docs"},
 		{config.Profile{Clipboard: true, Shares: []config.Share{{Path: "/tmp/docs"}}}, "clipboard · docs"},
+		{config.Profile{Shares: []config.Share{{Path: "~"}}}, tildeName},
 		{config.Profile{}, "nothing"},
 	} {
 		if got := sharingLine(c.p); got != c.want {

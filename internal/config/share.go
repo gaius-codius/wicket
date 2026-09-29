@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 )
 
 // ExpandPath turns "~" / "~/…" into an absolute path using the current
@@ -40,7 +39,10 @@ func sanitizeShareName(name string) string {
 	var b strings.Builder
 	lastUnderscore := false
 	for _, r := range name {
-		ok := unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-'
+		ok := r == '_' || r == '-' ||
+			r >= '0' && r <= '9' ||
+			r >= 'A' && r <= 'Z' ||
+			r >= 'a' && r <= 'z'
 		if ok {
 			b.WriteRune(r)
 			lastUnderscore = false

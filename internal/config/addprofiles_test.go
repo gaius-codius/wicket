@@ -144,3 +144,40 @@ user = "u"
 		t.Fatalf("added %v skipped %v", names, skipped)
 	}
 }
+
+func TestAddProfiles_KeepsMissingShareDirDropsBadShare(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	c, err := OpenOrCreate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	p := DefaultProfile()
+	p.Name, p.Host, p.User = "nas", "h", "u"
+	p.Shares = []Share{
+		{Path: "/no/such/wicket/import/share"},
+		{Path: "relative/nope"},
+		{Path: dir, Name: "My Docs"},
+	}
+	added, skipped, err := c.AddProfiles([]Profile{p}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(added) != 1 || len(skipped) != 0 {
+		t.Fatalf("added=%+v skipped=%+v", added, skipped)
+	}
+	got := added[0].Shares
+	if len(got) != 2 || got[0].Path != "/no/such/wicket/import/share" {
+		t.Fatalf("shares %+v", got)
+	}
+	if got[1].Path != dir || got[1].Name != "My_Docs" {
+		t.Fatalf("named share %+v", got[1])
+	}
+	if err := ValidateProfile(added[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateProfileInUse(added[0]); err == nil {
+		t.Fatal("missing dir should still fail in-use validation")
+	}
+}

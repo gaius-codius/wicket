@@ -168,3 +168,23 @@ func TestParseRemmina_Shares(t *testing.T) {
 		t.Fatalf("got %+v want %+v", p.Shares, want)
 	}
 }
+
+func TestParseRemmina_SharesSkipsRelativeAndComma(t *testing.T) {
+	t.Parallel()
+	data := []byte(`[remmina]
+name=shares
+protocol=RDP
+server=share.example
+username=bob
+sharefolder=Documents
+drive=docs,/tmp/ok;bad,/tmp/a,/tmp/b;C:/windows
+`)
+	p, skip, err := ParseRemmina(data, "shares.remmina")
+	if err != nil || skip.Reason != "" {
+		t.Fatalf("err %v skip %#v", err, skip)
+	}
+	want := []config.Share{{Path: "/tmp/ok", Name: "docs"}}
+	if !reflect.DeepEqual(p.Shares, want) {
+		t.Fatalf("got %+v want %+v", p.Shares, want)
+	}
+}

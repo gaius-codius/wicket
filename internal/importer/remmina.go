@@ -157,6 +157,9 @@ func remminaShares(sharefolder, drive string) []config.Share {
 		if path == "" {
 			return
 		}
+		if strings.ContainsRune(path, ',') {
+			return
+		}
 		if !strings.HasPrefix(path, "/") && path != "~" && !strings.HasPrefix(path, "~/") {
 			return
 		}

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo/wicket-dark.svg" width="128" alt="wicket">
+</p>
+
 # Wicket
 
 Terminal UI for FreeRDP connections. Pick a profile, connect, come back

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 160" role="img" aria-label="wicket">
+  <defs>
+    <clipPath id="mark">
+      <rect width="256" height="160" rx="28" ry="28"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#mark)">
+    <rect width="128" height="160" fill="#2aa198"/>
+    <rect x="128" width="128" height="160" fill="#2a2b36"/>
+  </g>
+</svg>

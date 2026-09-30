@@ -29,18 +29,21 @@ func (c *Config) Rewrote() bool { return c.rewrote }
 // Path is the canonical config path.
 func (c *Config) Path() string { return c.path }
 
-// Profiles returns profiles in file order.
+// Profiles returns profiles in file order. Each has its own Shares, so a
+// caller cannot change the loaded config by editing the slice.
 func (c *Config) Profiles() []Profile {
 	out := make([]Profile, len(c.profiles))
-	copy(out, c.profiles)
+	for i, p := range c.profiles {
+		out[i] = p.Clone()
+	}
 	return out
 }
 
-// Profile returns a named profile.
+// Profile returns a named profile whose Shares are a copy.
 func (c *Config) Profile(name string) (Profile, bool) {
 	for _, p := range c.profiles {
 		if p.Name == name {
-			return p, true
+			return p.Clone(), true
 		}
 	}
 	return Profile{}, false
@@ -171,16 +174,19 @@ func (c *Config) AddProfiles(profiles []Profile, rename bool) (added []Profile, 
 }
 
 // PlanProfiles decides which of profiles would be added next to existing,
-// without writing: invalid profiles are skipped, never written half-valid,
-// and a name collision is skipped unless rename is set, in which case
-// "-2", "-3", … are tried until free. AddProfiles and a dry run share it.
+// without writing: invalid profiles are skipped, never written half-valid.
+// A share that would not load (relative path, bad name) is dropped; a
+// folder that is only missing on disk is kept. A name collision is skipped
+// unless rename is set, in which case "-2", "-3", … are tried until free.
+// AddProfiles and a dry run share it.
 func PlanProfiles(existing, profiles []Profile, rename bool) (accepted []Profile, skipped []Skip) {
 	taken := make(map[string]bool, len(existing)+len(profiles))
 	for _, p := range existing {
 		taken[p.Name] = true
 	}
 	for _, p := range profiles {
-		if err := ValidateProfileInUse(p); err != nil {
+		p = dropUnimportableShares(p)
+		if err := validateImported(p); err != nil {
 			skipped = append(skipped, Skip{Name: skipName(p), Reason: err.Error()})
 			continue
 		}

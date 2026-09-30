@@ -273,7 +273,11 @@ func (m Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	}
 	switch {
 	case m.view == viewForm && m.form.textFocused() && !m.form.confirmDiscard:
-		m.form.editText(msg)
+		if _, ok := shareIndex(m.form.field); ok && m.form.shareEdit >= 0 {
+			m.form.editShareText(msg)
+		} else {
+			m.form.editText(msg)
+		}
 	case m.view == viewModal && m.modal.focused:
 		return m.handleModalKey(msg, "")
 	case m.view == viewList && m.filtering:

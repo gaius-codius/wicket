@@ -3,8 +3,11 @@ package importer
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/gaius-codius/wicket/internal/config"
 )
 
 func TestParseRemmina_Work(t *testing.T) {
@@ -143,5 +146,45 @@ func TestParseRemmina_ResolutionMode(t *testing.T) {
 		if p.Size != tc.want {
 			t.Errorf("%q: size %q, want %q", tc.mode, p.Size, tc.want)
 		}
+	}
+}
+
+func TestParseRemmina_Shares(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile("testdata/shares.remmina")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, skip, err := ParseRemmina(data, "shares.remmina")
+	if err != nil || skip.Reason != "" {
+		t.Fatalf("err %v skip %#v", err, skip)
+	}
+	want := []config.Share{
+		{Path: "/tmp/wicket-remmina-single"},
+		{Path: "/tmp/wicket-remmina-docs", Name: "docs"},
+		{Path: "/tmp/wicket-remmina-proj", Name: "projects"},
+	}
+	if !reflect.DeepEqual(p.Shares, want) {
+		t.Fatalf("got %+v want %+v", p.Shares, want)
+	}
+}
+
+func TestParseRemmina_SharesSkipsRelativeAndComma(t *testing.T) {
+	t.Parallel()
+	data := []byte(`[remmina]
+name=shares
+protocol=RDP
+server=share.example
+username=bob
+sharefolder=Documents
+drive=docs,/tmp/ok;bad,/tmp/a,/tmp/b;C:/windows
+`)
+	p, skip, err := ParseRemmina(data, "shares.remmina")
+	if err != nil || skip.Reason != "" {
+		t.Fatalf("err %v skip %#v", err, skip)
+	}
+	want := []config.Share{{Path: "/tmp/ok", Name: "docs"}}
+	if !reflect.DeepEqual(p.Shares, want) {
+		t.Fatalf("got %+v want %+v", p.Shares, want)
 	}
 }

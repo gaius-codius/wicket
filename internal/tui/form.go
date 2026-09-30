@@ -26,6 +26,7 @@ const (
 	fieldScale
 	fieldClipboard
 	fieldShareHome
+	fieldShareAdd
 	fieldPassword
 	fieldForget
 	fieldClient
@@ -51,6 +52,7 @@ var formLabels = [fieldCount]string{
 	fieldScale:      "scale",
 	fieldClipboard:  "clipboard",
 	fieldShareHome:  "home folder",
+	fieldShareAdd:   "add folder",
 	fieldPassword:   "password",
 	fieldForget:     "forget password",
 	fieldClient:     "client",
@@ -71,6 +73,7 @@ var fieldKeys = [fieldCount]string{
 	fieldScale:      "scale",
 	fieldClipboard:  "clipboard",
 	fieldShareHome:  "share_home",
+	fieldShareAdd:   "shares",
 	fieldPassword:   "password",
 	fieldClient:     "client",
 }
@@ -96,7 +99,7 @@ type formSection struct {
 var formSections = []formSection{
 	{"CONNECTION", []int{fieldName, fieldHost, fieldUser, fieldDomain}},
 	{"DISPLAY", []int{fieldSize, fieldFullscreen, fieldMultimon, fieldDynamic, fieldScale}},
-	{"SHARING", []int{fieldClipboard, fieldShareHome}},
+	{"SHARING", []int{fieldClipboard, fieldShareHome, fieldShareAdd}},
 	{"PASSWORD", []int{fieldPassword, fieldForget}},
 	{"ADVANCED", []int{fieldClient}},
 }
@@ -140,6 +143,13 @@ type formState struct {
 	// clientMissing is the configured client when PATH did not have it as
 	// the form opened. PATH is searched once, then, rather than per frame.
 	clientMissing string
+
+	// shareEdit is the Shares index being typed into, or -1. sharePart is
+	// "path" or "name". shareInput holds that edit; share rows do not use
+	// the inputs table.
+	shareEdit  int
+	sharePart  string
+	shareInput textinput.Model
 }
 
 // clientCustom reports whether the client row is the free-text input.
@@ -207,10 +217,15 @@ func (f *formState) textValue(id int) *string {
 func (f formState) sections() []formSection {
 	out := make([]formSection, 0, len(formSections))
 	for _, sec := range formSections {
-		ids := make([]int, 0, len(sec.fields))
+		ids := make([]int, 0, len(sec.fields)+len(f.p.Shares))
 		for _, id := range sec.fields {
 			if id == fieldForget && f.oldName == "" {
 				continue
+			}
+			if id == fieldShareAdd {
+				for i := range f.p.Shares {
+					ids = append(ids, shareRow(i))
+				}
 			}
 			ids = append(ids, id)
 		}
@@ -239,10 +254,15 @@ func (f formState) shows(id int) bool {
 func (f *formState) setError(err error) {
 	f.err, f.errField = err.Error(), fieldNone
 	var fe *config.FieldError
-	if errors.As(err, &fe) {
-		if id, ok := fieldForKey(fe.Field); ok && f.shows(id) {
-			f.err, f.errField = fe.Msg, id
-		}
+	if !errors.As(err, &fe) {
+		return
+	}
+	if id, ok := shareErrorField(*f, fe); ok {
+		f.err, f.errField = fe.Msg, id
+		return
+	}
+	if id, ok := fieldForKey(fe.Field); ok && f.shows(id) {
+		f.err, f.errField = fe.Msg, id
 	}
 }
 
@@ -287,7 +307,10 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 	if p.Scale == 0 {
 		p.Scale = config.DefaultScale
 	}
-	f := formState{oldName: oldName, p: p, orig: p, errField: fieldNone}
+	// Two clones: the working copy and the dirty snapshot must not share
+	// Shares with each other or with the loaded config.
+	p = p.Clone()
+	f := formState{oldName: oldName, p: p, orig: p.Clone(), errField: fieldNone, shareEdit: -1, shareInput: newShareInput()}
 	for _, c := range installed {
 		f.clients = append(f.clients, c.Name)
 	}
@@ -329,6 +352,9 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 }
 
 func (f formState) textFocused() bool {
+	if _, ok := shareIndex(f.field); ok && f.shareEdit >= 0 {
+		return true
+	}
 	switch f.field {
 	case fieldName, fieldHost, fieldUser, fieldDomain, fieldSize, fieldPassword:
 		return true
@@ -356,6 +382,11 @@ func (m Model) handleFormKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 	}
 	switch key {
 	case "esc":
+		if f.shareEdit >= 0 {
+			f.endShareEdit(false)
+			m.form = f
+			return m, nil
+		}
 		if f.dirty() {
 			f.confirmDiscard = true
 			m.form = f
@@ -363,6 +394,10 @@ func (m Model) handleFormKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 		}
 		return m.cancelForm()
 	case "ctrl+s":
+		if f.shareEdit >= 0 {
+			f.endShareEdit(true)
+		}
+		m.form = f
 		return m.saveForm()
 	case "tab":
 		f.step(1, true)
@@ -378,6 +413,14 @@ func (m Model) handleFormKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 			break
 		}
 		if f.textFocused() {
+			if _, ok := shareIndex(f.field); ok && f.shareEdit >= 0 {
+				if key == "enter" {
+					f.endShareEdit(true)
+					break
+				}
+				f.editShareText(msg)
+				break
+			}
 			if key == "enter" {
 				f.step(1, true)
 				break
@@ -390,6 +433,14 @@ func (m Model) handleFormKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 			return m.openHelp()
 		case "enter", "space":
 			m.toggleFormField(&f)
+		case "n":
+			if i, ok := shareIndex(f.field); ok {
+				f.beginShareEdit(i, "name")
+			}
+		case "d":
+			if i, ok := shareIndex(f.field); ok {
+				f.removeShare(i)
+			}
 		case "left", "h":
 			switch f.field {
 			case fieldScale:
@@ -484,6 +535,12 @@ func (f *formState) focus(id int) {
 	if id != fieldName {
 		f.nameSelected = false
 	}
+	if f.shareEdit >= 0 {
+		// Leaving the row keeps what was typed; cancelling is esc.
+		if cur, ok := shareIndex(f.field); !ok || cur != f.shareEdit || id != shareRow(f.shareEdit) {
+			f.endShareEdit(true)
+		}
+	}
 	if f.textValue(f.field) != nil {
 		f.inputs[f.field].Blur()
 	}
@@ -538,6 +595,8 @@ func (m *Model) toggleFormField(f *formState) {
 		f.p.Clipboard = !f.p.Clipboard
 	case fieldShareHome:
 		f.p.ShareHome = !f.p.ShareHome
+	case fieldShareAdd:
+		f.addShare()
 	case fieldDynamic:
 		f.p.DynamicResolution = !f.p.DynamicResolution
 	case fieldScale:
@@ -552,6 +611,10 @@ func (m *Model) toggleFormField(f *formState) {
 			// the switch.
 			f.password = ""
 			f.inputs[fieldPassword].SetValue("")
+		}
+	default:
+		if i, ok := shareIndex(f.field); ok {
+			f.beginShareEdit(i, "path")
 		}
 	}
 }

@@ -60,7 +60,7 @@ func TestUpsert_RoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("missing")
 	}
-	if got != p {
+	if !got.Equal(p) {
 		t.Fatalf("got %+v want %+v", got, p)
 	}
 }
@@ -241,7 +241,7 @@ func TestUpsert_OmitsEmptyOptionalKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := c2.Profile("work"); got != cleared {
+	if got, _ := c2.Profile("work"); !got.Equal(cleared) {
 		t.Fatalf("got %+v want %+v", got, cleared)
 	}
 	if err := c2.Upsert(p, "work"); err != nil {

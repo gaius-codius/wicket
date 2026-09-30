@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -204,6 +205,9 @@ func profileFromTable(m map[string]any) (Profile, error) {
 	if err := assignBool(m, "share_home", &p.ShareHome); err != nil {
 		return Profile{}, err
 	}
+	if err := assignShares(m, &p); err != nil {
+		return Profile{}, err
+	}
 	// Multimon is full screen across every monitor, so a hand-edited one
 	// without fullscreen loads with it, and the form shows what will run.
 	if p.Multimon {
@@ -213,6 +217,69 @@ func profileFromTable(m map[string]any) (Profile, error) {
 		return Profile{}, err
 	}
 	return p, nil
+}
+
+func assignShares(m map[string]any, p *Profile) error {
+	v, ok := m["shares"]
+	if !ok {
+		return nil
+	}
+	items, err := shareTables(v)
+	if err != nil {
+		return err
+	}
+	out := make([]Share, 0, len(items))
+	for i, item := range items {
+		var s Share
+		if err := assignString(item, "path", &s.Path, true); err != nil {
+			return shareFieldErr(i, err)
+		}
+		if err := assignString(item, "name", &s.Name, true); err != nil {
+			return shareFieldErr(i, err)
+		}
+		out = append(out, s)
+	}
+	p.Shares = out
+	return nil
+}
+
+func shareFieldErr(i int, err error) error {
+	var fe *FieldError
+	if errors.As(err, &fe) {
+		return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %s %s", i+1, fe.Field, fe.Msg)}
+	}
+	return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %v", i+1, err)}
+}
+
+func shareTables(v any) ([]map[string]any, error) {
+	switch t := v.(type) {
+	case []map[string]any:
+		return t, nil
+	case []any:
+		out := make([]map[string]any, 0, len(t))
+		for i, item := range t {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return nil, &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: must be a table", i+1)}
+			}
+			out = append(out, m)
+		}
+		return out, nil
+	default:
+		return nil, &FieldError{Field: "shares", Msg: "must be an array of tables"}
+	}
+}
+
+func sharesToTOML(shares []Share) []map[string]any {
+	out := make([]map[string]any, 0, len(shares))
+	for _, s := range shares {
+		m := map[string]any{"path": s.Path}
+		if s.Name != "" {
+			m["name"] = s.Name
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 func assignString(m map[string]any, key string, dst *string, trim bool) error {
@@ -308,6 +375,13 @@ func applyProfile(table map[string]any, p Profile) map[string]any {
 		} else {
 			out[key] = v.val
 		}
+	}
+	// shares follows the same rule: omit when empty so an untouched
+	// profile does not grow a key.
+	if len(p.Shares) == 0 {
+		delete(out, "shares")
+	} else {
+		out["shares"] = sharesToTOML(p.Shares)
 	}
 	return out
 }

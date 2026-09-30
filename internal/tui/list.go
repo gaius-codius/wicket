@@ -461,7 +461,7 @@ func (m Model) details(p config.Profile, withHost, withLast bool) []detail {
 	}
 	text, st := m.presenceLine(p)
 	ds = append(ds, detail{key: "password", value: text, style: &st})
-	if p.Clipboard != config.DefaultClipboard || p.ShareHome {
+	if p.Clipboard != config.DefaultClipboard || p.ShareHome || len(p.Shares) > 0 {
 		ds = append(ds, detail{key: "sharing", value: sharingLine(p)})
 	}
 	return ds
@@ -538,6 +538,9 @@ func sharingLine(p config.Profile) string {
 	}
 	if p.ShareHome {
 		parts = append(parts, "home folder")
+	}
+	if s := shareSummary(p.Shares); s != "" {
+		parts = append(parts, s)
 	}
 	if len(parts) == 0 {
 		return "nothing"

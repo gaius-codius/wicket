@@ -58,6 +58,13 @@ func BuildPlan(p config.Profile) (Plan, error) {
 		// is put on the command line or needs checking here.
 		args = append(args, "+home-drive")
 	}
+	for _, s := range p.Shares {
+		arg, err := driveArg(s)
+		if err != nil {
+			return Plan{}, err
+		}
+		args = append(args, arg)
+	}
 	args = append(args, stdinFlag)
 	for _, a := range args {
 		if strings.HasPrefix(a, "/p:") || strings.HasPrefix(a, "/p") && (len(a) == 2 || a[2] == ':') {
@@ -68,4 +75,18 @@ func BuildPlan(p config.Profile) (Plan, error) {
 		}
 	}
 	return Plan{Client: p.Client, Args: args}, nil
+}
+
+// driveArg is FreeRDP's /drive:name,path for one shared folder. The path is
+// expanded here so ~ in the config becomes a real directory on argv.
+func driveArg(s config.Share) (string, error) {
+	path, err := config.ExpandPath(s.Path)
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(s.Name)
+	if name == "" {
+		name = config.ShareNameFromPath(path)
+	}
+	return "/drive:" + name + "," + path, nil
 }

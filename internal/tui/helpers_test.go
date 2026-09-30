@@ -345,8 +345,10 @@ func mustPassword(t *testing.T, s string) secret.Password {
 // that types into it proves nothing.
 func focusField(t *testing.T, m Model, id int) Model {
 	t.Helper()
-	// tab wraps, so this reaches a field in either direction.
-	for i := 0; i <= fieldCount; i++ {
+	// tab wraps, so this reaches a field in either direction. Share rows
+	// sit outside fieldCount, so walk enough for those too.
+	limit := fieldCount + len(m.form.p.Shares) + 2
+	for i := 0; i <= limit; i++ {
 		if m.form.field == id {
 			if v := m.form.textValue(id); v != nil && !m.form.inputs[id].Focused() {
 				t.Fatalf("field %d is current but its input is not focused", id)

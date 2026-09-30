@@ -1,0 +1,7 @@
+[remmina]
+name=shares
+protocol=RDP
+server=share.example
+username=bob
+sharefolder=/tmp/wicket-remmina-single
+drive=docs,/tmp/wicket-remmina-docs;projects,/tmp/wicket-remmina-proj

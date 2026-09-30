@@ -73,7 +73,7 @@ found but none was imported.
 | State | `WICKET_STATE`, else `$XDG_STATE_HOME/wicket/state.toml`, else `~/.local/state/wicket/state.toml` |
 | Theme | `WICKET_THEME`, else `[ui] theme` in config, else `auto` |
 
-Passwords live in libsecret, never in TOML. Hand-editing `config.toml` is
+Passwords live in libsecret, never in TOML. Each profile has a stable `id` (UUID) used as the keyring identity so a renamed or recreated display name cannot claim another profile's secret. Hand-editing `config.toml` is
 fine: a save from the TUI changes only the values, keys and profiles it has
 to, and leaves the rest of the file, comments and formatting included, as it
 was. Deleting a profile also removes the comment lines directly above it. A

@@ -95,6 +95,8 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 // starts from the typed fields alone, never the source's unknown keys.
 func (m Model) openCopy(p config.Profile) (tea.Model, tea.Cmd) {
 	p.Name = m.copyName(p.Name)
+	// A duplicate must not keep the source's keyring identity (issue #24).
+	p.ID = ""
 	nm, cmd := m.openForm("", p)
 	out := nm.(Model)
 	out.form.nameSelected = true

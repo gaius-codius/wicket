@@ -84,11 +84,12 @@ func (m Model) ensurePresence() (Model, tea.Cmd) {
 	m.presenceSeq++
 	seq := m.presenceSeq
 	m.setPresence(id, presenceEntry{state: presenceChecking, seq: seq})
-	store := m.app.Secrets
+	app := m.app
+	prof := p
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), presenceTimeout)
 		defer cancel()
-		got, err := store.Presence(ctx, id)
+		got, err := secret.PresenceMigrating(ctx, app.Secrets, app.Cfg.Path(), prof)
 		return presenceMsg{id: id, seq: seq, got: got, err: err}
 	}
 }

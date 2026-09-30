@@ -320,23 +320,22 @@ func TestForm_ForgetThenEnterShowsModal(t *testing.T) {
 	}
 }
 
-func TestForm_HostChangeDeletesOldSecret(t *testing.T) {
+func TestForm_HostChangeKeepsSameKeyringIdentity(t *testing.T) {
 	store := secret.NewMemory()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	oldID := secret.IdentityFor(h.m.app.Cfg.Path(), p)
-	_ = store.Upsert(bg, oldID, mustPassword(t, "secret"))
+	id := secret.IdentityFor(h.m.app.Cfg.Path(), p)
+	_ = store.Upsert(bg, id, mustPassword(t, "secret"))
 	p.Host = "other"
 	h.m.form = formState{oldName: "work", p: p}
 	h.m.view = viewForm
 	h.m = press(h.m, "ctrl+s")
-	if _, err := store.Lookup(bg, oldID); err == nil {
-		t.Fatal("old identity remains")
-	}
-	// The password moved rather than vanished: deleting the old entry alone
-	// is what the bug this once guarded against did too.
+	// UUID identity is unchanged by a host edit (issue #24).
 	if got := storedAs(t, store, h.m.app, p); got != "secret" {
-		t.Fatalf("new identity holds %q, want the password carried to it", got)
+		t.Fatalf("identity holds %q, want the password kept in place", got)
+	}
+	if _, err := store.Lookup(bg, id); err != nil {
+		t.Fatal("keyring identity must survive a host change")
 	}
 }
 
@@ -797,6 +796,10 @@ func TestCopy_OpensNewProfileFormWithFieldsButNameAndPassword(t *testing.T) {
 	}
 	want := orig
 	want.Name = "work-copy"
+	want.ID = f.p.ID // duplicate must get a fresh id
+	if f.p.ID == "" || f.p.ID == orig.ID {
+		t.Fatalf("copy id %q, want a new id distinct from %q", f.p.ID, orig.ID)
+	}
 	if !f.p.Equal(want) {
 		t.Fatalf("copy %+v, want %+v", f.p, want)
 	}
@@ -908,6 +911,10 @@ func TestCopy_SaveAddsProfileAndLeavesOriginal(t *testing.T) {
 	cp, _ := h.m.app.Cfg.Profile("lab")
 	want := orig
 	want.Name, want.Host = "lab", "10.0.0.6"
+	want.ID = cp.ID
+	if cp.ID == "" || cp.ID == orig.ID {
+		t.Fatalf("saved copy id %q, want distinct from %q", cp.ID, orig.ID)
+	}
 	if !cp.Equal(want) {
 		t.Fatalf("copy saved as %+v, want %+v", cp, want)
 	}

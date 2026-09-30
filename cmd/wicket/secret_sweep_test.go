@@ -158,7 +158,7 @@ func TestAC017_IsolatedSecretService(t *testing.T) {
 		t.Fatal("must not use the user session bus")
 	}
 	store := secret.NewDBus()
-	p := config.Profile{Name: "work", Host: "h", User: "u"}
+	p := config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"}
 	pw, err := secret.NewPassword(sweepSentinel)
 	if err != nil {
 		t.Fatal(err)

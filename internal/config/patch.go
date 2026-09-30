@@ -17,7 +17,7 @@ import (
 // profileKeyOrder is the order Wicket writes a profile's keys in when it
 // adds them. Keys a profile already has stay where they are.
 var profileKeyOrder = []string{
-	"name", "host", "user", "domain", "client", "size",
+	"id", "name", "host", "user", "domain", "client", "size",
 	"fullscreen", "dynamic_resolution", "scale",
 	"multimon", "clipboard", "share_home", "shares",
 }

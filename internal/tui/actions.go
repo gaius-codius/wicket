@@ -21,7 +21,8 @@ import (
 type PasswordAction int
 
 const (
-	// PasswordKeep leaves the keyring untouched, beyond following a rename.
+	// PasswordKeep leaves the keyring untouched. Renames and account-field
+	// edits no longer move secrets: identity is the profile UUID (issue #24).
 	PasswordKeep PasswordAction = iota
 	// PasswordSet replaces the stored password with Password.
 	PasswordSet
@@ -99,19 +100,14 @@ type savePlan struct {
 	intent PasswordIntent
 	oldID  secret.Identity
 	newID  secret.Identity
-	// moved is set when the save changes the profile's keyring identity: its
-	// name, host, user or domain.
+	// moved is set when the save changes the keyring identity (profile UUID).
+	// Name, host, user and domain edits do not move it (issue #24).
 	moved bool
-	// accountChanged is the part of moved a user may not expect to carry a
-	// password: a new host, user or domain rather than just a new name.
-	accountChanged bool
 }
 
-// carries reports whether the stored password follows the profile to its new
-// identity. It does whenever the identity changes and the user neither typed
-// a replacement nor asked to forget it: a blank password field keeps what is
-// stored, as the form says, even across a new host, user or domain. Dropping
-// it there, as Wicket once did, deleted the password without a word.
+// carries reports whether the stored password must be copied to a new keyring
+// identity before the config write. With UUID identities this is only true if
+// the profile id itself changed, which normal edits never do.
 func (s savePlan) carries() bool { return s.moved && !s.intent.set() && !s.intent.forget() }
 
 // finishes reports whether anything is left for the keyring once the config
@@ -154,13 +150,25 @@ func (a *App) planSave(oldName string, newP config.Profile, intent PasswordInten
 	if a.Cfg.NameTaken(newP.Name, oldName) {
 		return savePlan{}, &config.FieldError{Field: "name", Msg: "already used"}
 	}
+	if oldName == "" {
+		// New profile (including duplicate): never reuse another profile's id.
+		if newP.ID == "" {
+			config.EnsureID(&newP)
+		}
+	} else if newP.ID == "" {
+		if p, ok := a.Cfg.Profile(oldName); ok {
+			newP.ID = p.ID
+		}
+		config.EnsureID(&newP)
+	}
 	plan := savePlan{oldName: oldName, p: newP, intent: intent, newID: secret.IdentityFor(a.Cfg.Path(), newP)}
 	if oldName != "" {
 		if p, ok := a.Cfg.Profile(oldName); ok {
 			plan.old = &p
 			plan.oldID = secret.IdentityFor(a.Cfg.Path(), p)
-			plan.accountChanged = p.Host != newP.Host || p.User != newP.User || p.Domain != newP.Domain
-			plan.moved = plan.accountChanged || p.Name != newP.Name
+			// UUID identity: only a changed id moves the secret. Name/host/user
+			// /domain edits keep the same keyring item (issue #24).
+			plan.moved = plan.oldID != plan.newID
 		}
 	}
 	return plan, nil
@@ -277,16 +285,16 @@ func carryFailed(err error) error {
 }
 
 // removeProfile deletes name from the config and the last-used state, and
-// returns the keyring identity its password was stored under, for
-// forgetSecret to remove off the update loop.
-func (a *App) removeProfile(name string) (id secret.Identity, warnings []string, err error) {
-	p, ok := a.Cfg.Profile(name)
+// returns the profile as it was (for forgetSecret to clear the keyring off
+// the update loop).
+func (a *App) removeProfile(name string) (p config.Profile, warnings []string, err error) {
+	var ok bool
+	p, ok = a.Cfg.Profile(name)
 	if !ok {
-		return id, nil, fmt.Errorf("profile %q not found", name)
+		return p, nil, fmt.Errorf("profile %q not found", name)
 	}
-	id = secret.IdentityFor(a.Cfg.Path(), p)
 	if err := a.Cfg.Remove(name); err != nil {
-		return id, nil, err
+		return p, nil, err
 	}
 	warnings = append(warnings, a.rewroteWarning()...)
 	if a.State != nil {
@@ -294,7 +302,7 @@ func (a *App) removeProfile(name string) (id secret.Identity, warnings []string,
 			warnings = append(warnings, "last_used: "+err.Error())
 		}
 	}
-	return id, warnings, nil
+	return p, warnings, nil
 }
 
 // rewroteWarning says when a save could not edit config.toml in place and
@@ -308,20 +316,21 @@ func (a *App) rewroteWarning() []string {
 	return nil
 }
 
-// forgetSecret removes a deleted profile's password.
-func (a *App) forgetSecret(ctx context.Context, id secret.Identity) []string {
-	if err := a.Secrets.Delete(ctx, id); err != nil && !errors.Is(err, secret.ErrNotFound) {
+// forgetSecret removes a deleted profile's password under both the current
+// UUID identity and any leftover legacy name-keyed item.
+func (a *App) forgetSecret(ctx context.Context, p config.Profile) []string {
+	if err := secret.DeleteMigrating(ctx, a.Secrets, a.Cfg.Path(), p); err != nil && !errors.Is(err, secret.ErrNotFound) {
 		return []string{leftoverWarning(err)}
 	}
 	return nil
 }
 
 func (a *App) DeleteProfile(ctx context.Context, name string) (warnings []string, err error) {
-	id, warnings, err := a.removeProfile(name)
+	p, warns, err := a.removeProfile(name)
 	if err != nil {
 		return nil, err
 	}
-	return append(warnings, a.forgetSecret(ctx, id)...), nil
+	return append(warns, a.forgetSecret(ctx, p)...), nil
 }
 
 // leftoverWarning describes a secret that could not be removed. A keyring that
@@ -371,8 +380,8 @@ func (a *App) ResolveCredential(ctx context.Context, p config.Profile, typed *se
 	if typed != nil {
 		return credResult{Cred: *typed}
 	}
-	id := secret.IdentityFor(a.Cfg.Path(), p)
-	res, err := a.Secrets.Lookup(ctx, id)
+	config.EnsureID(&p)
+	res, err := secret.LookupMigrating(ctx, a.Secrets, a.Cfg.Path(), p, a.Cfg.IDsPersisted())
 	if err == nil {
 		return credResult{Cred: res.Password, Multiple: res.Multiple}
 	}
@@ -609,5 +618,6 @@ func (a *App) ProbeClient(p config.Profile) error {
 }
 
 func (a *App) StoreSecret(ctx context.Context, p config.Profile, pw secret.Password) error {
+	config.EnsureID(&p)
 	return a.Secrets.Upsert(ctx, secret.IdentityFor(a.Cfg.Path(), p), pw)
 }

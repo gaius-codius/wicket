@@ -97,7 +97,7 @@ type carryUndoneMsg struct {
 // deleteFinishedMsg is the removal of a deleted profile's password.
 type deleteFinishedMsg struct {
 	name  string
-	id    secret.Identity
+	p     config.Profile
 	warns []string
 }
 
@@ -449,9 +449,7 @@ func (m Model) saveDone(plan savePlan, c carry, warns []string) (tea.Model, tea.
 		switch {
 		case plan.intent.forget():
 			msg = "Saved " + truncate(name, statusNameWidth) + " and forgot its password."
-		case c.copied && plan.accountChanged:
-			// Worth saying: the password now goes to a different account
-			// or host than it was saved for.
+		case c.copied && plan.moved:
 			msg = "Saved " + truncate(name, statusNameWidth) + "; its saved password moved with it."
 		}
 	}
@@ -463,8 +461,9 @@ func (m Model) saveDone(plan savePlan, c carry, warns []string) (tea.Model, tea.
 
 // finishDelete removes a deleted profile's password off the loop. The
 // profile itself is already gone from the config.
-func (m Model) finishDelete(name string, id secret.Identity, warns []string) (tea.Model, tea.Cmd) {
+func (m Model) finishDelete(name string, deleted config.Profile, warns []string) (tea.Model, tea.Cmd) {
 	app := m.app
+	id := secret.IdentityFor(app.Cfg.Path(), deleted)
 	return m.runKeyring(
 		"Deleted "+truncate(name, statusNameWidth)+"; removing its saved password…",
 		"Deleted; waiting for the keyring… answer its unlock prompt if one is showing.",
@@ -475,12 +474,12 @@ func (m Model) finishDelete(name string, id secret.Identity, warns []string) (te
 			return m, nil
 		},
 		func(ctx context.Context) tea.Msg {
-			return deleteFinishedMsg{name: name, id: id, warns: append(warns, app.forgetSecret(ctx, id)...)}
+			return deleteFinishedMsg{name: name, p: deleted, warns: append(warns, app.forgetSecret(ctx, deleted)...)}
 		})
 }
 
 func (m Model) handleDeleteFinished(r deleteFinishedMsg) (tea.Model, tea.Cmd) {
-	m.forgetPresence(r.id)
+	m.forgetPresence(secret.IdentityFor(m.app.Cfg.Path(), r.p))
 	m.setStatus(outcome("Deleted", r.name, r.warns))
 	return m, nil
 }

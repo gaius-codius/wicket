@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"fmt"
 	"reflect"
 	"slices"
 )
@@ -27,6 +29,11 @@ type Share struct {
 
 // Profile is a v1 user-editable connection (REQ-005).
 type Profile struct {
+	// ID is a stable opaque UUID for keyring identity (issue #24). It is
+	// assigned when a profile is created or when a legacy config without id
+	// is loaded, and does not change when the display name or account fields
+	// are edited.
+	ID                string
 	Name              string
 	Host              string
 	User              string
@@ -74,4 +81,36 @@ func (p Profile) Clone() Profile {
 // slice, so callers cannot use ==.
 func (p Profile) Equal(o Profile) bool {
 	return reflect.DeepEqual(p, o)
+}
+
+// newProfileID returns a fresh profile id. Tests may replace it for
+// deterministic TOML output.
+var newProfileID = randomProfileID
+
+func randomProfileID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// A process that cannot read entropy cannot safely mint ids; panic
+		// rather than risk colliding keyring identities.
+		panic("config: random profile id: " + err.Error())
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant RFC 4122
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// EnsureID sets p.ID to a new UUID when it is empty. Callers must use it
+// before secret.IdentityFor so every keyring lookup has a stable id.
+func EnsureID(p *Profile) {
+	if p == nil || p.ID != "" {
+		return
+	}
+	p.ID = newProfileID()
+}
+
+// FreshID returns a copy of p with a newly assigned ID, for duplicate and
+// import paths that must not keep the source profile's keyring identity.
+func FreshID(p Profile) Profile {
+	p.ID = newProfileID()
+	return p
 }

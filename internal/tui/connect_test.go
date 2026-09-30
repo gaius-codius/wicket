@@ -157,8 +157,8 @@ func TestConnect_AccountChangeKeepsThePassword(t *testing.T) {
 			if h.m.view != viewList || h.m.statusKind != statusSuccess {
 				t.Fatalf("after save view=%v status=%q err=%s", h.m.view, h.m.status, h.m.form.err)
 			}
-			if !strings.Contains(h.m.status, "saved password moved with it") {
-				t.Fatalf("status %q, want it to say the password moved", h.m.status)
+			if strings.Contains(h.m.status, "saved password moved with it") {
+				t.Fatalf("status %q, UUID identity must not move on account edit", h.m.status)
 			}
 			h.m = press(h.m, "enter")
 			if h.m.view == viewModal {

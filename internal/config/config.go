@@ -20,11 +20,19 @@ type Config struct {
 	// rewrote is set when the last save could not patch the file and wrote
 	// it out in full, losing its comments and formatting.
 	rewrote bool
+	// idsPersisted is false when load minted profile ids that are not yet
+	// on disk. Keyring migration must not drop legacy items until it is
+	// true, or a quit before the first save would orphan the secret under a
+	// UUID the next load never sees again (issue #24).
+	idsPersisted bool
 }
 
 // Rewrote reports whether the last save rewrote the file in full rather than
 // editing it in place, so comments and formatting in it were lost.
 func (c *Config) Rewrote() bool { return c.rewrote }
+
+// IDsPersisted reports whether every profile id is on disk.
+func (c *Config) IDsPersisted() bool { return c.idsPersisted }
 
 // Path is the canonical config path.
 func (c *Config) Path() string { return c.path }
@@ -114,11 +122,87 @@ func parseConfig(path string, data []byte) (*Config, error) {
 	if err != nil {
 		return nil, loadError(path, err)
 	}
-	return &Config{path: path, doc: doc, profiles: profiles}, nil
+	filled := assignMissingIDs(doc, profiles)
+	c := &Config{path: path, doc: doc, profiles: profiles, idsPersisted: !filled}
+	if filled {
+		// Persist immediately so a later Open (CLI connect, another process)
+		// sees the same UUIDs the keyring was written under (issue #24).
+		if err := c.persistAssignedIDs(); err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
+}
+
+// persistAssignedIDs writes backfilled ids under the config lock.
+func (c *Config) persistAssignedIDs() error {
+	unlock, err := c.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	fresh, err := openWithoutAssign(c.path)
+	if err != nil {
+		return fmt.Errorf("re-read config before writing profile ids: %w", err)
+	}
+	if !assignMissingIDs(fresh.doc, fresh.profiles) {
+		c.doc, c.profiles = fresh.doc, fresh.profiles
+		c.idsPersisted = true
+		return nil
+	}
+	c.doc, c.profiles = fresh.doc, fresh.profiles
+	if err := c.save(); err != nil {
+		return err
+	}
+	c.idsPersisted = true
+	// Clear Rewrote from this migration write so a later user save is what
+	// status messages refer to.
+	c.rewrote = false
+	return nil
+}
+
+// assignMissingIDs gives every profile without an id a UUID and mirrors it
+// into the document tables so the next save writes the key. It reports
+// whether any were filled; those stay memory-only until a normal save.
+func assignMissingIDs(doc *document, profiles []Profile) bool {
+	filled := false
+	for i := range profiles {
+		if profiles[i].ID != "" {
+			continue
+		}
+		EnsureID(&profiles[i])
+		if i < len(doc.profiles) {
+			doc.profiles[i] = cloneMap(doc.profiles[i])
+			doc.profiles[i]["id"] = profiles[i].ID
+		}
+		filled = true
+	}
+	return filled
+}
+
+func openWithoutAssign(path string) (*Config, error) {
+	canon, err := Canonical(path, "")
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(canon)
+	if err != nil {
+		return nil, loadError(canon, err)
+	}
+	doc, err := parseDocument(data)
+	if err != nil {
+		return nil, loadError(canon, err)
+	}
+	profiles, err := doc.typedProfiles()
+	if err != nil {
+		return nil, loadError(canon, err)
+	}
+	return &Config{path: canon, doc: doc, profiles: profiles, idsPersisted: true}, nil
 }
 
 // Upsert validates p, inserts or replaces the profile named except (empty = add), and saves.
 func (c *Config) Upsert(p Profile, except string) error {
+	EnsureID(&p)
 	if err := ValidateProfileInUse(p); err != nil {
 		return err
 	}
@@ -165,8 +249,10 @@ func (c *Config) AddProfiles(profiles []Profile, rename bool) (added []Profile, 
 		if len(added) == 0 {
 			return errNoSave
 		}
-		for _, p := range added {
-			c.doc.addProfile(applyProfile(nil, p))
+		for i := range added {
+			// Each import gets its own keyring identity; never keep a source id.
+			added[i] = FreshID(added[i])
+			c.doc.addProfile(applyProfile(nil, added[i]))
 		}
 		return nil
 	})
@@ -299,6 +385,7 @@ func (c *Config) save() error {
 		return err
 	}
 	c.rewrote = !patched
+	c.idsPersisted = true
 	return nil
 }
 
@@ -321,12 +408,37 @@ func (c *Config) lock() (func(), error) {
 }
 
 func (c *Config) reload() error {
-	fresh, err := Open(c.path)
+	fresh, err := openWithoutAssign(c.path)
 	if err != nil {
 		return err
 	}
+	// Keep ids minted earlier in this process when the file still lacks
+	// them. Open would otherwise mint new UUIDs and orphan keyring items
+	// bound to the previous ones (issue #24).
+	byName := make(map[string]string, len(c.profiles))
+	for _, p := range c.profiles {
+		if p.ID != "" {
+			byName[p.Name] = p.ID
+		}
+	}
+	for i := range fresh.profiles {
+		if fresh.profiles[i].ID != "" {
+			continue
+		}
+		if id, ok := byName[fresh.profiles[i].Name]; ok {
+			fresh.profiles[i].ID = id
+		} else {
+			EnsureID(&fresh.profiles[i])
+		}
+		if i < len(fresh.doc.profiles) {
+			fresh.doc.profiles[i] = cloneMap(fresh.doc.profiles[i])
+			fresh.doc.profiles[i]["id"] = fresh.profiles[i].ID
+		}
+		fresh.idsPersisted = false
+	}
 	c.doc = fresh.doc
 	c.profiles = fresh.profiles
+	c.idsPersisted = fresh.idsPersisted
 	return nil
 }
 

@@ -33,8 +33,8 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 	// is drawn in: the cursor is a file index, and the next file index is
 	// somewhere else entirely once the list is sorted.
 	next := m.neighbour(name)
-	id, warns, err := m.app.removeProfile(name)
-	m.forgetPresence(id)
+	deleted, warns, err := m.app.removeProfile(name)
+	m.forgetPresence(m.identity(deleted))
 	m.refreshUsed()
 	if err != nil {
 		m.setStatus(err.Error(), statusError)
@@ -43,7 +43,7 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 	m.selectNameOr(next)
 	// The password goes off the update loop: the keyring may be slow, or
 	// waiting on an unlock prompt. See keyring.go.
-	return m.finishDelete(name, id, warns)
+	return m.finishDelete(name, deleted, warns)
 }
 
 // neighbour is the name drawn after name in the list, or before it when name

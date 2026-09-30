@@ -16,6 +16,7 @@ tags = [
   "daily",
 ]
 scale = 140
+id = "00000000-0000-4000-8000-000000000041"
 
 # The lab box. Somebody once put its password in here.
 [[profiles]]
@@ -24,5 +25,6 @@ scale = 140
   user = "admin"
   size = "1920x1080"
   fullscreen = true
+  id = "00000000-0000-4000-8000-000000000042"
 
 # Trailing notes stay at the end.

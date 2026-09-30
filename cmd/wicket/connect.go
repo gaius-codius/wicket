@@ -61,8 +61,8 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	}
 
 	store := openStore()
-	id := secret.IdentityFor(cfg.Path(), p)
-	cred, err := resolveCLICredential(store, id, stderr)
+	config.EnsureID(&p)
+	cred, err := resolveCLICredential(store, cfg, p, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -97,10 +97,11 @@ func execLookPath(client string) (string, error) {
 // the keyring has none. Each keyring call is bounded by secret.OpTimeout, which
 // leaves room to answer an unlock prompt; Ctrl+C or SIGTERM end the wait
 // sooner, since nothing is running yet that could be left behind.
-func resolveCLICredential(store secret.Store, id secret.Identity, stderr io.Writer) (rdp.Credential, error) {
+func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profile, stderr io.Writer) (rdp.Credential, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), secret.OpTimeout)
-	res, err := store.Lookup(ctx, id)
+	res, err := secret.LookupMigrating(ctx, store, cfg.Path(), p, cfg.IDsPersisted())
 	cancel()
+	id := secret.IdentityFor(cfg.Path(), p)
 	if err == nil {
 		if res.Multiple {
 			fmt.Fprintln(stderr, "warning: multiple secrets matched; using the most recently modified")

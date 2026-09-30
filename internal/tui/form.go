@@ -310,6 +310,11 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 	// Two clones: the working copy and the dirty snapshot must not share
 	// Shares with each other or with the loaded config.
 	p = p.Clone()
+	if oldName == "" {
+		// New and duplicate profiles get a fresh id before any keyring call.
+		p.ID = ""
+		config.EnsureID(&p)
+	}
 	f := formState{oldName: oldName, p: p, orig: p.Clone(), errField: fieldNone, shareEdit: -1, shareInput: newShareInput()}
 	for _, c := range installed {
 		f.clients = append(f.clients, c.Name)

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,6 +80,9 @@ func alive(pid int) bool {
 // program killed by the signal does. This runs the real binary, with and
 // without a terminal.
 func TestConnect_SignalStopsTheClientGroup(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("seeds D-Bus; child uses secret.Default() which is Keychain on Darwin")
+	}
 	for _, tc := range []struct {
 		name     string
 		sig      syscall.Signal

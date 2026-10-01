@@ -27,6 +27,7 @@ func requireKeychainTest(t *testing.T) {
 func newTestKeychain(t *testing.T) *Keychain {
 	t.Helper()
 	requireKeychainTest(t)
+	trackSearchList(t)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wicket-test.keychain")
@@ -123,6 +124,7 @@ func TestKeychain_UpsertReplaces(t *testing.T) {
 
 func TestKeychain_LookupPrefersTheNewestOfSeveralMatches(t *testing.T) {
 	requireKeychainTest(t)
+	trackSearchList(t)
 
 	dir := t.TempDir()
 	pass := []byte("wicket-test-keychain-pass")
@@ -169,6 +171,21 @@ func TestKeychain_LookupPrefersTheNewestOfSeveralMatches(t *testing.T) {
 	if buf.String() != "newer\n" {
 		t.Fatalf("lookup %q, want the most recently modified", buf.String())
 	}
+
+	// Delete must clear every match across both keychains (MatchLimitAll).
+	if err := lookup.Delete(bg, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lookup.Lookup(bg, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("after Delete Lookup: %v, want ErrNotFound", err)
+	}
+	pres, err := lookup.Presence(bg, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pres != NotSaved {
+		t.Fatalf("after Delete Presence = %v, want NotSaved", pres)
+	}
 }
 
 func TestKeychain_CancelledContext(t *testing.T) {
@@ -188,6 +205,31 @@ func TestKeychain_CancelledContext(t *testing.T) {
 	}
 	if _, err := store.Presence(done, id); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("Presence: %v, want ErrUnavailable", err)
+	}
+}
+
+// Cancelling between the attribute query and the password fetch must stop
+// Lookup before the second SecItemCopyMatching and return ErrUnavailable.
+func TestKeychain_LookupCancelBetweenSteps(t *testing.T) {
+	store := newTestKeychain(t)
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Upsert(bg, id, pw); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	prev := lookupBetweenSteps
+	lookupBetweenSteps = func() { cancel() }
+	t.Cleanup(func() { lookupBetweenSteps = prev })
+
+	_, err = store.Lookup(ctx, id)
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Lookup: %v, want ErrUnavailable wrapping context.Canceled", err)
 	}
 }
 

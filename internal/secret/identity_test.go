@@ -34,16 +34,3 @@ func TestIdentityFor_UUIDAttributes(t *testing.T) {
 		t.Fatalf("Label = %q", id.Label())
 	}
 }
-
-func TestLegacyIdentity_OldAttributes(t *testing.T) {
-	t.Parallel()
-	p := config.Profile{Name: "work", Host: "h", User: "u", Domain: "D"}
-	a := LegacyIdentity("/tmp/a.toml", p).Attrs()
-	if a["service"] != "wicket" || a["config"] != "/tmp/a.toml" || a["profile"] != "work" ||
-		a["host"] != "h" || a["user"] != "u" || a["domain"] != "D" {
-		t.Fatalf("%v", a)
-	}
-	if _, ok := a["profile_id"]; ok {
-		t.Fatal("legacy attrs must not include profile_id")
-	}
-}

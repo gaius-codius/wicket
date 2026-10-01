@@ -61,7 +61,10 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	}
 
 	store := openStore()
-	config.EnsureID(&p)
+	if p.ID == "" {
+		fmt.Fprintln(stderr, "profile has no id; open the config in the TUI once so ids can be assigned, or add an id field by hand")
+		return 2
+	}
 	cred, err := resolveCLICredential(store, cfg, p, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -98,10 +101,10 @@ func execLookPath(client string) (string, error) {
 // leaves room to answer an unlock prompt; Ctrl+C or SIGTERM end the wait
 // sooner, since nothing is running yet that could be left behind.
 func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profile, stderr io.Writer) (rdp.Credential, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), secret.OpTimeout)
-	res, err := secret.LookupMigrating(ctx, store, cfg.Path(), p, cfg.IDsPersisted())
-	cancel()
 	id := secret.IdentityFor(cfg.Path(), p)
+	ctx, cancel := context.WithTimeout(context.Background(), secret.OpTimeout)
+	res, err := store.Lookup(ctx, id)
+	cancel()
 	if err == nil {
 		if res.Multiple {
 			fmt.Fprintln(stderr, "warning: multiple secrets matched; using the most recently modified")

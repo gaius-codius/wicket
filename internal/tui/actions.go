@@ -316,10 +316,9 @@ func (a *App) rewroteWarning() []string {
 	return nil
 }
 
-// forgetSecret removes a deleted profile's password under both the current
-// UUID identity and any leftover legacy name-keyed item.
+// forgetSecret removes a deleted profile's password under its UUID identity.
 func (a *App) forgetSecret(ctx context.Context, p config.Profile) []string {
-	if err := secret.DeleteMigrating(ctx, a.Secrets, a.Cfg.Path(), p); err != nil && !errors.Is(err, secret.ErrNotFound) {
+	if err := a.Secrets.Delete(ctx, secret.IdentityFor(a.Cfg.Path(), p)); err != nil && !errors.Is(err, secret.ErrNotFound) {
 		return []string{leftoverWarning(err)}
 	}
 	return nil
@@ -381,7 +380,7 @@ func (a *App) ResolveCredential(ctx context.Context, p config.Profile, typed *se
 		return credResult{Cred: *typed}
 	}
 	config.EnsureID(&p)
-	res, err := secret.LookupMigrating(ctx, a.Secrets, a.Cfg.Path(), p, a.Cfg.IDsPersisted())
+	res, err := a.Secrets.Lookup(ctx, secret.IdentityFor(a.Cfg.Path(), p))
 	if err == nil {
 		return credResult{Cred: res.Password, Multiple: res.Multiple}
 	}

@@ -493,7 +493,8 @@ func TestSaveProfile_WarnsWhenTheConfigIsRewritten(t *testing.T) {
 
 // Issue #24: a leftover keyring secret from a deleted profile must not be
 // inherited by a later profile that reuses the same display name (and
-// host/user/domain). UUID identities make the new profile a different key.
+// host/user/domain). UUID identities make the new profile a different key,
+// and there is no name-keyed legacy lookup path that could bridge them.
 func TestSaveProfile_RecreatedNameDoesNotInheritOrphan(t *testing.T) {
 	store := secret.NewMemory()
 	a := testApp(t, fixtureTOML("work", "h", "u"), store)
@@ -522,12 +523,16 @@ func TestSaveProfile_RecreatedNameDoesNotInheritOrphan(t *testing.T) {
 	if _, err := a.SaveProfile(bg, "", neu, PasswordIntent{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Lookup(bg, secret.IdentityFor(a.Cfg.Path(), neu)); !errors.Is(err, secret.ErrNotFound) {
+	neuID := secret.IdentityFor(a.Cfg.Path(), neu)
+	if neuID == id {
+		t.Fatal("recreated profile must use a different keyring identity")
+	}
+	if _, err := store.Lookup(bg, neuID); !errors.Is(err, secret.ErrNotFound) {
 		t.Fatal("recreated profile must not see the orphaned secret")
 	}
 	res := a.ResolveCredential(bg, neu, nil)
-	if !res.NeedModal || res.Err != nil {
-		t.Fatalf("ResolveCredential = %+v, want NeedModal and no orphan", res)
+	if !res.NeedModal || res.Err != nil || res.Cred != nil {
+		t.Fatalf("ResolveCredential = %+v, want NeedModal and no orphan (no name-based inherit)", res)
 	}
 	// Original orphan remains under the old UUID until cleared manually.
 	if _, err := store.Lookup(bg, id); err != nil {

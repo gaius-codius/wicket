@@ -89,11 +89,11 @@ func TestMemoryStore_Presence(t *testing.T) {
 	if got, err := m.Presence(ctx, id); err != nil || got != Saved {
 		t.Fatalf("after upsert: %v, %v", got, err)
 	}
-	// The whole identity is the key: a changed host is a different entry.
+	// The whole identity is the key: a different profile_id is a different entry.
 	other := id
-	other.Host = "h2"
+	other.ProfileID = "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 	if got, err := m.Presence(ctx, other); err != nil || got != NotSaved {
-		t.Fatalf("other host: %v, %v", got, err)
+		t.Fatalf("other profile_id: %v, %v", got, err)
 	}
 	done, cancel := context.WithCancel(ctx)
 	cancel()

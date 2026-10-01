@@ -161,6 +161,9 @@ func (s *Server) Stored() int {
 
 func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 	t.Helper()
+	if _, err := exec.LookPath("dbus-daemon"); err != nil {
+		t.Skip("dbus-daemon not on PATH")
+	}
 	userAddr := os.Getenv("DBUS_SESSION_BUS_ADDRESS")
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "bus")

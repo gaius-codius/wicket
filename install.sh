@@ -107,7 +107,12 @@ main() {
 		esac
 	done
 
-	[ "$(uname -s)" = Linux ] || die "wicket runs on Linux only for now"
+	os=$(uname -s)
+	case "$os" in
+	Linux) goos=linux ;;
+	Darwin) goos=darwin ;;
+	*) die "wicket runs on Linux and macOS; try: go install github.com/$REPO/cmd/wicket@latest" ;;
+	esac
 	case "$(uname -m)" in
 	x86_64 | amd64) arch=amd64 ;;
 	aarch64 | arm64) arch=arm64 ;;
@@ -124,7 +129,7 @@ main() {
 		return
 	fi
 
-	name="wicket_${version}_linux_${arch}"
+	name="wicket_${version}_${goos}_${arch}"
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT INT TERM
 

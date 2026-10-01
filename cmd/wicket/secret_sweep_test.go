@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,9 @@ import (
 const sweepSentinel = "s3cret-SENTINEL"
 
 func TestCLISecretSweep_TTY(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("reads /proc")
+	}
 	cfgPath := writeConnectConfig(t, validTOML())
 	t.Setenv("WICKET_CONFIG", cfgPath)
 	statePath := filepath.Join(t.TempDir(), "state.toml")

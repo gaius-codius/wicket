@@ -66,7 +66,7 @@ func main() {
 
 func startTUI() error {
 	return tui.Run(tui.Options{
-		Store: secret.NewDBus(),
+		Store: secret.Default(),
 		// The TUI sends the client's output to a buffer of its own: the
 		// terminal is Bubble Tea's for as long as a session runs.
 		Launcher: &rdp.Launcher{},

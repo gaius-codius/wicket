@@ -49,7 +49,8 @@ func (c *Config) Profile(name string) (Profile, bool) {
 	return Profile{}, false
 }
 
-// Warnings are non-fatal load notes (stripped password-family keys).
+// Warnings are non-fatal load notes (stripped password-family keys, failed
+// profile-id persistence, and similar).
 func (c *Config) Warnings() []string {
 	if c.doc == nil {
 		return nil
@@ -121,8 +122,12 @@ func parseConfig(path string, data []byte) (*Config, error) {
 		// sees the same UUIDs the keyring was written under (issue #24).
 		// Soft-fail: keep the in-memory ids if the write fails; a later save
 		// will persist them. Hard-failing Open left the app unusable when the
-		// config was only briefly unwritable.
-		_ = c.persistAssignedIDs()
+		// config was only briefly unwritable. Surface the failure so a remint
+		// on the next open (orphan risk) is visible.
+		if err := c.persistAssignedIDs(); err != nil {
+			c.doc.warnings = append(c.doc.warnings,
+				fmt.Sprintf("could not persist profile ids: %v", err))
+		}
 	}
 	return c, nil
 }

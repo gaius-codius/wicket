@@ -312,8 +312,7 @@ func (m Model) openForm(oldName string, p config.Profile) (tea.Model, tea.Cmd) {
 	p = p.Clone()
 	if oldName == "" {
 		// New and duplicate profiles get a fresh id before any keyring call.
-		p.ID = ""
-		config.EnsureID(&p)
+		p = config.FreshID(p)
 	}
 	f := formState{oldName: oldName, p: p, orig: p.Clone(), errField: fieldNone, shareEdit: -1, shareInput: newShareInput()}
 	for _, c := range installed {

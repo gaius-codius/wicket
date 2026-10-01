@@ -151,10 +151,10 @@ func (a *App) planSave(oldName string, newP config.Profile, intent PasswordInten
 		return savePlan{}, &config.FieldError{Field: "name", Msg: "already used"}
 	}
 	if oldName == "" {
-		// New profile (including duplicate): never reuse another profile's id.
-		if newP.ID == "" {
-			config.EnsureID(&newP)
-		}
+		// New profile (including duplicate): always mint a fresh id so a
+		// caller that copied a source Profile into SaveProfile("", …)
+		// cannot share that profile's keyring identity.
+		newP = config.FreshID(newP)
 	} else if newP.ID == "" {
 		if p, ok := a.Cfg.Profile(oldName); ok {
 			newP.ID = p.ID

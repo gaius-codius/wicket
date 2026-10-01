@@ -16,7 +16,10 @@ import (
 )
 
 var (
-	openStore    = func() secret.Store { return secret.NewDBus() }
+	openStore     = func() secret.Store { return secret.NewDBus() }
+	lookupProfile = func(cfg *config.Config, name string) (config.Profile, bool) {
+		return cfg.Profile(name)
+	}
 	isTerminal   = func(fd int) bool { return term.IsTerminal(fd) }
 	readPassword = func(fd int) ([]byte, error) { return term.ReadPassword(fd) }
 	stdinFile    = func() *os.File { return os.Stdin }
@@ -44,7 +47,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	for _, w := range cfg.Warnings() {
 		fmt.Fprintln(stderr, "warning:", w)
 	}
-	p, ok := cfg.Profile(name)
+	p, ok := lookupProfile(cfg, name)
 	if !ok {
 		fmt.Fprintf(stderr, "unknown profile %q\n", name)
 		return 2
@@ -62,7 +65,9 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 
 	store := openStore()
 	if p.ID == "" {
-		fmt.Fprintln(stderr, "profile has no id; open the config in the TUI once so ids can be assigned, or add an id field by hand")
+		// Open backfills missing ids; an empty id here means the loaded
+		// profile is corrupt or a test injected one without an id.
+		fmt.Fprintf(stderr, "profile %q has no id after load; config may be corrupt\n", name)
 		return 2
 	}
 	cred, err := resolveCLICredential(store, cfg, p, stderr)

@@ -516,21 +516,24 @@ func TestSaveProfile_RecreatedNameDoesNotInheritOrphan(t *testing.T) {
 	// Recreate the same display name and account fields with a new UUID.
 	a.Secrets = store
 	neu := config.Profile{Name: "work", Host: "h", User: "u", Client: config.DefaultClient, Scale: 100, DynamicResolution: true, Clipboard: true}
-	config.EnsureID(&neu)
-	if neu.ID == p.ID {
-		t.Fatal("setup: new profile must have a distinct id")
-	}
 	if _, err := a.SaveProfile(bg, "", neu, PasswordIntent{}); err != nil {
 		t.Fatal(err)
 	}
-	neuID := secret.IdentityFor(a.Cfg.Path(), neu)
+	saved, ok := a.Cfg.Profile("work")
+	if !ok {
+		t.Fatal("recreated work missing")
+	}
+	if saved.ID == "" || saved.ID == p.ID {
+		t.Fatalf("recreated profile must have a distinct id, got %q", saved.ID)
+	}
+	neuID := secret.IdentityFor(a.Cfg.Path(), saved)
 	if neuID == id {
 		t.Fatal("recreated profile must use a different keyring identity")
 	}
 	if _, err := store.Lookup(bg, neuID); !errors.Is(err, secret.ErrNotFound) {
 		t.Fatal("recreated profile must not see the orphaned secret")
 	}
-	res := a.ResolveCredential(bg, neu, nil)
+	res := a.ResolveCredential(bg, saved, nil)
 	if !res.NeedModal || res.Err != nil || res.Cred != nil {
 		t.Fatalf("ResolveCredential = %+v, want NeedModal and no orphan (no name-based inherit)", res)
 	}
@@ -541,6 +544,8 @@ func TestSaveProfile_RecreatedNameDoesNotInheritOrphan(t *testing.T) {
 }
 
 // Duplicate assigns a new id and does not touch the source's keyring entry.
+// planSave must FreshID even when the caller copied the source Profile with
+// its id intact (SaveProfile("", copied) must not share keyring).
 func TestSaveProfile_DuplicateGetsFreshID(t *testing.T) {
 	store := secret.NewMemory()
 	a := testApp(t, fixtureTOML("work", "h", "u"), store)
@@ -548,15 +553,18 @@ func TestSaveProfile_DuplicateGetsFreshID(t *testing.T) {
 	_ = store.Upsert(bg, secret.IdentityFor(a.Cfg.Path(), orig), mustPassword(t, "orig"))
 	cp := orig
 	cp.Name = "work-copy"
-	cp.ID = ""
-	config.EnsureID(&cp)
-	if cp.ID == orig.ID {
-		t.Fatal("duplicate id must differ from source")
-	}
+	// Intentionally keep orig.ID — create path must remint.
 	if _, err := a.SaveProfile(bg, "", cp, PasswordIntent{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Lookup(bg, secret.IdentityFor(a.Cfg.Path(), cp)); !errors.Is(err, secret.ErrNotFound) {
+	saved, ok := a.Cfg.Profile("work-copy")
+	if !ok {
+		t.Fatal("work-copy missing")
+	}
+	if saved.ID == "" || saved.ID == orig.ID {
+		t.Fatalf("create must mint a fresh id, got %q (source %q)", saved.ID, orig.ID)
+	}
+	if _, err := store.Lookup(bg, secret.IdentityFor(a.Cfg.Path(), saved)); !errors.Is(err, secret.ErrNotFound) {
 		t.Fatal("untouched duplicate must not bind a password")
 	}
 	if got := storedAs(t, store, a, orig); got != "orig" {

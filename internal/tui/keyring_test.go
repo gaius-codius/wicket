@@ -209,9 +209,9 @@ func TestKeyring_SlowWaitMentionsTheUnlockPrompt(t *testing.T) {
 	}
 }
 
-// A save that must move a password waits for the keyring before the config
-// moves. Stopping the wait leaves the form, and the config, as they were.
-func TestKeyring_StalledSaveCanBeStopped(t *testing.T) {
+// A rename no longer waits on the keyring: UUID identity does not move with
+// the display name (issue #24). The config saves immediately.
+func TestKeyring_RenameDoesNotWaitOnKeyring(t *testing.T) {
 	store := newStallStore()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	m := press(h.m, "e")
@@ -219,20 +219,18 @@ func TestKeyring_StalledSaveCanBeStopped(t *testing.T) {
 	m = press(m, "ctrl+u")
 	m = typeInto(m, "office")
 	m, cmd := updateKey(m, "ctrl+s")
-	if m.keyring == nil || m.view != viewForm {
-		t.Fatalf("save did not wait for the keyring off the loop: view %v", m.view)
+	if m.keyring != nil {
+		t.Fatal("rename must not wait on the keyring")
 	}
-	runCmd(cmd)
-	if !strings.Contains(screen(m), "esc stop waiting") {
-		t.Fatalf("no way out offered:\n%s", screen(m))
+	if cmd != nil {
+		nm, _ := m.Update(cmd())
+		m = nm.(Model)
 	}
-	m, _ = updateKey(m, "esc")
-	waitGaveUp(t, store, "Lookup")
-	if m.view != viewForm || m.form.p.Name != "office" || !strings.Contains(m.status, "Not saved") {
-		t.Fatalf("view %v name %q status %q", m.view, m.form.p.Name, m.status)
+	if m.view != viewList {
+		t.Fatalf("view %v after rename", m.view)
 	}
-	if _, ok := m.app.Cfg.Profile("work"); !ok {
-		t.Fatal("the config moved although the save was stopped")
+	if _, ok := m.app.Cfg.Profile("office"); !ok {
+		t.Fatal("profile not renamed")
 	}
 }
 
@@ -355,24 +353,6 @@ func TestRun_SignalsEndAWaitOnAStalledKeyring(t *testing.T) {
 	}
 }
 
-// landingStore is a keyring whose writes land even when the caller has
-// given up on them, as a daemon that received the request before the cancel
-// does: Upsert stores the password, then holds its answer until the caller's
-// context ends.
-type landingStore struct {
-	*secret.Memory
-	upserting chan struct{}
-}
-
-func (s *landingStore) Upsert(ctx context.Context, id secret.Identity, pw secret.Password) error {
-	if err := s.Memory.Upsert(context.Background(), id, pw); err != nil {
-		return err
-	}
-	s.upserting <- struct{}{}
-	<-ctx.Done()
-	return fmt.Errorf("%w: %w", secret.ErrUnavailable, ctx.Err())
-}
-
 // editHost opens the edit form on work and changes its host, ready to save.
 func editHost(t *testing.T, m Model, host string) Model {
 	t.Helper()
@@ -382,73 +362,27 @@ func editHost(t *testing.T, m Model, host string) Model {
 	return typeInto(m, host)
 }
 
-// A save whose carry had already copied the password when the user stopped
-// waiting -- its reply on the way, not yet taken -- puts the keyring back:
-// the config was never written, so the copy is under details no profile
-// has. It used to be left there, and dropped along with the reply.
-func TestKeyring_StoppedCarryRemovesACopyThatFinished(t *testing.T) {
+// Host and account edits keep the same UUID keyring identity, so a save with
+// a blank password field must not wait on the keyring to "move" anything.
+func TestKeyring_HostChangeDoesNotCarry(t *testing.T) {
 	store := secret.NewMemory()
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	old, _ := h.m.app.Cfg.Profile("work")
 	_ = store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), old), mustPassword(t, "secret"))
 	m := editHost(t, h.m, "other")
 	m, cmd := updateKey(m, "ctrl+s")
-	if m.keyring == nil {
-		t.Fatal("save did not carry the password off the loop")
+	if m.keyring != nil {
+		t.Fatal("host change must not start a keyring carry")
 	}
-	moved := old
-	moved.Host = "other"
-	// The carry runs to the end, and its reply waits behind the esc.
-	reply := awaitKeyring(cmd, m.keyring.id)
-	if got := storedAs(t, store, m.app, moved); got != "secret" {
-		t.Fatalf("setup: carry stored %q under the new host", got)
+	if cmd != nil {
+		nm, _ := m.Update(cmd())
+		m = nm.(Model)
 	}
-	m, cmd = updateKey(m, "esc")
-	m, _ = drainKeyring(m, cmd)
-	nm, _ := m.Update(reply)
-	m = nm.(Model)
-
-	if got := storedAs(t, store, m.app, moved); got != "" {
-		t.Fatal("the copy under the new host was left in the keyring")
+	if m.view != viewList {
+		t.Fatalf("view %v after save", m.view)
 	}
 	if got := storedAs(t, store, m.app, old); got != "secret" {
-		t.Fatalf("old entry %q, want it untouched", got)
-	}
-	if p, _ := m.app.Cfg.Profile("work"); p.Host != "h" {
-		t.Fatalf("config moved to %q although the save was stopped", p.Host)
-	}
-	if m.view != viewForm || !strings.Contains(m.status, "Not saved") || strings.Contains(m.status, "may be left") {
-		t.Fatalf("view %v status %q", m.view, m.status)
-	}
-}
-
-// A copy that lands after the user stopped waiting -- sent before the
-// cancel, confirmed never -- is removed too, once the carry has ended.
-func TestKeyring_StoppedCarryRemovesACopyThatLandsLate(t *testing.T) {
-	store := &landingStore{Memory: secret.NewMemory(), upserting: make(chan struct{}, 1)}
-	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
-	old, _ := h.m.app.Cfg.Profile("work")
-	_ = store.Memory.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), old), mustPassword(t, "secret"))
-	m := editHost(t, h.m, "other")
-	m, cmd := updateKey(m, "ctrl+s")
-	runCmd(cmd)
-	select {
-	case <-store.upserting:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the carry never wrote the copy")
-	}
-	m, cmd = updateKey(m, "esc")
-	m, _ = drainKeyring(m, cmd)
-
-	moved := old
-	moved.Host = "other"
-	if got := storedAs(t, store.Memory, m.app, moved); got != "" {
-		t.Fatal("the copy under the new host was left in the keyring")
-	}
-	if got := storedAs(t, store.Memory, m.app, old); got != "secret" {
-		t.Fatalf("old entry %q, want it untouched", got)
-	}
-	if m.keyring != nil || m.view != viewForm || !strings.Contains(m.status, "Not saved") {
-		t.Fatalf("view %v status %q", m.view, m.status)
+		// old still has same ID as the saved profile
+		t.Fatalf("password %q", got)
 	}
 }

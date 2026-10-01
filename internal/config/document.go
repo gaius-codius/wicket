@@ -164,6 +164,9 @@ func (d *document) typedProfiles() ([]Profile, error) {
 
 func profileFromTable(m map[string]any) (Profile, error) {
 	p := DefaultProfile()
+	if err := assignString(m, "id", &p.ID, true); err != nil {
+		return Profile{}, err
+	}
 	if err := assignString(m, "name", &p.Name, false); err != nil {
 		return Profile{}, err
 	}
@@ -331,6 +334,13 @@ func assignInt(m map[string]any, key string, dst *int) error {
 
 func applyProfile(table map[string]any, p Profile) map[string]any {
 	out := cloneMap(table)
+	// id is the keyring identity; always persist when set so a rename cannot
+	// leave the secret keyed by a display name that a later copy reuses.
+	if p.ID != "" {
+		out["id"] = p.ID
+	} else {
+		delete(out, "id")
+	}
 	out["name"] = p.Name
 	out["host"] = p.Host
 	out["user"] = p.User

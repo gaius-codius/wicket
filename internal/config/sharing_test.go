@@ -49,6 +49,7 @@ func TestSharing_RoundTrip(t *testing.T) {
 	}
 	p := validProfile()
 	p.Fullscreen, p.Multimon, p.Clipboard, p.ShareHome = true, true, false, true
+	EnsureID(&p)
 	if err := c.Upsert(p, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -133,6 +134,7 @@ func TestShares_RoundTrip(t *testing.T) {
 	}
 	// Two shares with the same path need distinct names.
 	p.Shares[0].Name = "data"
+	EnsureID(&p)
 	if err := c.Upsert(p, ""); err != nil {
 		t.Fatal(err)
 	}

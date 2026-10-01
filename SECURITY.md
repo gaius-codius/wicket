@@ -18,9 +18,10 @@ The latest release. There are no backports to earlier tags.
 ## What Wicket tries to protect
 
 - **Passwords never reach the config file.** They live in the Secret Service
-  keyring. A config file that already contains a key named `password`, `pass`,
-  `secret` or `passwd` has it stripped on load, reported as a warning, and
-  never written back.
+  keyring, keyed by `service=wicket`, the config path and a stable per-profile
+  `profile_id` UUID (not the display name). A config file that already contains
+  a key named `password`, `pass`, `secret` or `passwd` has it stripped on load,
+  reported as a warning, and never written back.
 - **Passwords never reach the process table.** The FreeRDP child is started
   with `/from-stdin:force` and the password is written to its stdin. Building a
   command line containing `/p:` is refused outright, so a hand-edited config

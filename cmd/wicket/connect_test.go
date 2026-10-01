@@ -30,6 +30,31 @@ func TestConnect_UnknownProfile(t *testing.T) {
 	}
 }
 
+func TestConnect_EmptyProfileID(t *testing.T) {
+	cfg := writeConnectConfig(t, validTOML())
+	t.Setenv("WICKET_CONFIG", cfg)
+	t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+	dir := testutil.FakeRDPDir(t)
+	testutil.PrependPATH(t, dir)
+	oldLookup := lookupProfile
+	lookupProfile = func(c *config.Config, name string) (config.Profile, bool) {
+		p, ok := c.Profile(name)
+		p.ID = ""
+		return p, ok
+	}
+	t.Cleanup(func() { lookupProfile = oldLookup })
+	got := runCLI(t, []string{"connect", "work"})
+	if got.code != 2 {
+		t.Fatalf("exit %d stderr %q", got.code, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "no id after load") {
+		t.Fatalf("stderr %q", got.stderr)
+	}
+	if !strings.Contains(got.stderr, "corrupt") {
+		t.Fatalf("stderr %q", got.stderr)
+	}
+}
+
 func TestConnect_MissingConfig(t *testing.T) {
 	t.Setenv("WICKET_CONFIG", filepath.Join(t.TempDir(), "missing.toml"))
 	t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))

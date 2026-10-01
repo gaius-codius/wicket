@@ -27,7 +27,7 @@ func TestDBus_CRUDAndIsolation(t *testing.T) {
 	}
 
 	store := NewDBus()
-	p := config.Profile{Name: "work", Host: "h", User: "u", Domain: "D"}
+	p := config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u", Domain: "D"}
 	idA := IdentityFor("/tmp/a.toml", p)
 	idB := IdentityFor("/tmp/b.toml", p)
 	pw, err := NewPassword("s3cret")
@@ -69,7 +69,7 @@ func TestDBus_WritesWaitForTheKeyringPrompt(t *testing.T) {
 	}
 
 	store := NewDBus()
-	p := config.Profile{Name: "work", Host: "h", User: "u"}
+	p := config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"}
 	id := IdentityFor("/tmp/a.toml", p)
 	pw, err := NewPassword("s3cret")
 	if err != nil {
@@ -123,7 +123,7 @@ func TestDBus_LookupUnlocksALockedKeyring(t *testing.T) {
 	defer cleanup()
 
 	store := NewDBus()
-	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
 	pw, err := NewPassword("s3cret")
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestDBus_LookupPrefersTheNewestOfSeveralMatches(t *testing.T) {
 	_, srv, cleanup := fakesecret.Start(t)
 	defer cleanup()
 
-	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
 	srv.Seed(id.Attrs(), "older", 1000)
 	srv.Seed(id.Attrs(), "newer", 2000)
 
@@ -189,7 +189,7 @@ func TestDBus_UnansweredPromptTimesOutAndDismisses(t *testing.T) {
 	promptTimeout = 150 * time.Millisecond
 	defer func() { promptTimeout = old }()
 
-	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
 	pw, err := NewPassword("s3cret")
 	if err != nil {
 		t.Fatal(err)
@@ -218,8 +218,8 @@ func TestDBus_PresenceSearchesAndNothingElse(t *testing.T) {
 	_, srv, cleanup := fakesecret.Start(t)
 	defer cleanup()
 
-	saved := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
-	other := IdentityFor("/tmp/a.toml", config.Profile{Name: "home", Host: "h", User: "u"})
+	saved := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	other := IdentityFor("/tmp/a.toml", config.Profile{ID: "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "home", Host: "h", User: "u"})
 	srv.Seed(saved.Attrs(), "s3cret", 1000)
 	// A locked keyring with a prompt configured: if Presence tried to unlock,
 	// the prompt would be recorded below.
@@ -271,7 +271,7 @@ func TestDBus_PresenceHonoursTheDeadline(t *testing.T) {
 	defer cleanup()
 	srv.StallSearches()
 
-	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	start := time.Now()
@@ -289,7 +289,7 @@ func TestDBus_PresenceHonoursTheDeadline(t *testing.T) {
 
 func TestDBus_PresenceWithoutAServiceIsUnavailable(t *testing.T) {
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+t.TempDir()+"/nobus")
-	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
 	if _, err := NewDBus().Presence(context.Background(), id); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want it to wrap ErrUnavailable", err)
 	}
@@ -304,7 +304,7 @@ func TestDBus_OperationsHonourTheContext(t *testing.T) {
 	defer cleanup()
 	srv.StallEverything()
 
-	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
 	pw, err := NewPassword("s3cret")
 	if err != nil {
 		t.Fatal(err)
@@ -334,7 +334,7 @@ func TestDBus_CancelledPromptIsDismissed(t *testing.T) {
 	_, srv, cleanup := fakesecret.Start(t)
 	defer cleanup()
 
-	id := IdentityFor("/tmp/a.toml", config.Profile{Name: "work", Host: "h", User: "u"})
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
 	pw, err := NewPassword("s3cret")
 	if err != nil {
 		t.Fatal(err)

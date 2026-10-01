@@ -12,7 +12,7 @@ var bg = context.Background()
 func TestMemoryStore_CRUD(t *testing.T) {
 	t.Parallel()
 	m := NewMemory()
-	id := Identity{Service: "wicket", Config: "/a", Profile: "work", Host: "h", User: "u"}
+	id := Identity{Service: "wicket", Config: "/a", ProfileID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}
 	if _, err := m.Lookup(bg, id); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("lookup: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestMemoryStore_MostRecentWins(t *testing.T) {
 		n++
 		return time.Unix(int64(n), 0)
 	}
-	id := Identity{Service: "wicket", Config: "/a", Profile: "work", Host: "h", User: "u"}
+	id := Identity{Service: "wicket", Config: "/a", ProfileID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}
 	pw1, _ := NewPassword("one")
 	pw2, _ := NewPassword("two")
 	_ = m.Upsert(bg, id, pw1)
@@ -78,7 +78,7 @@ func TestMemoryStore_Presence(t *testing.T) {
 	t.Parallel()
 	m := NewMemory()
 	ctx := context.Background()
-	id := Identity{Service: "wicket", Config: "/a", Profile: "work", Host: "h", User: "u"}
+	id := Identity{Service: "wicket", Config: "/a", ProfileID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}
 	if got, err := m.Presence(ctx, id); err != nil || got != NotSaved {
 		t.Fatalf("empty store: %v, %v", got, err)
 	}
@@ -89,11 +89,11 @@ func TestMemoryStore_Presence(t *testing.T) {
 	if got, err := m.Presence(ctx, id); err != nil || got != Saved {
 		t.Fatalf("after upsert: %v, %v", got, err)
 	}
-	// The whole identity is the key: a changed host is a different entry.
+	// The whole identity is the key: a different profile_id is a different entry.
 	other := id
-	other.Host = "h2"
+	other.ProfileID = "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 	if got, err := m.Presence(ctx, other); err != nil || got != NotSaved {
-		t.Fatalf("other host: %v, %v", got, err)
+		t.Fatalf("other profile_id: %v, %v", got, err)
 	}
 	done, cancel := context.WithCancel(ctx)
 	cancel()
@@ -107,7 +107,7 @@ func TestMemoryStore_Presence(t *testing.T) {
 func TestMemoryStore_HonoursTheContext(t *testing.T) {
 	t.Parallel()
 	m := NewMemory()
-	id := Identity{Service: "wicket", Config: "/a", Profile: "work", Host: "h", User: "u"}
+	id := Identity{Service: "wicket", Config: "/a", ProfileID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}
 	pw, _ := NewPassword("s3cret")
 	if err := m.Upsert(bg, id, pw); err != nil {
 		t.Fatal(err)

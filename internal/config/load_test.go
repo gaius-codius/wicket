@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -232,4 +233,40 @@ func writeTOML(t *testing.T, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestOpen_PersistAssignedIDsFailureWarns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	body := `[general]
+[[profiles]]
+name = "work"
+host = "h"
+user = "u"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Directory not writable: lock file / atomic write cannot be created.
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	c, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := c.Profile("work")
+	if !ok || p.ID == "" {
+		t.Fatal("in-memory id must still be assigned on soft-fail")
+	}
+	warns := c.Warnings()
+	if len(warns) == 0 {
+		t.Fatal("want persist-failure warning")
+	}
+	joined := strings.Join(warns, "\n")
+	if !strings.Contains(joined, "could not persist profile ids") {
+		t.Fatalf("warnings %q", joined)
+	}
 }

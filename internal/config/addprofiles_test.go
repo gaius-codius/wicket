@@ -133,6 +133,16 @@ user = "u"
 	if err != nil {
 		t.Fatal(err)
 	}
+	// AddProfiles mints fresh ids; PlanProfiles does not. Compare the rest.
+	for i := range planned {
+		planned[i].ID = ""
+	}
+	for i := range added {
+		if added[i].ID == "" {
+			t.Fatalf("added[%d] missing id", i)
+		}
+		added[i].ID = ""
+	}
 	if fmt.Sprint(planned) != fmt.Sprint(added) || fmt.Sprint(planSkipped) != fmt.Sprint(skipped) {
 		t.Fatalf("plan %v %v, add %v %v", planned, planSkipped, added, skipped)
 	}

@@ -37,7 +37,7 @@ func testApp(t *testing.T, body string, store secret.Store) *App {
 	return &App{Cfg: cfg, Secrets: store, State: st}
 }
 
-func TestSaveProfile_PureRenameCopiesSecret(t *testing.T) {
+func TestSaveProfile_RenameKeepsSameKeyringIdentity(t *testing.T) {
 	store := secret.NewMemory()
 	a := testApp(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := a.Cfg.Profile("work")
@@ -50,15 +50,18 @@ func TestSaveProfile_PureRenameCopiesSecret(t *testing.T) {
 	if _, err := a.SaveProfile(bg, "work", newP, PasswordIntent{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Lookup(bg, secret.IdentityFor(a.Cfg.Path(), newP)); err != nil {
-		t.Fatal("secret should exist under new name")
+	// UUID identity does not change with the display name: no copy, no delete.
+	if got := storedAs(t, store, a, newP); got != "secret" {
+		t.Fatalf("stored %q under renamed profile", got)
 	}
-	if _, err := store.Lookup(bg, secret.IdentityFor(a.Cfg.Path(), p)); !errors.Is(err, secret.ErrNotFound) {
-		t.Fatalf("old identity still present: %v", err)
+	if secret.IdentityFor(a.Cfg.Path(), p) != secret.IdentityFor(a.Cfg.Path(), newP) {
+		t.Fatal("rename must keep the same keyring identity")
 	}
 }
 
-func TestSaveProfile_RenameStoreFailAbortsTOML(t *testing.T) {
+func TestSaveProfile_RenameIgnoresKeyringUpsertFailure(t *testing.T) {
+	// A rename no longer touches the keyring (issue #24), so a broken Upsert
+	// must not block saving the new display name.
 	inner := secret.NewMemory()
 	store := &wrapStore{inner: inner, upsertErr: errors.New("upsert boom")}
 	a := testApp(t, fixtureTOML("work", "h", "u"), store)
@@ -66,22 +69,24 @@ func TestSaveProfile_RenameStoreFailAbortsTOML(t *testing.T) {
 	_ = inner.Upsert(bg, secret.IdentityFor(a.Cfg.Path(), p), mustPassword(t, "secret"))
 	newP := p
 	newP.Name = "office"
-	if _, err := a.SaveProfile(bg, "work", newP, PasswordIntent{}); err == nil {
-		t.Fatal("want abort")
+	if _, err := a.SaveProfile(bg, "work", newP, PasswordIntent{}); err != nil {
+		t.Fatalf("rename blocked: %v", err)
 	}
-	if _, ok := a.Cfg.Profile("work"); !ok {
-		t.Fatal("TOML renamed despite abort")
+	if _, ok := a.Cfg.Profile("office"); !ok {
+		t.Fatal("profile not renamed")
 	}
-	if _, ok := a.Cfg.Profile("office"); ok {
-		t.Fatal("new name written")
+	if got := storedAs(t, inner, a, newP); got != "secret" {
+		t.Fatalf("password %q, want kept under the same id", got)
 	}
 }
 
-func TestSaveProfile_TOMLFailAfterStoreNewRollsBack(t *testing.T) {
+func TestSaveProfile_TOMLFailAfterNewPasswordRollsBack(t *testing.T) {
+	// Typed password is stored in finishSave after the config write, so a
+	// failed write stores nothing.
 	store := secret.NewMemory()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(path, []byte(fixtureTOML("work", "h", "u")), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("[general]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.Open(path)
@@ -89,24 +94,21 @@ func TestSaveProfile_TOMLFailAfterStoreNewRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &App{Cfg: cfg, Secrets: store}
-	p, _ := cfg.Profile("work")
-	_ = store.Upsert(bg, secret.IdentityFor(cfg.Path(), p), mustPassword(t, "secret"))
+	p := config.Profile{Name: "office", Host: "h", User: "u", Client: config.DefaultClient, Scale: 100, DynamicResolution: true, Clipboard: true}
+	config.EnsureID(&p)
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Chmod(dir, 0o700)
-	newP := p
-	newP.Name = "office"
-	_, err = a.SaveProfile(bg, "work", newP, PasswordIntent{})
+	_, err = a.SaveProfile(bg, "", p, PasswordIntent{Action: PasswordSet, Password: mustPassword(t, "secret")})
 	if err == nil {
 		t.Fatal("want TOML write failure")
 	}
-	if _, err := store.Lookup(bg, secret.IdentityFor(cfg.Path(), newP)); !errors.Is(err, secret.ErrNotFound) {
-		t.Fatal("new identity should have been rolled back")
+	if _, err := store.Lookup(bg, secret.IdentityFor(cfg.Path(), p)); !errors.Is(err, secret.ErrNotFound) {
+		t.Fatal("password should not be stored when the config write failed")
 	}
 }
 
-// storedAs reads the password stored for p, or "" when there is none.
 func storedAs(t *testing.T, store secret.Store, a *App, p config.Profile) string {
 	t.Helper()
 	res, err := store.Lookup(bg, secret.IdentityFor(a.Cfg.Path(), p))
@@ -123,11 +125,9 @@ func storedAs(t *testing.T, store secret.Store, a *App, p config.Profile) string
 	return strings.TrimSuffix(buf.String(), "\n")
 }
 
-// A blank password field keeps what is stored, as the form says, whatever
-// else the edit changes. A new host, user or domain is a new keyring
-// identity, and the password used to be deleted with the old one, without a
-// word, while the form promised to keep it.
-func TestSaveProfile_IdentityChangeCarriesThePassword(t *testing.T) {
+// A blank password field keeps what is stored. With UUID identities, a new
+// host, user, domain or display name does not move the keyring item (issue #24).
+func TestSaveProfile_AccountEditsKeepThePassword(t *testing.T) {
 	for name, edit := range map[string]func(*config.Profile){
 		"rename":         func(p *config.Profile) { p.Name = "office" },
 		"host":           func(p *config.Profile) { p.Host = "other" },
@@ -156,94 +156,17 @@ func TestSaveProfile_IdentityChangeCarriesThePassword(t *testing.T) {
 				t.Fatalf("save: %v %q", err, warns)
 			}
 			if got := storedAs(t, store, a, newP); got != "secret" {
-				t.Fatalf("new identity holds %q, want the password carried over", got)
+				t.Fatalf("identity holds %q, want the password kept in place", got)
 			}
-			if got := storedAs(t, store, a, p); got != "" {
-				t.Fatal("the old identity's entry was left behind")
+			if secret.IdentityFor(a.Cfg.Path(), p) != secret.IdentityFor(a.Cfg.Path(), newP) {
+				t.Fatal("account edits must not change the keyring identity")
 			}
 		})
 	}
 }
 
-// If the password cannot be stored under the new identity, nothing is saved
-// and the password stays where it was: a save must never lose it.
-func TestSaveProfile_CarryFailureKeepsEverything(t *testing.T) {
-	inner := secret.NewMemory()
-	store := &wrapStore{inner: inner, upsertErr: secret.ErrUnavailable}
-	a := testApp(t, fixtureTOML("work", "h", "u"), store)
-	p, _ := a.Cfg.Profile("work")
-	if err := inner.Upsert(bg, secret.IdentityFor(a.Cfg.Path(), p), mustPassword(t, "secret")); err != nil {
-		t.Fatal(err)
-	}
-	newP := p
-	newP.Host = "other"
-	_, err := a.SaveProfile(bg, "work", newP, PasswordIntent{})
-	if err == nil || !strings.Contains(err.Error(), "nothing was saved") {
-		t.Fatalf("err = %v, want the save refused and said so", err)
-	}
-	if strings.Contains(err.Error(), "secret service") {
-		t.Fatalf("err = %v, want the keyring's error in plain words", err)
-	}
-	if got, _ := a.Cfg.Profile("work"); got.Host != "h" {
-		t.Fatalf("host %q written although the password could not follow it", got.Host)
-	}
-	if got := storedAs(t, inner, a, p); got != "secret" {
-		t.Fatalf("old entry holds %q, want it kept", got)
-	}
-}
-
-// Moved, but the old entry could not be removed: the profile is saved and
-// its password is under the new identity, and the leftover is reported.
-func TestSaveProfile_CarryLeavesTheOldEntryWhenDeleteFails(t *testing.T) {
-	inner := secret.NewMemory()
-	store := &wrapStore{inner: inner, deleteErr: errors.New("locked")}
-	a := testApp(t, fixtureTOML("work", "h", "u"), store)
-	p, _ := a.Cfg.Profile("work")
-	if err := inner.Upsert(bg, secret.IdentityFor(a.Cfg.Path(), p), mustPassword(t, "secret")); err != nil {
-		t.Fatal(err)
-	}
-	newP := p
-	newP.User = "someone"
-	warns, err := a.SaveProfile(bg, "work", newP, PasswordIntent{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(warns) != 1 || !strings.Contains(warns[0], "leftover") {
-		t.Fatalf("warnings %q, want the leftover reported", warns)
-	}
-	if got := storedAs(t, inner, a, newP); got != "secret" {
-		t.Fatalf("new identity holds %q", got)
-	}
-}
-
-// A keyring that cannot be read cannot say whether there is a password to
-// carry. The save goes ahead, but the old entry is left alone -- deleting it
-// would lose a password that was never copied -- and the status says so.
-func TestSaveProfile_IdentityChangeWithAnUnreadableKeyringKeepsTheOld(t *testing.T) {
-	inner := secret.NewMemory()
-	store := &wrapStore{inner: inner, lookupErr: secret.ErrUnavailable}
-	a := testApp(t, fixtureTOML("work", "h", "u"), store)
-	p, _ := a.Cfg.Profile("work")
-	if err := inner.Upsert(bg, secret.IdentityFor(a.Cfg.Path(), p), mustPassword(t, "secret")); err != nil {
-		t.Fatal(err)
-	}
-	newP := p
-	newP.Domain = "CORP"
-	warns, err := a.SaveProfile(bg, "work", newP, PasswordIntent{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(warns) != 1 || !strings.Contains(warns[0], "left in place") {
-		t.Fatalf("warnings %q", warns)
-	}
-	if got := storedAs(t, inner, a, p); got != "secret" {
-		t.Fatal("the only copy of the password was deleted")
-	}
-}
-
-// Typing a password or forgetting it is an explicit choice, and nothing is
-// carried over it.
-func TestSaveProfile_IdentityChangeWithTypedOrForget(t *testing.T) {
+// Typing a password or forgetting it updates the same UUID identity.
+func TestSaveProfile_TypedOrForgetOnAccountEdit(t *testing.T) {
 	store := secret.NewMemory()
 	a := testApp(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := a.Cfg.Profile("work")
@@ -256,24 +179,19 @@ func TestSaveProfile_IdentityChangeWithTypedOrForget(t *testing.T) {
 	if got := storedAs(t, store, a, newP); got != "typed" {
 		t.Fatalf("stored %q, want the typed password", got)
 	}
-	if got := storedAs(t, store, a, p); got != "" {
-		t.Fatal("old entry left behind")
-	}
 
 	third := newP
 	third.User = "someone"
 	if _, err := a.SaveProfile(bg, "work", third, PasswordIntent{Action: PasswordForget}); err != nil {
 		t.Fatal(err)
 	}
-	if storedAs(t, store, a, third) != "" || storedAs(t, store, a, newP) != "" {
-		t.Fatal("forget carried or kept a password")
+	if storedAs(t, store, a, third) != "" {
+		t.Fatal("forget left a password")
 	}
 }
 
-// A typed password the keyring refuses, on a save that also moves the
-// profile to a new host, must not cost the old one: it is the only password
-// left. The old entry used to be deleted whether or not the new one had been
-// stored.
+// A typed password the keyring refuses must not be reported as saved; the
+// existing password under the same UUID remains.
 func TestSaveProfile_FailedTypedPasswordKeepsTheOldOne(t *testing.T) {
 	mem := secret.NewMemory()
 	store := &wrapStore{inner: mem}
@@ -287,11 +205,11 @@ func TestSaveProfile_FailedTypedPasswordKeepsTheOldOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := storedAs(t, mem, a, p); got != "secret" {
-		t.Fatalf("old entry %q, want the old password kept", got)
+	if got := storedAs(t, mem, a, newP); got != "secret" {
+		t.Fatalf("entry %q, want the old password kept", got)
 	}
 	msg := strings.Join(warns, "; ")
-	if !strings.Contains(msg, "could not save password") || !strings.Contains(msg, "old one was kept") {
+	if !strings.Contains(msg, "could not save password") {
 		t.Fatalf("warnings %q", msg)
 	}
 }
@@ -386,9 +304,7 @@ func TestSaveProfile_RenameSurvivesAnUnreachableKeyring(t *testing.T) {
 	}
 	newP := p
 	newP.Name = "office"
-	// Without a Secret Service there is no way to tell whether this profile
-	// even has a password, and refusing the rename made renaming impossible
-	// on any machine without one.
+	// Rename does not consult the keyring (issue #24).
 	warns, err := a.SaveProfile(bg, "work", newP, PasswordIntent{})
 	if err != nil {
 		t.Fatalf("rename blocked by the keyring: %v", err)
@@ -396,11 +312,11 @@ func TestSaveProfile_RenameSurvivesAnUnreachableKeyring(t *testing.T) {
 	if _, ok := a.Cfg.Profile("office"); !ok {
 		t.Fatal("profile not renamed")
 	}
-	if len(warns) != 1 || !strings.Contains(warns[0], "keyring unavailable") {
-		t.Fatalf("warnings %q, want one naming the keyring", warns)
+	if len(warns) != 0 {
+		t.Fatalf("warnings %q, want none for a name-only save", warns)
 	}
 	if _, err := inner.Lookup(bg, oldID); err != nil {
-		t.Fatalf("old secret destroyed: %v", err)
+		t.Fatalf("secret destroyed: %v", err)
 	}
 }
 
@@ -422,8 +338,8 @@ func TestSaveProfile_RenameTypedReplacesSecret(t *testing.T) {
 	store := secret.NewMemory()
 	a := testApp(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := a.Cfg.Profile("work")
-	oldID := secret.IdentityFor(a.Cfg.Path(), p)
-	if err := store.Upsert(bg, oldID, mustPassword(t, "old")); err != nil {
+	id := secret.IdentityFor(a.Cfg.Path(), p)
+	if err := store.Upsert(bg, id, mustPassword(t, "old")); err != nil {
 		t.Fatal(err)
 	}
 	newP := p
@@ -432,12 +348,9 @@ func TestSaveProfile_RenameTypedReplacesSecret(t *testing.T) {
 	if _, err := a.SaveProfile(bg, "work", newP, PasswordIntent{Action: PasswordSet, Password: typed}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Lookup(bg, oldID); !errors.Is(err, secret.ErrNotFound) {
-		t.Fatalf("old identity remains: %v", err)
-	}
-	got, err := store.Lookup(bg, secret.IdentityFor(a.Cfg.Path(), newP))
+	got, err := store.Lookup(bg, id)
 	if err != nil {
-		t.Fatal("typed password should be stored under the new name")
+		t.Fatal("typed password should replace under the same identity")
 	}
 	var buf strings.Builder
 	if err := got.Password.WriteLine(&buf); err != nil {
@@ -448,12 +361,12 @@ func TestSaveProfile_RenameTypedReplacesSecret(t *testing.T) {
 	}
 }
 
-func TestSaveProfile_RenameBlankMovesSecret(t *testing.T) {
+func TestSaveProfile_RenameBlankKeepsSecret(t *testing.T) {
 	store := secret.NewMemory()
 	a := testApp(t, fixtureTOML("work", "h", "u"), store)
 	p, _ := a.Cfg.Profile("work")
-	oldID := secret.IdentityFor(a.Cfg.Path(), p)
-	if err := store.Upsert(bg, oldID, mustPassword(t, "kept")); err != nil {
+	id := secret.IdentityFor(a.Cfg.Path(), p)
+	if err := store.Upsert(bg, id, mustPassword(t, "kept")); err != nil {
 		t.Fatal(err)
 	}
 	newP := p
@@ -461,19 +374,16 @@ func TestSaveProfile_RenameBlankMovesSecret(t *testing.T) {
 	if _, err := a.SaveProfile(bg, "work", newP, PasswordIntent{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Lookup(bg, oldID); !errors.Is(err, secret.ErrNotFound) {
-		t.Fatalf("old identity remains: %v", err)
-	}
-	got, err := store.Lookup(bg, secret.IdentityFor(a.Cfg.Path(), newP))
+	got, err := store.Lookup(bg, id)
 	if err != nil {
-		t.Fatal("an untouched password should follow the rename")
+		t.Fatal(err)
 	}
 	var buf strings.Builder
 	if err := got.Password.WriteLine(&buf); err != nil {
 		t.Fatal(err)
 	}
 	if buf.String() != "kept\n" {
-		t.Fatalf("moved %q", buf.String())
+		t.Fatalf("kept %q", buf.String())
 	}
 }
 
@@ -563,7 +473,7 @@ func TestSaveProfile_WarnsWhenTheConfigIsRewritten(t *testing.T) {
 		warn       bool
 	}{
 		{"patched", fixtureTOML("work", "h", "u"), false},
-		{"rewritten", "profiles = [{ name = \"work\", host = \"h\", user = \"u\" }]\n", true},
+		{"rewritten", "profiles = [{ id = \"00000000-0000-4000-8000-000000000001\", name = \"work\", host = \"h\", user = \"u\" }]\n", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := testApp(t, tc.body, nil)
@@ -578,5 +488,86 @@ func TestSaveProfile_WarnsWhenTheConfigIsRewritten(t *testing.T) {
 				t.Fatalf("warnings %q, want the rewrite warning: %v", warns, tc.warn)
 			}
 		})
+	}
+}
+
+// Issue #24: a leftover keyring secret from a deleted profile must not be
+// inherited by a later profile that reuses the same display name (and
+// host/user/domain). UUID identities make the new profile a different key,
+// and there is no name-keyed legacy lookup path that could bridge them.
+func TestSaveProfile_RecreatedNameDoesNotInheritOrphan(t *testing.T) {
+	store := secret.NewMemory()
+	a := testApp(t, fixtureTOML("work", "h", "u"), store)
+	p, _ := a.Cfg.Profile("work")
+	id := secret.IdentityFor(a.Cfg.Path(), p)
+	if err := store.Upsert(bg, id, mustPassword(t, "orphan")); err != nil {
+		t.Fatal(err)
+	}
+	// Delete the profile but leave the secret (simulate keyring failure).
+	failing := &wrapStore{inner: store, deleteErr: secret.ErrUnavailable}
+	a.Secrets = failing
+	if _, err := a.DeleteProfile(bg, "work"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Lookup(bg, id); err != nil {
+		t.Fatal("setup: orphan must remain under the old UUID")
+	}
+
+	// Recreate the same display name and account fields with a new UUID.
+	a.Secrets = store
+	neu := config.Profile{Name: "work", Host: "h", User: "u", Client: config.DefaultClient, Scale: 100, DynamicResolution: true, Clipboard: true}
+	if _, err := a.SaveProfile(bg, "", neu, PasswordIntent{}); err != nil {
+		t.Fatal(err)
+	}
+	saved, ok := a.Cfg.Profile("work")
+	if !ok {
+		t.Fatal("recreated work missing")
+	}
+	if saved.ID == "" || saved.ID == p.ID {
+		t.Fatalf("recreated profile must have a distinct id, got %q", saved.ID)
+	}
+	neuID := secret.IdentityFor(a.Cfg.Path(), saved)
+	if neuID == id {
+		t.Fatal("recreated profile must use a different keyring identity")
+	}
+	if _, err := store.Lookup(bg, neuID); !errors.Is(err, secret.ErrNotFound) {
+		t.Fatal("recreated profile must not see the orphaned secret")
+	}
+	res := a.ResolveCredential(bg, saved, nil)
+	if !res.NeedModal || res.Err != nil || res.Cred != nil {
+		t.Fatalf("ResolveCredential = %+v, want NeedModal and no orphan (no name-based inherit)", res)
+	}
+	// Original orphan remains under the old UUID until cleared manually.
+	if _, err := store.Lookup(bg, id); err != nil {
+		t.Fatal("orphan under the deleted UUID should still be present")
+	}
+}
+
+// Duplicate assigns a new id and does not touch the source's keyring entry.
+// planSave must FreshID even when the caller copied the source Profile with
+// its id intact (SaveProfile("", copied) must not share keyring).
+func TestSaveProfile_DuplicateGetsFreshID(t *testing.T) {
+	store := secret.NewMemory()
+	a := testApp(t, fixtureTOML("work", "h", "u"), store)
+	orig, _ := a.Cfg.Profile("work")
+	_ = store.Upsert(bg, secret.IdentityFor(a.Cfg.Path(), orig), mustPassword(t, "orig"))
+	cp := orig
+	cp.Name = "work-copy"
+	// Intentionally keep orig.ID — create path must remint.
+	if _, err := a.SaveProfile(bg, "", cp, PasswordIntent{}); err != nil {
+		t.Fatal(err)
+	}
+	saved, ok := a.Cfg.Profile("work-copy")
+	if !ok {
+		t.Fatal("work-copy missing")
+	}
+	if saved.ID == "" || saved.ID == orig.ID {
+		t.Fatalf("create must mint a fresh id, got %q (source %q)", saved.ID, orig.ID)
+	}
+	if _, err := store.Lookup(bg, secret.IdentityFor(a.Cfg.Path(), saved)); !errors.Is(err, secret.ErrNotFound) {
+		t.Fatal("untouched duplicate must not bind a password")
+	}
+	if got := storedAs(t, store, a, orig); got != "orig" {
+		t.Fatalf("source password %q", got)
 	}
 }

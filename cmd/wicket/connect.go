@@ -16,7 +16,10 @@ import (
 )
 
 var (
-	openStore    = func() secret.Store { return secret.NewDBus() }
+	openStore     = func() secret.Store { return secret.NewDBus() }
+	lookupProfile = func(cfg *config.Config, name string) (config.Profile, bool) {
+		return cfg.Profile(name)
+	}
 	isTerminal   = func(fd int) bool { return term.IsTerminal(fd) }
 	readPassword = func(fd int) ([]byte, error) { return term.ReadPassword(fd) }
 	stdinFile    = func() *os.File { return os.Stdin }
@@ -44,7 +47,7 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	for _, w := range cfg.Warnings() {
 		fmt.Fprintln(stderr, "warning:", w)
 	}
-	p, ok := cfg.Profile(name)
+	p, ok := lookupProfile(cfg, name)
 	if !ok {
 		fmt.Fprintf(stderr, "unknown profile %q\n", name)
 		return 2
@@ -61,8 +64,13 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	}
 
 	store := openStore()
-	id := secret.IdentityFor(cfg.Path(), p)
-	cred, err := resolveCLICredential(store, id, stderr)
+	if p.ID == "" {
+		// Open backfills missing ids; an empty id here means the loaded
+		// profile is corrupt or a test injected one without an id.
+		fmt.Fprintf(stderr, "profile %q has no id after load; config may be corrupt\n", name)
+		return 2
+	}
+	cred, err := resolveCLICredential(store, cfg, p, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -97,7 +105,8 @@ func execLookPath(client string) (string, error) {
 // the keyring has none. Each keyring call is bounded by secret.OpTimeout, which
 // leaves room to answer an unlock prompt; Ctrl+C or SIGTERM end the wait
 // sooner, since nothing is running yet that could be left behind.
-func resolveCLICredential(store secret.Store, id secret.Identity, stderr io.Writer) (rdp.Credential, error) {
+func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profile, stderr io.Writer) (rdp.Credential, error) {
+	id := secret.IdentityFor(cfg.Path(), p)
 	ctx, cancel := context.WithTimeout(context.Background(), secret.OpTimeout)
 	res, err := store.Lookup(ctx, id)
 	cancel()

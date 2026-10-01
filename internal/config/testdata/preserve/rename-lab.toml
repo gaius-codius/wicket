@@ -16,6 +16,7 @@ tags = [
   "daily",
 ]
 scale = 140
+id = "00000000-0000-4000-8000-000000000016"
 
 # The lab box. Somebody once put its password in here.
 [[profiles]]
@@ -24,11 +25,13 @@ scale = 140
   user = "admin"
   size = "1920x1080"
   fullscreen = true
+  id = "00000000-0000-4000-8000-000000000014"
 
 [[profiles]]
 name = "spare"
 host = "10.0.0.9"
 user = "u"
+id = "00000000-0000-4000-8000-000000000018"
 [profiles.extra]
 colour = "green"
 

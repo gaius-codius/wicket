@@ -49,6 +49,7 @@ func TestUpsert_RoundTrip(t *testing.T) {
 		DynamicResolution: false,
 		Scale:             140,
 	}
+	EnsureID(&p)
 	if err := c.Upsert(p, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -223,6 +224,7 @@ func TestUpsert_OmitsEmptyOptionalKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := Profile{Name: "work", Host: "h", User: "u", Domain: "CORP", Size: "100%", Client: "sdl-freerdp3", Scale: 100}
+	EnsureID(&p)
 	if err := c.Upsert(p, ""); err != nil {
 		t.Fatal(err)
 	}

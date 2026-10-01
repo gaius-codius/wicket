@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,9 @@ import (
 )
 
 func TestTUISecretSweep(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("session settle / FakeRDP hold is Linux-oriented")
+	}
 	t.Run("use-once", func(t *testing.T) {
 		assertTUISweep(t, false)
 	})

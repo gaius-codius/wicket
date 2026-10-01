@@ -42,7 +42,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"testing"
 	"time"
 	"unsafe"
 )
@@ -68,6 +67,11 @@ func NewKeychain() *Keychain { return &Keychain{} }
 // lookupBetweenSteps, when non-nil, runs after Lookup collects attribute hits
 // and before the password fetch. Tests use it to cancel mid-Lookup.
 var lookupBetweenSteps func()
+
+// secItemInFlight, when non-nil, runs on the SecItem worker after CFRetain and
+// before the native call. Tests use it to cancel while the worker still holds
+// caller-owned CF dictionaries (the UAF window without retain).
+var secItemInFlight func()
 
 // accountAttr folds Config into kSecAttrAccount for isolation.
 func accountAttr(id Identity) string {
@@ -404,6 +408,10 @@ func cfStringToGo(s C.CFStringRef) string {
 // secCopyMatching runs SecItemCopyMatching on a worker. If ctx is cancelled
 // while the call is blocked (e.g. unlock dialog), return immediately without
 // waiting — the worker releases any result. Wicket cannot dismiss Keychain UI.
+//
+// The worker CFRetains query for its lifetime so a cancelled caller may
+// CFRelease its own copy without use-after-free while SecItem* is still
+// running (or draining after cancel).
 func secCopyMatching(ctx context.Context, query C.CFDictionaryRef) (C.CFTypeRef, C.OSStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, 0, fmt.Errorf("%w: %w", ErrUnavailable, err)
@@ -413,7 +421,12 @@ func secCopyMatching(ctx context.Context, query C.CFDictionaryRef) (C.CFTypeRef,
 		status C.OSStatus
 	}
 	ch := make(chan out, 1)
+	C.CFRetain(C.CFTypeRef(query))
 	go func() {
+		defer C.CFRelease(C.CFTypeRef(query))
+		if secItemInFlight != nil {
+			secItemInFlight()
+		}
 		var result C.CFTypeRef
 		status := C.SecItemCopyMatching(query, &result)
 		ch <- out{result, status}
@@ -443,7 +456,16 @@ func secItemUpdate(ctx context.Context, query, attrs C.CFDictionaryRef) (C.OSSta
 		return 0, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	ch := make(chan C.OSStatus, 1)
-	go func() { ch <- C.SecItemUpdate(query, attrs) }()
+	C.CFRetain(C.CFTypeRef(query))
+	C.CFRetain(C.CFTypeRef(attrs))
+	go func() {
+		defer C.CFRelease(C.CFTypeRef(query))
+		defer C.CFRelease(C.CFTypeRef(attrs))
+		if secItemInFlight != nil {
+			secItemInFlight()
+		}
+		ch <- C.SecItemUpdate(query, attrs)
+	}()
 	select {
 	case <-ctx.Done():
 		go func() { <-ch }()
@@ -461,7 +483,14 @@ func secItemAdd(ctx context.Context, attrs C.CFDictionaryRef) (C.OSStatus, error
 		return 0, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	ch := make(chan C.OSStatus, 1)
-	go func() { ch <- C.SecItemAdd(attrs, nil) }()
+	C.CFRetain(C.CFTypeRef(attrs))
+	go func() {
+		defer C.CFRelease(C.CFTypeRef(attrs))
+		if secItemInFlight != nil {
+			secItemInFlight()
+		}
+		ch <- C.SecItemAdd(attrs, nil)
+	}()
 	select {
 	case <-ctx.Done():
 		go func() { <-ch }()
@@ -479,7 +508,14 @@ func secItemDelete(ctx context.Context, query C.CFDictionaryRef) (C.OSStatus, er
 		return 0, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	ch := make(chan C.OSStatus, 1)
-	go func() { ch <- C.SecItemDelete(query) }()
+	C.CFRetain(C.CFTypeRef(query))
+	go func() {
+		defer C.CFRelease(C.CFTypeRef(query))
+		if secItemInFlight != nil {
+			secItemInFlight()
+		}
+		ch <- C.SecItemDelete(query)
+	}()
 	select {
 	case <-ctx.Done():
 		go func() { <-ch }()
@@ -489,6 +525,14 @@ func secItemDelete(ctx context.Context, query C.CFDictionaryRef) (C.OSStatus, er
 			return st, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
 		return st, nil
+	}
+}
+
+// releaseCFArray is a nil-safe CFRelease for CFArrayRef values handed to
+// *_test.go helpers that must not import "C" themselves.
+func releaseCFArray(ref C.CFArrayRef) {
+	if ref != 0 {
+		C.CFRelease(C.CFTypeRef(ref))
 	}
 }
 
@@ -601,28 +645,4 @@ func (k *Keychain) destroyFileKeychain() {
 		C.CFRelease(C.CFTypeRef(k.keychain))
 		k.keychain = 0
 	}
-}
-
-// trackSearchList snapshots the user's Keychain search list and asserts it
-// is unchanged when the test finishes (including failure paths).
-func trackSearchList(t *testing.T) {
-	t.Helper()
-	before, err := copySearchList()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		after, err := copySearchList()
-		if err != nil {
-			C.CFRelease(C.CFTypeRef(before))
-			t.Errorf("copySearchList after test: %v", err)
-			return
-		}
-		same := searchListsEqual(before, after)
-		C.CFRelease(C.CFTypeRef(after))
-		C.CFRelease(C.CFTypeRef(before))
-		if !same {
-			t.Errorf("user keychain search list changed during the test")
-		}
-	})
 }

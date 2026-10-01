@@ -17,9 +17,10 @@ The latest release. There are no backports to earlier tags.
 
 ## What Wicket tries to protect
 
-- **Passwords never reach the config file.** They live in the Secret Service
-  keyring, keyed by `service=wicket`, the config path and a stable per-profile
-  `profile_id` UUID (not the display name). A config file that already contains
+- **Passwords never reach the config file.** They live in the platform keyring
+  (Secret Service on Linux, Keychain on macOS), keyed by `service=wicket`, the
+  config path and a stable per-profile `profile_id` UUID (not the display
+  name). A config file that already contains
   a key named `password`, `pass`, `secret` or `passwd` has it stripped on load,
   reported as a warning, and never written back.
 - **Passwords never reach the process table.** The FreeRDP child is started
@@ -38,8 +39,12 @@ The latest release. There are no backports to earlier tags.
 - **Password length is bounded** at 4096 bytes, so a pathological value cannot
   be used to stall a write to the client.
 - **Keyring prompts are completed, not ignored.** A write against a locked
-  keyring is not reported as saved until the prompt is answered, and a prompt
-  nobody answers times out and is dismissed rather than hanging.
+  keyring is not reported as saved until the prompt is answered. On Linux
+  (Secret Service), a prompt nobody answers times out and is dismissed rather
+  than hanging. On macOS (Keychain), `SecItem*` calls are synchronous: context
+  cancel stops further native steps and rejects results after cancel, but an
+  unlock or access dialog already shown cannot be dismissed by Wicket and
+  remains until the user responds or the process exits.
 
 ## What Wicket does not protect against
 

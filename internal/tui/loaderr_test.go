@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -20,7 +21,24 @@ func TestLoadError_InvalidTOMLUnchanged(t *testing.T) {
 		t.Fatalf("bytes changed: %q", got)
 	}
 	out := screen(h.m)
-	if !strings.Contains(out, h.cfg) {
+	// The path wraps inside the load-error box, and on macOS /var may
+	// resolve to /private/var in the error text. Flatten before matching.
+	flat := strings.Map(func(r rune) rune {
+		switch r {
+		case '\n', '│', '─', '╭', '╮', '╰', '╯':
+			return -1
+		default:
+			return r
+		}
+	}, out)
+	flat = strings.ReplaceAll(flat, " ", "")
+	pathShown := strings.Contains(flat, strings.ReplaceAll(h.cfg, " ", ""))
+	if !pathShown {
+		if real, err := filepath.EvalSymlinks(h.cfg); err == nil {
+			pathShown = strings.Contains(flat, strings.ReplaceAll(real, " ", ""))
+		}
+	}
+	if !pathShown {
 		t.Fatalf("path missing:\n%s", out)
 	}
 	h.m = press(h.m, "?")

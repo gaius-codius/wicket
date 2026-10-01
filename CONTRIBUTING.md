@@ -7,10 +7,13 @@ than finding out after the fact that it does not fit.
 ## What you need
 
 - Go 1.26 or newer.
-- Linux. Wicket compiles for macOS and the BSDs but has no keyring backend
-  there; see [#1](https://github.com/gaius-codius/wicket/issues/1).
-- `dbus-daemon` on `PATH`. The `internal/secret` tests start a private session
-  bus and run an in-process Secret Service on it.
+- Linux or macOS. Linux uses the Secret Service keyring; macOS uses Keychain
+  (cgo). The BSDs still compile against the D-Bus store but have no session
+  bus integration tests.
+- On Linux, `dbus-daemon` on `PATH`. The `internal/secret` tests start a
+  private session bus and run an in-process Secret Service on it.
+- On macOS, set `WICKET_KEYCHAIN_TEST=1` to exercise the Keychain backend
+  against a throwaway keychain (never the login keychain).
 - A FreeRDP 3 SDL client only if you want to run Wicket against a real host.
   The tests never do: they use a stub client.
 
@@ -48,8 +51,10 @@ fix is reverted.
 ## Releasing
 
 Push a `vX.Y.Z` tag from `main`. The `release` workflow runs the tests, builds
-static linux/amd64 and linux/arm64 binaries, and publishes them with
-`SHA256SUMS` as a GitHub release, which is what `install.sh` downloads.
+linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64 binaries, and
+publishes them with `SHA256SUMS` as a GitHub release, which is what
+`install.sh` downloads. Linux builds are static (`CGO_ENABLED=0`); darwin
+builds use cgo against Security.framework.
 
 ```
 git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0

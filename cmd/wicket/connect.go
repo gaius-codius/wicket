@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	openStore     = func() secret.Store { return secret.NewDBus() }
+	openStore     = func() secret.Store { return secret.Default() }
 	lookupProfile = func(cfg *config.Config, name string) (config.Profile, bool) {
 		return cfg.Profile(name)
 	}

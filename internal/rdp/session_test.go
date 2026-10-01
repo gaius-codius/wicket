@@ -267,6 +267,9 @@ func TestSession_CleanExitTakesTheGroupWithIt(t *testing.T) {
 // copy of the output, and a clean exit is still reported as one rather than
 // as a failure to start.
 func TestSession_WaitDelayReportsTheClientsExit(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("detached helper process model is Linux-specific")
+	}
 	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
 	helperPID := filepath.Join(t.TempDir(), "helper.pid")
 	t.Setenv("FAKERDP_SPAWN", "1")
@@ -300,6 +303,9 @@ func TestSession_WaitDelayReportsTheClientsExit(t *testing.T) {
 // client did, not until WaitDelay gave up on the helper: timed from Wait's
 // return, a failed connect near the threshold was no longer a short session.
 func TestSession_WaitDelayKeepsTheExitAndItsTime(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("detached helper process model is Linux-specific")
+	}
 	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
 	helperPID := filepath.Join(t.TempDir(), "helper.pid")
 	t.Setenv("FAKERDP_SPAWN", "1")

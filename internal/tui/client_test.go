@@ -207,6 +207,9 @@ func TestNewProfile_DefaultsToAnInstalledClient(t *testing.T) {
 		{[]string{rdp.ClientSDL, rdp.ClientX11}, rdp.ClientSDL},
 		{[]string{rdp.ClientSDL}, rdp.ClientSDL},
 		{[]string{rdp.ClientX11}, rdp.ClientX11},
+		{[]string{rdp.ClientSDLHomebrew, rdp.ClientX11Homebrew}, rdp.ClientSDLHomebrew},
+		{[]string{rdp.ClientX11Homebrew}, rdp.ClientX11Homebrew},
+		{[]string{rdp.ClientX11, rdp.ClientSDLHomebrew}, rdp.ClientSDLHomebrew},
 		{nil, config.DefaultClient},
 	} {
 		h := clientHarness(t, "", tc.installed...)
@@ -307,8 +310,9 @@ func failed(client string, code int) ConnectResult {
 		Outcome: rdp.Outcome{Client: client, ExitCode: code, Duration: 300 * time.Millisecond}}
 }
 
-// The fullscreen hint shows for sdl-freerdp3 exiting 136 with fullscreen on,
-// and nowhere else; it names xfreerdp3 only when that is installed.
+// The fullscreen hint shows for an SDL client (sdl-freerdp3 or the Homebrew
+// sdl-freerdp) exiting 136 with fullscreen on, and nowhere else. It names
+// the preferred installed X11 client, or none when only SDL is installed.
 func TestRetry_FullscreenHint(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -318,16 +322,20 @@ func TestRetry_FullscreenHint(t *testing.T) {
 		installed  []string
 		signaled   bool
 		want       bool
-		wantX11    bool
+		wantX11    string
 	}{
-		{"sdl, 136, fullscreen, xfreerdp3 installed", "sdl-freerdp3", 136, true, []string{rdp.ClientSDL, rdp.ClientX11}, false, true, true},
-		{"by basename", "/usr/bin/sdl-freerdp3", 136, true, []string{rdp.ClientSDL, rdp.ClientX11}, false, true, true},
-		{"xfreerdp3 not installed", "sdl-freerdp3", 136, true, []string{rdp.ClientSDL}, false, true, false},
-		{"fullscreen off", "sdl-freerdp3", 136, false, []string{rdp.ClientSDL, rdp.ClientX11}, false, false, false},
-		{"another exit", "sdl-freerdp3", 131, true, []string{rdp.ClientSDL, rdp.ClientX11}, false, false, false},
-		{"xfreerdp3 itself", "xfreerdp3", 136, true, []string{rdp.ClientSDL, rdp.ClientX11}, false, false, false},
-		{"another client", "myrdp", 136, true, []string{rdp.ClientSDL, rdp.ClientX11}, false, false, false},
-		{"signal", "sdl-freerdp3", 136, true, []string{rdp.ClientSDL, rdp.ClientX11}, true, false, false},
+		{"sdl, 136, fullscreen, xfreerdp3 installed", "sdl-freerdp3", 136, true, []string{rdp.ClientSDL, rdp.ClientX11}, false, true, "xfreerdp3"},
+		{"by basename", "/usr/bin/sdl-freerdp3", 136, true, []string{rdp.ClientSDL, rdp.ClientX11}, false, true, "xfreerdp3"},
+		{"homebrew sdl, xfreerdp installed", "sdl-freerdp", 136, true, []string{rdp.ClientSDLHomebrew, rdp.ClientX11Homebrew}, false, true, "xfreerdp"},
+		{"homebrew sdl by path", "/opt/homebrew/bin/sdl-freerdp", 136, true, []string{rdp.ClientX11Homebrew}, false, true, "xfreerdp"},
+		{"suffixed x11 preferred over brew", "sdl-freerdp", 136, true, []string{rdp.ClientX11, rdp.ClientX11Homebrew}, false, true, "xfreerdp3"},
+		{"xfreerdp3 not installed", "sdl-freerdp3", 136, true, []string{rdp.ClientSDL}, false, true, ""},
+		{"fullscreen off", "sdl-freerdp3", 136, false, []string{rdp.ClientSDL, rdp.ClientX11}, false, false, ""},
+		{"another exit", "sdl-freerdp3", 131, true, []string{rdp.ClientSDL, rdp.ClientX11}, false, false, ""},
+		{"xfreerdp3 itself", "xfreerdp3", 136, true, []string{rdp.ClientSDL, rdp.ClientX11}, false, false, ""},
+		{"xfreerdp itself", "xfreerdp", 136, true, []string{rdp.ClientSDLHomebrew, rdp.ClientX11Homebrew}, false, false, ""},
+		{"another client", "myrdp", 136, true, []string{rdp.ClientSDL, rdp.ClientX11}, false, false, ""},
+		{"signal", "sdl-freerdp3", 136, true, []string{rdp.ClientSDL, rdp.ClientX11}, true, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := clientHarness(t, fixtureTOML("work", "h", "u"), tc.installed...)
@@ -346,8 +354,14 @@ func TestRetry_FullscreenHint(t *testing.T) {
 			if got := strings.Contains(out, "fail fullscreen on a scaled monitor"); got != tc.want {
 				t.Fatalf("hint shown %v, want %v:\n%s", got, tc.want, out)
 			}
-			if got := strings.Contains(out, "Try the xfreerdp3 client"); got != tc.wantX11 {
-				t.Fatalf("xfreerdp3 offered %v, want %v:\n%s", got, tc.wantX11, out)
+			offered := ""
+			for _, name := range []string{rdp.ClientX11, rdp.ClientX11Homebrew} {
+				if strings.Contains(out, "Try the "+name+" client") {
+					offered = name
+				}
+			}
+			if offered != tc.wantX11 {
+				t.Fatalf("x11 offered %q, want %q:\n%s", offered, tc.wantX11, out)
 			}
 			if tc.want && !strings.Contains(out, "fullscreen off") {
 				t.Fatalf("no fullscreen-off advice:\n%s", out)

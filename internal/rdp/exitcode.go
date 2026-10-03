@@ -20,19 +20,23 @@ import (
 // They are applied only to those clients: a profile's client can be anything,
 // and another program's exit codes mean something else.
 
+// The FreeRDP 3 clients Wicket offers by name. Homebrew's freerdp formula,
+// and other builds that do not suffix the major version, install the same
+// clients as sdl-freerdp and xfreerdp.
+const (
+	ClientSDL         = "sdl-freerdp3"
+	ClientX11         = "xfreerdp3"
+	ClientSDLHomebrew = "sdl-freerdp"
+	ClientX11Homebrew = "xfreerdp"
+)
+
 // freerdpClients are the basenames whose exit codes follow the table.
 var freerdpClients = map[string]bool{
-	ClientSDL:     true,
-	"sdl-freerdp": true,
-	ClientX11:     true,
-	"xfreerdp":    true,
+	ClientSDL:         true,
+	ClientSDLHomebrew: true,
+	ClientX11:         true,
+	ClientX11Homebrew: true,
 }
-
-// The FreeRDP 3 clients Wicket offers by name.
-const (
-	ClientSDL = "sdl-freerdp3"
-	ClientX11 = "xfreerdp3"
-)
 
 // KnownClient is a FreeRDP client the profile form offers by name.
 type KnownClient struct {
@@ -42,11 +46,17 @@ type KnownClient struct {
 }
 
 // KnownClients are the clients the form offers, most preferred first; a new
-// profile gets the first one installed. wlfreerdp3 is left out for now: how
-// well it copes with Wicket's options is still being looked into.
+// profile gets the first one installed. SDL is preferred to X11, and the
+// version-suffixed name to the unsuffixed one when both are installed, so a
+// Linux package of sdl-freerdp3 still wins over a stray sdl-freerdp. The
+// unsuffixed names are what Homebrew's freerdp formula puts on PATH.
+// wlfreerdp3 is left out for now: how well it copes with Wicket's options is
+// still being looked into.
 var KnownClients = []KnownClient{
 	{ClientSDL, "FreeRDP's SDL client (native Wayland and X11)"},
+	{ClientSDLHomebrew, "FreeRDP's SDL client (native Wayland and X11)"},
 	{ClientX11, "FreeRDP's X11 client (runs through XWayland on Wayland)"},
+	{ClientX11Homebrew, "FreeRDP's X11 client (runs through XWayland on Wayland)"},
 }
 
 // InstalledClients returns the known clients lookPath finds, in order of
@@ -159,6 +169,28 @@ var freerdpExits = map[int]exitMeaning{
 // clients, whose exit codes Wicket knows.
 func IsFreeRDP(client string) bool {
 	return freerdpClients[filepath.Base(client)]
+}
+
+// IsSDLClient reports whether client is FreeRDP's SDL client, either the
+// version-suffixed name or the unsuffixed one Homebrew installs.
+func IsSDLClient(client string) bool {
+	switch filepath.Base(client) {
+	case ClientSDL, ClientSDLHomebrew:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsX11Client reports whether client is FreeRDP's X11 client, either the
+// version-suffixed name or the unsuffixed one Homebrew installs.
+func IsX11Client(client string) bool {
+	switch filepath.Base(client) {
+	case ClientX11, ClientX11Homebrew:
+		return true
+	default:
+		return false
+	}
 }
 
 // exitPreConnectFailed is ERRCONNECT_PRE_CONNECT_FAILED: the client gave up

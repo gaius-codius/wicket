@@ -165,12 +165,12 @@ main() {
 		;;
 	esac
 
-	for c in sdl-freerdp3 xfreerdp3; do
+	for c in sdl-freerdp3 sdl-freerdp xfreerdp3 xfreerdp; do
 		if command -v "$c" >/dev/null 2>&1; then
 			return
 		fi
 	done
-	say "warning: no FreeRDP 3 client on PATH; install sdl-freerdp3 or xfreerdp3" >&2
+	say "warning: no FreeRDP 3 client on PATH; install sdl-freerdp3 or xfreerdp3 (Homebrew: sdl-freerdp or xfreerdp)" >&2
 }
 
 # Everything runs from here, so a download cut off mid-script does nothing.

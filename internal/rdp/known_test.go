@@ -30,6 +30,12 @@ func TestInstalledClients_PreferenceOrder(t *testing.T) {
 		{[]string{"xfreerdp3", "wlfreerdp3"}, []string{"xfreerdp3"}, "xfreerdp3"},
 		{[]string{"wlfreerdp3"}, nil, config.DefaultClient},
 		{nil, nil, config.DefaultClient},
+		// Homebrew installs the unsuffixed names. SDL still beats X11, and a
+		// suffixed binary still beats the unsuffixed one of the same client.
+		{[]string{"xfreerdp", "sdl-freerdp"}, []string{"sdl-freerdp", "xfreerdp"}, "sdl-freerdp"},
+		{[]string{"xfreerdp"}, []string{"xfreerdp"}, "xfreerdp"},
+		{[]string{"sdl-freerdp3", "sdl-freerdp", "xfreerdp3", "xfreerdp"}, []string{"sdl-freerdp3", "sdl-freerdp", "xfreerdp3", "xfreerdp"}, "sdl-freerdp3"},
+		{[]string{"xfreerdp3", "sdl-freerdp"}, []string{"sdl-freerdp", "xfreerdp3"}, "sdl-freerdp"},
 	} {
 		got := InstalledClients(onPath(tc.path...))
 		var names []string
@@ -51,6 +57,16 @@ func TestKnownClients_AreFreeRDPs(t *testing.T) {
 		if !IsFreeRDP(c.Name) || c.About == "" {
 			t.Errorf("%s: IsFreeRDP %v, about %q", c.Name, IsFreeRDP(c.Name), c.About)
 		}
+		sdl, x11 := IsSDLClient(c.Name), IsX11Client(c.Name)
+		if sdl == x11 {
+			t.Errorf("%s: IsSDLClient %v, IsX11Client %v", c.Name, sdl, x11)
+		}
+	}
+	if IsSDLClient("/opt/homebrew/bin/sdl-freerdp") != true || IsX11Client("xfreerdp3") != true {
+		t.Fatal("basename classification")
+	}
+	if IsSDLClient("xfreerdp") || IsX11Client("sdl-freerdp3") || IsSDLClient("myrdp") {
+		t.Fatal("unrelated or crossed client classified as SDL/X11")
 	}
 }
 

@@ -41,8 +41,25 @@ Config, state, and keyring entries are never touched. Or, with Go:
 go install github.com/gaius-codius/wicket/cmd/wicket@latest
 ```
 
-Needs a FreeRDP 3 client on `PATH`: `sdl-freerdp3` or `xfreerdp3`. New profiles
-use the first one found, in that order.
+Needs a FreeRDP 3 client on `PATH`. New profiles use the first one found:
+
+1. `sdl-freerdp3`, then `sdl-freerdp`
+2. `xfreerdp3`, then `xfreerdp`
+
+Linux packages usually install the names with a `3` suffix.
+
+### macOS
+
+Homebrew's `freerdp` formula installs the same clients
+without that suffix:
+
+```
+brew install freerdp
+```
+
+That puts `sdl-freerdp` and `xfreerdp` on `PATH`. Wicket discovers and offers
+those names the same way as `sdl-freerdp3` and `xfreerdp3`. A new profile
+uses `sdl-freerdp` when that is the first of the list above that exists.
 
 ## Run
 

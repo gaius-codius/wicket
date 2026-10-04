@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -190,23 +189,35 @@ const retryHint = "If the password may be wrong, press n for a new password."
 // with fullscreen on. On a fractionally scaled Wayland monitor it can misread
 // the monitor's size (a 3840x2160 output at 1.6 as 102x102) and fail in
 // pre-connect, exit 136, where the X11 client with /f works. That is a
-// FreeRDP bug, so the hint offers ways round it: xfreerdp3 when it is
-// installed, and fullscreen off either way. It searches PATH, so it is asked
-// once, as the session ends, not as the overlay draws.
+// FreeRDP bug, so the hint offers ways round it: an X11 client when one is
+// installed (xfreerdp3, or xfreerdp from Homebrew), and fullscreen off either
+// way. It searches PATH, so it is asked once, as the session ends, not as
+// the overlay draws.
 //
 // It comes back in two parts. The first is what to do, and is drawn like a
 // key hint rather than like the muted lines it used to sit between, where it
 // read as more of the same report and was missed. The second is why, which
 // is the first of the two to go when the overlay is short.
 func (a *App) fullscreenHint(p config.Profile, o rdp.Outcome) (action, why string) {
-	if !p.Fullscreen || filepath.Base(o.Client) != rdp.ClientSDL || !o.PreConnectFailed() {
+	if !p.Fullscreen || !rdp.IsSDLClient(o.Client) || !o.PreConnectFailed() {
 		return "", ""
 	}
 	why = "FreeRDP's SDL client can fail fullscreen on a scaled monitor."
-	if a.Installed(rdp.ClientX11) {
-		return "Try the " + rdp.ClientX11 + " client, or turn fullscreen off.", why
+	if x11 := a.installedX11Client(); x11 != "" {
+		return "Try the " + x11 + " client, or turn fullscreen off.", why
 	}
 	return "Try turning fullscreen off.", why
+}
+
+// installedX11Client is the first known X11 client on PATH, in the same
+// preference order as the form. Empty when none is installed.
+func (a *App) installedX11Client() string {
+	for _, c := range rdp.KnownClients {
+		if rdp.IsX11Client(c.Name) && a.Installed(c.Name) {
+			return c.Name
+		}
+	}
+	return ""
 }
 
 // retryBlocks are the overlay's parts in reading order: what happened, what

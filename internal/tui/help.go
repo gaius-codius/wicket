@@ -44,15 +44,29 @@ func (m Model) helpLines(width int) []string {
 }
 
 // viewHelp shows the key list, scrolled so every entry is reachable even when
-// the panel is shorter than the list.
+// the panel is shorter than the list. The list view's help adds the running
+// version under the keys, but only when every key line fits as well: the
+// version goes first, so it never pushes a key out of view or into the scroll.
 func (m Model) viewHelp(lo layout) string {
 	lines := m.helpLines(lo.Inner)
 	budget := max(lo.Budget, 1)
 	if len(lines) <= budget {
+		if v := m.helpVersion(lo.Inner); v != "" && len(lines) < budget {
+			lines = append(lines, v)
+		}
 		return strings.Join(lines, "\n")
 	}
 	top := min(max(m.helpTop, 0), len(lines)-budget)
 	return strings.Join(lines[top:top+budget], "\n")
+}
+
+// helpVersion is the muted version line for the list view's help, or "" for
+// any other help or when no version is known.
+func (m Model) helpVersion(width int) string {
+	if m.helpFor != viewList || m.version == "" {
+		return ""
+	}
+	return m.styles.muted.Render(truncate(m.version, max(width, 1)))
 }
 
 func helpKeys(v view) []hint {

@@ -106,6 +106,9 @@ type Model struct {
 	// queryBackground is set when Init asks the terminal for its
 	// background, and gates the reply.
 	queryBackground bool
+
+	// version is Options.Version, shown under the list view's help keys.
+	version string
 }
 
 type Options struct {
@@ -122,6 +125,9 @@ type Options struct {
 	// asked for its background colour. nil means it cannot, so nothing is
 	// asked unless the caller knows better.
 	StdoutIsTerminal func() bool
+	// Version is the running build, as "wicket --version" prints it. The
+	// list view's help shows it; empty shows nothing.
+	Version string
 }
 
 func New(opt Options) Model {
@@ -136,8 +142,9 @@ func New(opt Options) Model {
 		home, _ = os.UserHomeDir()
 	}
 	m := Model{
-		width:  opt.Width,
-		height: opt.Height,
+		width:   opt.Width,
+		height:  opt.Height,
+		version: opt.Version,
 		app: &App{
 			Secrets:  opt.Store,
 			Launcher: opt.Launcher,

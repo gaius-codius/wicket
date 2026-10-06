@@ -73,6 +73,7 @@ func startTUI() error {
 		// The TUI asks the terminal for its background colour only when
 		// there is a terminal to answer.
 		StdoutIsTerminal: func() bool { return isTerminal(int(os.Stdout.Fd())) },
+		Version:          versionString(),
 	})
 }
 

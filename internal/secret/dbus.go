@@ -169,9 +169,19 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 			unlockErr = err
 		}
 	}
+	// After a refused unlock only the unlocked matches can be read. Asking
+	// for the locked ones too would leave the outcome to the backend: some
+	// skip them, others fail the whole call, and a failure here would hide
+	// that the keyring is locked behind a generic "unavailable".
+	readable := items
+	if unlockErr != nil {
+		readable = unlocked
+	}
 	secrets := map[dbus.ObjectPath]ssSecret{}
-	if err := svc.CallWithContext(ctx, ssServiceIface+".GetSecrets", 0, items, session).Store(&secrets); err != nil {
-		return LookupResult{}, unavailable(ctx, err)
+	if len(readable) > 0 {
+		if err := svc.CallWithContext(ctx, ssServiceIface+".GetSecrets", 0, readable, session).Store(&secrets); err != nil {
+			return LookupResult{}, unavailable(ctx, err)
+		}
 	}
 	// A match whose password Wicket cannot use stays in the running: the
 	// newest item is the one the user saved last, and falling back to an

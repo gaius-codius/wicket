@@ -357,6 +357,8 @@ func keyringProblem(err error) string {
 		return "the keyring prompt was dismissed"
 	case errors.Is(err, secret.ErrPromptTimeout):
 		return "nobody answered the keyring prompt"
+	case errors.Is(err, secret.ErrLocked):
+		return "the keyring is locked"
 	case errors.Is(err, secret.ErrUnavailable):
 		return "keyring unavailable"
 	case errors.Is(err, secret.ErrNotFound):

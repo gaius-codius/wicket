@@ -170,6 +170,36 @@ func TestDBus_LookupUnlocksALockedKeyring(t *testing.T) {
 	}
 }
 
+// An unlock prompt nobody answers leaves the password just as unreadable as
+// a refused one, and must not read as "not found" either.
+func TestDBus_LookupWithAnUnansweredUnlockIsLocked(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	old := promptTimeout
+	promptTimeout = 150 * time.Millisecond
+	defer func() { promptTimeout = old }()
+
+	store := NewDBus()
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Upsert(bg, id, pw); err != nil {
+		t.Fatal(err)
+	}
+	srv.SetLocked(true)
+	srv.SetPrompt(fakesecret.PromptStall)
+	_, err = store.Lookup(bg, id)
+	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrPromptTimeout) || errors.Is(err, ErrNotFound) {
+		t.Fatalf("unanswered unlock: err = %v, want ErrLocked wrapping the timeout", err)
+	}
+	if n := srv.Dismissed(); n != 1 {
+		t.Fatalf("prompt dismissed %d times, want 1", n)
+	}
+}
+
 // Two items can share a profile's attributes -- two machines writing the same
 // config, or a restored backup. Wicket takes the most recently modified and
 // says so, which the in-memory store proved but the real one never did.

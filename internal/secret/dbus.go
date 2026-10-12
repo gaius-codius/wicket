@@ -49,6 +49,10 @@ var (
 	ErrPromptDismissed = errors.New("the keyring prompt was dismissed")
 	// ErrPromptTimeout means nobody answered a keyring prompt in time.
 	ErrPromptTimeout = errors.New("timed out waiting for the keyring prompt")
+	// ErrLocked means a lookup found a stored password but could not read
+	// it because the keyring stayed locked. It wraps why the unlock failed,
+	// usually ErrPromptDismissed, and that cause wraps ErrUnavailable.
+	ErrLocked = errors.New("the keyring is locked")
 )
 
 type ssSecret struct {
@@ -146,17 +150,23 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 	if err != nil {
 		return LookupResult{}, err
 	}
+	// A locked keyring answers Unlock with a prompt path. Items that stay
+	// locked simply yield no secret below, so a failed or dismissed prompt
+	// is not fatal here -- unless the caller gave up, which is not the same
+	// as the user saying no. It is kept, though: if nothing could be read,
+	// a password is stored behind it, and "not found" would send the user
+	// off to save one into the same locked keyring.
+	var unlockErr error
 	if len(locked) > 0 {
 		var opened []dbus.ObjectPath
 		var prompt dbus.ObjectPath
-		if err := svc.CallWithContext(ctx, ssServiceIface+".Unlock", 0, locked).Store(&opened, &prompt); err == nil {
-			// A locked keyring answers with a prompt path. Items that stay
-			// locked simply yield no secret below, so a failed or dismissed
-			// prompt is not fatal here -- unless the caller gave up, which
-			// is not the same as the user saying no.
-			if err := runPrompt(ctx, conn, prompt); err != nil && ctx.Err() != nil {
+		if err := svc.CallWithContext(ctx, ssServiceIface+".Unlock", 0, locked).Store(&opened, &prompt); err != nil {
+			unlockErr = unavailable(ctx, err)
+		} else if err := runPrompt(ctx, conn, prompt); err != nil {
+			if ctx.Err() != nil {
 				return LookupResult{}, err
 			}
+			unlockErr = err
 		}
 	}
 	secrets := map[dbus.ObjectPath]ssSecret{}
@@ -184,6 +194,9 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 		hits = append(hits, hit{pw: pw, err: err, mod: mod})
 	}
 	if len(hits) == 0 {
+		if unlockErr != nil {
+			return LookupResult{}, fmt.Errorf("%w (%w)", ErrLocked, unlockErr)
+		}
 		return LookupResult{}, ErrNotFound
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].mod > hits[j].mod })

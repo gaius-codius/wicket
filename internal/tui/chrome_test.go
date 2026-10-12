@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"image/color"
 	"strings"
 	"testing"
@@ -179,6 +180,17 @@ func TestModal_SubtitlePerState(t *testing.T) {
 	out := screen(locked)
 	if !strings.Contains(out, "keyring is unavailable") || strings.Contains(out, "No password is saved") {
 		t.Fatalf("unavailable must not claim there is no password:\n%s", out)
+	}
+
+	// A refused unlock prompt: the password is there, behind the lock.
+	dismissed := fmt.Errorf("%w (%w: %w)", secret.ErrLocked, secret.ErrUnavailable, secret.ErrPromptDismissed)
+	refused := press(newHarness(t, cfg, &wrapStore{inner: secret.NewMemory(), lookupErr: dismissed}).m, "enter")
+	out = screen(refused)
+	if !strings.Contains(out, "keyring is locked") || strings.Contains(out, "No password is saved") {
+		t.Fatalf("locked must say so, not that there is no password:\n%s", out)
+	}
+	if out = screen(press(refused, "ctrl+s")); !strings.Contains(out, "keyring is locked") || !strings.Contains(out, "cannot be saved") {
+		t.Fatalf("locked: ctrl+s must refuse to save:\n%s", out)
 	}
 
 	p, _ := missing.app.Cfg.Profile("work")

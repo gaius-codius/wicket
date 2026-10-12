@@ -140,7 +140,12 @@ func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profi
 		}
 		return nil, fmt.Errorf("no stored password for this profile; save one from the TUI first")
 	}
-	if unavailable {
+	switch {
+	case errors.Is(err, secret.ErrLocked):
+		// A password is stored, behind a keyring the user would not unlock.
+		// Saving the typed one would meet the same lock.
+		fmt.Fprintf(stderr, "warning: %v; the password will not be saved\n", err)
+	case unavailable:
 		fmt.Fprintf(stderr, "warning: cannot reach the keyring (%v); the password will not be saved\n", err)
 	}
 	fmt.Fprint(stderr, "Password: ")

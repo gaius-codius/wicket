@@ -450,7 +450,12 @@ func (m Model) details(p config.Profile, withHost, withLast bool) []detail {
 	if withHost {
 		ds = append(ds, detail{key: "host", value: p.Host})
 	}
-	ds = append(ds, detail{key: "user", value: p.User})
+	if p.User == "" {
+		// An import can leave one with no user; enter opens the form for it.
+		ds = append(ds, detail{key: "user", value: "none: " + noUserMsg, style: &m.styles.warning})
+	} else {
+		ds = append(ds, detail{key: "user", value: p.User})
+	}
 	if p.Domain != "" {
 		ds = append(ds, detail{key: "domain", value: p.Domain})
 	}

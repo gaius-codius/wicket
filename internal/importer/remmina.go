@@ -102,6 +102,7 @@ func ParseRemmina(data []byte, sourceName string) (config.Profile, Skip, error) 
 			p.Domain, p.User = dom, user
 		}
 	}
+	p.User, p.Domain = dropUPNDomain(p.User, p.Domain)
 	p.Fullscreen = remminaFullscreen(vals["viewmode"])
 	p.Size = remminaSize(vals["resolution_mode"], vals["resolution_width"], vals["resolution_height"])
 	p.Shares = remminaShares(vals["sharefolder"], vals["drive"])
@@ -136,6 +137,19 @@ func remminaSize(mode, w, h string) string {
 		return ""
 	}
 	return fmt.Sprintf("%dx%d", ww, hh)
+}
+
+// dropUPNDomain keeps a UPN user (alice@corp.com) and drops a domain set
+// beside it: the UPN already names the domain, and the pair together is one
+// Wicket refuses, so the file was skipped. Only a name on both sides of the
+// "@" is a UPN; "alice@" beside a domain is left to be skipped as before,
+// rather than lose the domain it needs.
+func dropUPNDomain(user, domain string) (string, string) {
+	name, suffix, ok := strings.Cut(user, "@")
+	if domain != "" && ok && name != "" && suffix != "" && !strings.Contains(user, `\`) {
+		return user, ""
+	}
+	return user, domain
 }
 
 func splitDomainUser(user string) (domain, bare string, ok bool) {

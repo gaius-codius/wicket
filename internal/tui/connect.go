@@ -42,6 +42,9 @@ func (m Model) beginConnect() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) connectProfile(p config.Profile, typed *secret.Password) (tea.Model, tea.Cmd) {
+	if p.User == "" {
+		return m.askForUser(p)
+	}
 	if err := m.app.ProbeClient(p); err != nil {
 		m.setStatus(err.Error(), statusError)
 		m.view = viewList
@@ -54,6 +57,19 @@ func (m Model) connectProfile(p config.Profile, typed *secret.Password) (tea.Mod
 	// prompt, or not answering at all. See keyring.go.
 	return m.resolveCredential(p)
 }
+
+// askForUser opens the form at the user field of a profile that has none, as
+// an import of a file with no username leaves it. Connecting would hand
+// FreeRDP an empty /u:, and the form will not save until a user is typed.
+func (m Model) askForUser(p config.Profile) (tea.Model, tea.Cmd) {
+	nm, cmd := m.openForm(p.Name, p)
+	out := nm.(Model)
+	out.form.focus(fieldUser)
+	out.form.err, out.form.errField = noUserMsg, fieldUser
+	return out, cmd
+}
+
+const noUserMsg = "add a user to connect"
 
 // runConnect starts the client and puts the session view up while it runs.
 // Wicket keeps the terminal throughout: see session.go. Starting returns as

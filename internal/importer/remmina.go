@@ -185,7 +185,7 @@ func splitDomainUser(user string) (domain, bare string, ok bool) {
 
 // shareSet collects the shares an import keeps, by the rules both formats
 // share. A path must be absolute or ~/…; an empty, relative or malformed one
-// is skipped. So is the whole home folder or the root: a file sent to the
+// is skipped. So is a folder holding the whole home folder: a file sent to the
 // user could otherwise hand a server every file they have, and Wicket offers
 // home only as share_home, which an import does not turn on. Whether the
 // folder exists is left to the time it is used.
@@ -211,19 +211,35 @@ func (s *shareSet) add(name, path string) {
 	s.list = append(s.list, config.Share{Path: path, Name: name})
 }
 
-// wholeHomeOrRoot reports whether path, once expanded, is "/" or the home
-// folder itself. A path that cannot be expanded counts as one, so it is
-// skipped rather than guessed at.
+// wholeHomeOrRoot reports whether path holds the whole home folder: the
+// root, home itself, or a folder above it such as /home. A symlink is
+// followed when the path exists, so /proc/self/root counts, and anything
+// under /proc is refused outright, since what its links name changes with
+// the process that reads them. A path that cannot be expanded counts as one,
+// so it is skipped rather than guessed at.
 func wholeHomeOrRoot(path string) bool {
 	expanded, err := config.ExpandPath(path)
 	if err != nil {
 		return true
 	}
+	if expanded == "/proc" || strings.HasPrefix(expanded, "/proc/") {
+		return true
+	}
+	if resolved, err := filepath.EvalSymlinks(expanded); err == nil {
+		expanded = resolved
+	}
 	if expanded == "/" {
 		return true
 	}
 	home, err := os.UserHomeDir()
-	return err == nil && expanded == filepath.Clean(home)
+	if err != nil {
+		return false
+	}
+	home = filepath.Clean(home)
+	if resolved, err := filepath.EvalSymlinks(home); err == nil {
+		home = resolved
+	}
+	return strings.HasPrefix(home+"/", expanded+"/")
 }
 
 func isSharePath(path string) bool {

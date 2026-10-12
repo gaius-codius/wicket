@@ -125,6 +125,7 @@ func TestParseRDP_NoDrives(t *testing.T) {
 	for _, v := range []string{
 		"", "*", "DynamicDrives", "%", "C:\\;D:\\", "docs(relative)", "(x)(y)",
 		"~", "~/", "~/.", "home(~)", "~(home)", "/", "/..", "/(root)", "//", home, home + "/", "h(" + home + ")",
+		"~/..", "a(~/..)", filepath.Dir(home), "/proc", "/proc/self/root", "/proc/self/cwd",
 	} {
 		p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:"+v+"\n"), "x")
 		if err != nil {
@@ -308,6 +309,27 @@ func TestParseRDP_TwoPathDrive(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []config.Share{{Path: "/tmp/wicket-a"}, {Path: "/tmp/wicket-b"}}
+	if !reflect.DeepEqual(p.Shares, want) {
+		t.Fatalf("shares %+v, want %+v", p.Shares, want)
+	}
+}
+
+// A share that is a symlink to the home folder is refused like home itself.
+func TestParseRDP_DriveSymlinkToHome(t *testing.T) {
+	t.Parallel()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(home, link); err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:"+link+";/tmp(/home)\n"), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []config.Share{{Path: "/tmp"}}
 	if !reflect.DeepEqual(p.Shares, want) {
 		t.Fatalf("shares %+v, want %+v", p.Shares, want)
 	}

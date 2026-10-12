@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf16"
+
+	"github.com/gaius-codius/wicket/internal/config"
 )
 
 func TestParseRDP_Work(t *testing.T) {
@@ -156,5 +158,40 @@ func TestParseRDP_PortFixture(t *testing.T) {
 	}
 	if p.Host != "srv3:3390" {
 		t.Fatalf("host %q", p.Host)
+	}
+}
+
+// A file with no user, and one with a UPN user beside a domain, used to be
+// skipped at import. Both now import: the first with no user for the TUI to
+// ask for, the second keeping the UPN and dropping the domain it repeats.
+func TestParseRDP_NoUserAndUPN(t *testing.T) {
+	t.Parallel()
+	var ps []config.Profile
+	for _, name := range []string{"nouser", "upn"} {
+		p, _, err := ParseRDPFile(filepath.Join("testdata", name+".rdp"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ps = append(ps, p)
+	}
+	if ps[0].User != "" || ps[0].Domain != "" {
+		t.Fatalf("nouser: %+v", ps[0])
+	}
+	if ps[1].User != "alice@corp.com" || ps[1].Domain != "" {
+		t.Fatalf("upn: %+v", ps[1])
+	}
+	assertImports(t, ps)
+}
+
+// assertImports checks that every profile survives the import plan rather
+// than being skipped.
+func assertImports(t *testing.T, ps []config.Profile) {
+	t.Helper()
+	for i := range ps {
+		ps[i].Client = config.DefaultClient
+	}
+	ok, skipped := config.PlanProfiles(nil, ps, false)
+	if len(skipped) != 0 || len(ok) != len(ps) {
+		t.Fatalf("imported %+v, skipped %+v", ok, skipped)
 	}
 }

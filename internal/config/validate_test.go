@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestValidateProfile_OK(t *testing.T) {
 	t.Parallel()
@@ -71,8 +74,17 @@ func TestValidateUserDomain(t *testing.T) {
 	t.Parallel()
 	p := validProfile()
 	p.User = ""
+	// An imported profile may have no user yet: it loads, and the TUI asks
+	// for one, but it cannot be saved or connected as it is.
+	if err := ValidateProfile(p); err != nil {
+		t.Fatalf("empty user must load: %v", err)
+	}
+	if err := ValidateProfileInUse(p); !errors.Is(err, ErrNoUser) {
+		t.Fatalf("empty user in use: %v, want ErrNoUser", err)
+	}
+	p.User = "  "
 	if err := ValidateProfile(p); err == nil {
-		t.Fatal("empty user")
+		t.Fatal("blank user")
 	}
 	p = validProfile()
 	p.Domain = "CORP"

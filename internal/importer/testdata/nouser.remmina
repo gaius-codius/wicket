@@ -1,0 +1,4 @@
+[remmina]
+name=nouser
+protocol=RDP
+server=team.example

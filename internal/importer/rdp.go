@@ -72,7 +72,7 @@ func ParseRDP(data []byte, name string) (config.Profile, Skip, error) {
 			p.User = user
 		}
 	}
-	p.Domain = domain
+	p.User, p.Domain = dropUPNDomain(p.User, domain)
 	if sm, ok := vals["screen mode id"]; ok {
 		if n, err := strconv.Atoi(strings.TrimSpace(sm)); err == nil && n == 2 {
 			p.Fullscreen = true

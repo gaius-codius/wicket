@@ -1,0 +1,6 @@
+[remmina]
+name=upn
+protocol=RDP
+server=upn.example
+username=alice@corp.com
+domain=CORP

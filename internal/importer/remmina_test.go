@@ -188,3 +188,22 @@ drive=docs,/tmp/ok;bad,/tmp/a,/tmp/b;C:/windows
 		t.Fatalf("got %+v want %+v", p.Shares, want)
 	}
 }
+
+func TestParseRemmina_NoUserAndUPN(t *testing.T) {
+	t.Parallel()
+	var ps []config.Profile
+	for _, name := range []string{"nouser", "upn"} {
+		p, skip, err := ParseRemminaFile(filepath.Join("testdata", name+".remmina"))
+		if err != nil || skip.Reason != "" {
+			t.Fatalf("%s: err=%v skip=%v", name, err, skip)
+		}
+		ps = append(ps, p)
+	}
+	if ps[0].User != "" || ps[0].Domain != "" {
+		t.Fatalf("nouser: %+v", ps[0])
+	}
+	if ps[1].User != "alice@corp.com" || ps[1].Domain != "" {
+		t.Fatalf("upn: %+v", ps[1])
+	}
+	assertImports(t, ps)
+}

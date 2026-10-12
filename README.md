@@ -46,7 +46,9 @@ Needs a FreeRDP 3 client on `PATH`. New profiles use the first one found:
 1. `sdl-freerdp3`, then `sdl-freerdp`
 2. `xfreerdp3`, then `xfreerdp`
 
-Linux packages usually install the names with a `3` suffix.
+Linux packages usually install the names with a `3` suffix. A name without
+it counts only when its `--version` reports FreeRDP 3, so a FreeRDP 2
+`xfreerdp` is passed over.
 
 ### macOS
 

@@ -166,11 +166,30 @@ main() {
 	esac
 
 	for c in sdl-freerdp3 sdl-freerdp xfreerdp3 xfreerdp; do
-		if command -v "$c" >/dev/null 2>&1; then
+		if freerdp3 "$c"; then
 			return
 		fi
 	done
 	say "warning: no FreeRDP 3 client on PATH; install sdl-freerdp3 or xfreerdp3 (Homebrew: sdl-freerdp or xfreerdp)" >&2
+}
+
+# freerdp3 reports whether client $1 is on PATH and is FreeRDP 3. A name
+# with the 3 suffix says so itself. One without it can be FreeRDP 2 on Linux,
+# so it has to print "This is FreeRDP version 3." for --version within a few
+# seconds. Its exit status is not read: a build may report its version and
+# still exit non-zero. There is no timeout(1) on macOS, hence the watcher.
+freerdp3() {
+	command -v "$1" >/dev/null 2>&1 || return 1
+	case "$1" in *3) return 0 ;; esac
+	fr_out="$tmp/freerdp-version"
+	rm -f "$fr_out" "$fr_out.timeout"
+	"$1" --version >"$fr_out" 2>&1 </dev/null &
+	fr_pid=$!
+	(sleep 3 && : >"$fr_out.timeout" && kill -KILL "$fr_pid" 2>/dev/null) >/dev/null 2>&1 &
+	fr_watch=$!
+	wait "$fr_pid" || :
+	kill "$fr_watch" 2>/dev/null || :
+	[ ! -e "$fr_out.timeout" ] && grep -q 'This is FreeRDP version 3\.' "$fr_out"
 }
 
 # Everything runs from here, so a download cut off mid-script does nothing.

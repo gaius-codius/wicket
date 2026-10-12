@@ -55,12 +55,20 @@ type App struct {
 	// profile's default and the retry view's hints. nil means the launcher's
 	// runner, which is exec.LookPath unless a test says otherwise.
 	LookPath func(string) (string, error)
+	// FreeRDPMajor asks a client found on PATH for its major version, to
+	// tell an unsuffixed FreeRDP 3 client from FreeRDP 2. nil means
+	// rdp.FreeRDPMajor, which runs it.
+	FreeRDPMajor func(path string) (int, bool)
 
 	// active is the session running now, if any. It is kept here rather
 	// than only in the model so that Wicket can stop it on the way out,
 	// after Bubble Tea has returned whatever model it last had.
 	mu     sync.Mutex
 	active *Session
+	// majors remembers the versions clients reported, by path, so that
+	// opening the form does not run them again every time. A probe that
+	// failed is not remembered: a slow first start is tried again.
+	majors map[string]int
 	// base is the parent of every keyring operation's context, cancelled
 	// when Wicket exits so that nothing is left waiting on the keyring.
 	base     context.Context
@@ -586,10 +594,35 @@ func (a *App) lookPath(file string) (string, error) {
 	return rdp.OSRunner{}.LookPath(file)
 }
 
-// InstalledClients lists the known FreeRDP clients on PATH, most preferred
-// first. It searches PATH, so callers ask once, not on every frame.
+// InstalledClients lists the known FreeRDP 3 clients on PATH, most
+// preferred first. It searches PATH and may run an unsuffixed client to ask
+// its version, so callers ask once, not on every frame.
 func (a *App) InstalledClients() []rdp.KnownClient {
-	return rdp.InstalledClients(a.lookPath)
+	return rdp.InstalledClients(a.lookPath, a.freerdpMajor)
+}
+
+// freerdpMajor is FreeRDPMajor, remembered by path once it has an answer.
+func (a *App) freerdpMajor(path string) (int, bool) {
+	a.mu.Lock()
+	v, ok := a.majors[path]
+	a.mu.Unlock()
+	if ok {
+		return v, true
+	}
+	probe := a.FreeRDPMajor
+	if probe == nil {
+		probe = rdp.FreeRDPMajor
+	}
+	v, ok = probe(path)
+	if ok {
+		a.mu.Lock()
+		if a.majors == nil {
+			a.majors = map[string]int{}
+		}
+		a.majors[path] = v
+		a.mu.Unlock()
+	}
+	return v, ok
 }
 
 // Installed reports whether client can be found on PATH.

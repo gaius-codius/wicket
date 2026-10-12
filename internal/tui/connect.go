@@ -206,9 +206,10 @@ const retryHint = "If the password may be wrong, press n for a new password."
 // the monitor's size (a 3840x2160 output at 1.6 as 102x102) and fail in
 // pre-connect, exit 136, where the X11 client with /f works. That is a
 // FreeRDP bug, so the hint offers ways round it: an X11 client when one is
-// installed (xfreerdp3, or xfreerdp from Homebrew), and fullscreen off either
-// way. It searches PATH, so it is asked once, as the session ends, not as
-// the overlay draws.
+// installed (xfreerdp3, or an unsuffixed xfreerdp that is FreeRDP 3), and
+// fullscreen off either way. It searches PATH and may run a client to ask
+// its version, so it is asked once, as the session ends, not as the overlay
+// draws.
 //
 // It comes back in two parts. The first is what to do, and is drawn like a
 // key hint rather than like the muted lines it used to sit between, where it
@@ -226,10 +227,12 @@ func (a *App) fullscreenHint(p config.Profile, o rdp.Outcome) (action, why strin
 }
 
 // installedX11Client is the first known X11 client on PATH, in the same
-// preference order as the form. Empty when none is installed.
+// preference order as the form and held to the same FreeRDP 3 rule: an
+// unsuffixed xfreerdp that is FreeRDP 2 is not offered. Empty when none is
+// installed.
 func (a *App) installedX11Client() string {
-	for _, c := range rdp.KnownClients {
-		if rdp.IsX11Client(c.Name) && a.Installed(c.Name) {
+	for _, c := range a.InstalledClients() {
+		if rdp.IsX11Client(c.Name) {
 			return c.Name
 		}
 	}

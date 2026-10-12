@@ -468,7 +468,7 @@ func (f *formState) clientHelp() string {
 	const choose = " `←/→` to choose."
 	switch {
 	case f.detected == 0:
-		return "No FreeRDP client found on PATH. Type a binary name."
+		return "No FreeRDP 3 client found on PATH. Type a binary name."
 	case f.clientCustom():
 		return "Any FreeRDP-compatible binary on PATH. `←` from the start goes back."
 	case f.clients[f.clientAt] == f.clientMissing:

@@ -222,13 +222,16 @@ func wholeHomeOrRoot(path string) bool {
 	if err != nil {
 		return true
 	}
-	if expanded == "/proc" || strings.HasPrefix(expanded, "/proc/") {
+	inProc := func(p string) bool { return p == "/proc" || strings.HasPrefix(p, "/proc/") }
+	// Checked before and after the symlinks are followed: /proc/self/cwd
+	// leads out of /proc, and /dev/fd leads into it.
+	if inProc(expanded) {
 		return true
 	}
 	if resolved, err := filepath.EvalSymlinks(expanded); err == nil {
 		expanded = resolved
 	}
-	if expanded == "/" {
+	if expanded == "/" || inProc(expanded) {
 		return true
 	}
 	home, err := os.UserHomeDir()

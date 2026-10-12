@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -122,11 +123,16 @@ func TestParseRDP_NoDrives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, v := range []string{
+	drives := []string{
 		"", "*", "DynamicDrives", "%", "C:\\;D:\\", "docs(relative)", "(x)(y)",
 		"~", "~/", "~/.", "home(~)", "~(home)", "/", "/..", "/(root)", "//", home, home + "/", "h(" + home + ")",
 		"~/..", "a(~/..)", filepath.Dir(home), "/proc", "/proc/self/root", "/proc/self/cwd",
-	} {
+	}
+	if runtime.GOOS == "linux" {
+		// A symlink into /proc there; on macOS a folder of its own.
+		drives = append(drives, "/dev/fd")
+	}
+	for _, v := range drives {
 		p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:"+v+"\n"), "x")
 		if err != nil {
 			t.Fatal(err)

@@ -124,6 +124,12 @@ func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profi
 		}
 		return res.Password, nil
 	}
+	// A saved password that cannot be used was read fine: it is neither
+	// missing nor behind an unreachable keyring, and a prompt would hide
+	// what is wrong with it.
+	if errors.Is(err, secret.ErrTooLong) || errors.Is(err, secret.ErrCRLF) {
+		return nil, fmt.Errorf("the saved password cannot be used (%w); save a new one from the TUI", err)
+	}
 	// An unreachable keyring is not a missing password: telling the user to
 	// save one from the TUI sends them somewhere that cannot save it either.
 	unavailable := errors.Is(err, secret.ErrUnavailable)

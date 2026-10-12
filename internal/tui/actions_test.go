@@ -231,6 +231,17 @@ func TestKeyringProblem_IsShort(t *testing.T) {
 	}
 }
 
+// A saved password Wicket cannot use was read without trouble, so it is not
+// reported as a keyring fault, and the phrase says what is wrong with it.
+func TestKeyringProblem_SavedPasswordUnusable(t *testing.T) {
+	for err, want := range map[error]string{secret.ErrTooLong: "511 bytes", secret.ErrCRLF: "CR or LF"} {
+		got := keyringProblem(err)
+		if !strings.Contains(got, want) || strings.Contains(got, "keyring error") || len(got) > 80 {
+			t.Errorf("keyringProblem(%v) = %q", err, got)
+		}
+	}
+}
+
 func TestSaveProfile_CRLFRejected(t *testing.T) {
 	a := testApp(t, "[general]\n", nil)
 	p := config.Profile{Name: "n", Host: "h", User: "u", Client: config.DefaultClient, Scale: 100, DynamicResolution: true}

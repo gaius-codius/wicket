@@ -25,6 +25,31 @@ func TestModal_UnavailableShowsLockedCopy(t *testing.T) {
 	}
 }
 
+// A saved password too long for the client is not used. The dialog says why
+// it is asking, and since the keyring answered, ctrl+s saves over it.
+func TestModal_SavedPasswordTooLongCanBeReplaced(t *testing.T) {
+	rec := withFakeRDP(t)
+	inner := secret.NewMemory()
+	store := &wrapStore{inner: inner, lookupErr: secret.ErrTooLong}
+	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
+	h.m = press(h.m, "enter")
+	if h.m.view != viewModal {
+		t.Fatalf("view %v status=%s", h.m.view, h.m.status)
+	}
+	if out := screen(h.m); !strings.Contains(out, "511 bytes") {
+		t.Fatalf("too-long copy missing:\n%s", out)
+	}
+	h.m = typeInto(h.m, sentinel)
+	h.m = press(h.m, "ctrl+s")
+	if got := testutil.ReadRecord(t, rec); got.Stdin != sentinel+"\n" {
+		t.Fatalf("stdin %q", got.Stdin)
+	}
+	p, _ := h.m.app.Cfg.Profile("work")
+	if _, err := inner.Lookup(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p)); err != nil {
+		t.Fatalf("ctrl+s did not save over the old password: %v", err)
+	}
+}
+
 func TestModal_UseOnceDoesNotStore(t *testing.T) {
 	rec := withFakeRDP(t)
 	store := secret.NewMemory()

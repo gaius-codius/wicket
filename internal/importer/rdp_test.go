@@ -126,6 +126,8 @@ func TestParseRDP_ServerPort(t *testing.T) {
 		{"srv3", "3389", "srv3"},
 		{"srv3", "", "srv3"},
 		{"fe80::1", "3390", "[fe80::1]:3390"},
+		{"fe80::1", "", "[fe80::1]"},
+		{"fe80::1", "3389", "[fe80::1]"},
 		{"[fe80::1]", "3390", "[fe80::1]:3390"},
 		{"[fe80::1]:3391", "3390", "[fe80::1]:3391"},
 		{"srv3", "0", "srv3"},
@@ -181,6 +183,21 @@ func TestParseRDP_NoUserAndUPN(t *testing.T) {
 		t.Fatalf("upn: %+v", ps[1])
 	}
 	assertImports(t, ps)
+}
+
+// Only user@suffix is a UPN. A user that merely holds an "@" keeps its
+// domain, so the pair is still refused rather than imported without it.
+func TestParseRDP_DegenerateUPNKeepsDomain(t *testing.T) {
+	t.Parallel()
+	for _, user := range []string{"@", "alice@", "@corp.com"} {
+		p, _, err := ParseRDP([]byte("full address:s:h\nusername:s:"+user+"\ndomain:s:CORP\n"), "x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Domain != "CORP" {
+			t.Errorf("user %q: domain %q, want CORP kept", user, p.Domain)
+		}
+	}
 }
 
 // assertImports checks that every profile survives the import plan rather

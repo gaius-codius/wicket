@@ -142,13 +142,13 @@ func validatePort(port string) error {
 
 // validateUser allows an empty user: an imported file often has none (an
 // Azure Virtual Desktop download, a shared team file), and the profile must
-// still load so the TUI can ask for one. Saving and connecting need one; see
+// still load so the front end can ask for one. Saving and connecting need one; see
 // ErrNoUser.
 func validateUser(user string) error {
-	u := strings.TrimSpace(user)
-	if u == "" && user == "" {
+	if user == "" {
 		return nil
 	}
+	u := strings.TrimSpace(user)
 	if u != user {
 		return &FieldError{Field: "user", Msg: "must not have leading or trailing whitespace"}
 	}

@@ -15,12 +15,13 @@ func TestWriteSummary(t *testing.T) {
 		{Name: "work", User: "jdoe", Domain: "CORP"},
 		{Name: "lab", User: "alice@corp.com"},
 		{Name: "avd"},
+		{Name: "team", Domain: "CORP"},
 	}, []Skip{
 		{Name: "old-vnc", Reason: "not RDP"},
 		{Name: "bad-host", Reason: "host: invalid character"},
 	})
 	got := buf.String()
-	if !strings.Contains(got, `imported 3: work (CORP\jdoe), lab (alice@corp.com), avd (no user)`+"\n") {
+	if !strings.Contains(got, `imported 4: work (CORP\jdoe), lab (alice@corp.com), avd (no user), team (no user, domain CORP)`+"\n") {
 		t.Fatalf("imported line: %q", got)
 	}
 	if !strings.Contains(got, noUserNotice) {

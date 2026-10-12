@@ -48,6 +48,8 @@ func WriteSummary(w io.Writer, imported []config.Profile, skipped []Skip) {
 
 func account(p config.Profile) string {
 	switch {
+	case p.User == "" && p.Domain != "":
+		return "no user, domain " + p.Domain
 	case p.User == "":
 		return "no user"
 	case p.Domain != "":

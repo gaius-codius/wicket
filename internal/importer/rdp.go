@@ -95,6 +95,11 @@ func ParseRDP(data []byte, name string) (config.Profile, Skip, error) {
 // "full address" itself wins, and 3389 or a port that is not a number from 1
 // to 65535 leaves the host as it is.
 func withPort(host, port string) string {
+	if strings.Count(host, ":") > 1 && !strings.HasPrefix(host, "[") {
+		// A bare IPv6 address: its colons are not a port, and Wicket reads
+		// an unbracketed one as a malformed host:port.
+		host = "[" + host + "]"
+	}
 	port = strings.TrimSpace(port)
 	if host == "" || port == "" || strings.Trim(port, "0123456789") != "" {
 		return host
@@ -110,11 +115,8 @@ func withPort(host, port string) string {
 			return host
 		}
 		return host + ":" + port
-	case strings.Count(host, ":") == 1:
+	case strings.Contains(host, ":"):
 		return host
-	case strings.Count(host, ":") > 1:
-		// A bare IPv6 address: its colons are not a port.
-		return "[" + host + "]:" + port
 	default:
 		return host + ":" + port
 	}

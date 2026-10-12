@@ -141,9 +141,12 @@ func remminaSize(mode, w, h string) string {
 
 // dropUPNDomain keeps a UPN user (alice@corp.com) and drops a domain set
 // beside it: the UPN already names the domain, and the pair together is one
-// Wicket refuses, so the file was skipped.
+// Wicket refuses, so the file was skipped. Only a name on both sides of the
+// "@" is a UPN; "alice@" beside a domain is left to be skipped as before,
+// rather than lose the domain it needs.
 func dropUPNDomain(user, domain string) (string, string) {
-	if domain != "" && strings.Contains(user, "@") && !strings.Contains(user, `\`) {
+	name, suffix, ok := strings.Cut(user, "@")
+	if domain != "" && ok && name != "" && suffix != "" && !strings.Contains(user, `\`) {
 		return user, ""
 	}
 	return user, domain

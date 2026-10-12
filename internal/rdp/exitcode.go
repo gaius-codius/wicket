@@ -53,8 +53,8 @@ type KnownClient struct {
 // version-suffixed name to the unsuffixed one when both are installed, so a
 // Linux package of sdl-freerdp3 still wins over a stray sdl-freerdp. The
 // unsuffixed names are what Homebrew's freerdp formula puts on PATH, and
-// only count when they report FreeRDP 3. wlfreerdp3 is left out for now: how well it copes with Wicket's options is
-// still being looked into.
+// only count when they report FreeRDP 3. wlfreerdp3 is left out for now: how
+// well it copes with Wicket's options is still being looked into.
 var KnownClients = []KnownClient{
 	{ClientSDL, "FreeRDP's SDL client (native Wayland and X11)", false},
 	{ClientSDLHomebrew, "FreeRDP's SDL client (native Wayland and X11)", true},
@@ -66,7 +66,8 @@ var KnownClients = []KnownClient{
 // preference, leaving out an unversioned one that major does not report as
 // FreeRDP 3. lookPath and major are exec.LookPath and FreeRDPMajor in
 // production; tests pass their own so that nothing depends on what the
-// machine has installed. Each binary is run at most once per call.
+// machine has installed. Each binary is run at most once per call, however
+// many names link to it.
 func InstalledClients(lookPath func(string) (string, error), major func(path string) (int, bool)) []KnownClient {
 	var out []KnownClient
 	supported := map[string]bool{}
@@ -76,11 +77,16 @@ func InstalledClients(lookPath func(string) (string, error), major func(path str
 			continue
 		}
 		if c.Unversioned {
-			ok, seen := supported[path]
+			// Names that are links to one binary share its answer.
+			real, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				real = path
+			}
+			ok, seen := supported[real]
 			if !seen {
 				v, found := major(path)
 				ok = found && v == 3
-				supported[path] = ok
+				supported[real] = ok
 			}
 			if !ok {
 				continue

@@ -165,7 +165,9 @@ main() {
 		;;
 	esac
 
-	for c in sdl-freerdp3 sdl-freerdp xfreerdp3 xfreerdp; do
+	# The suffixed names first: they need no probe, and order does not matter
+	# for a warning.
+	for c in sdl-freerdp3 xfreerdp3 sdl-freerdp xfreerdp; do
 		if freerdp3 "$c"; then
 			return
 		fi
@@ -175,21 +177,31 @@ main() {
 
 # freerdp3 reports whether client $1 is on PATH and is FreeRDP 3. A name
 # with the 3 suffix says so itself. One without it can be FreeRDP 2 on Linux,
-# so it has to print "This is FreeRDP version 3." for --version within a few
-# seconds. Its exit status is not read: a build may report its version and
-# still exit non-zero. There is no timeout(1) on macOS, hence the watcher.
+# so it has to print "This is FreeRDP version 3.<minor>" for --version within
+# a few seconds. Its exit status is not read: a build may report its version
+# and still exit non-zero. There is no timeout(1) on macOS, hence the watcher,
+# which takes its sleep with it when it is stopped. It all runs in a subshell
+# with stderr discarded, or bash reports the killed client as a job.
 freerdp3() {
 	command -v "$1" >/dev/null 2>&1 || return 1
 	case "$1" in *3) return 0 ;; esac
 	fr_out="$tmp/freerdp-version"
 	rm -f "$fr_out" "$fr_out.timeout"
-	"$1" --version >"$fr_out" 2>&1 </dev/null &
-	fr_pid=$!
-	(sleep 3 && : >"$fr_out.timeout" && kill -KILL "$fr_pid" 2>/dev/null) >/dev/null 2>&1 &
-	fr_watch=$!
-	wait "$fr_pid" || :
-	kill "$fr_watch" 2>/dev/null || :
-	[ ! -e "$fr_out.timeout" ] && grep -q 'This is FreeRDP version 3\.' "$fr_out"
+	(
+		"$1" --version >"$fr_out" 2>&1 </dev/null &
+		fr_pid=$!
+		(
+			trap 'kill "$fr_sleep" 2>/dev/null; exit 0' TERM
+			sleep 3 &
+			fr_sleep=$!
+			wait "$fr_sleep" && : >"$fr_out.timeout" && kill -KILL "$fr_pid"
+		) &
+		fr_watch=$!
+		wait "$fr_pid" || :
+		kill "$fr_watch" || :
+		wait "$fr_watch" || :
+	) 2>/dev/null
+	[ ! -e "$fr_out.timeout" ] && grep -q 'This is FreeRDP version 3\.[0-9]' "$fr_out"
 }
 
 # Everything runs from here, so a download cut off mid-script does nothing.

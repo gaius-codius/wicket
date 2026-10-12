@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -65,10 +66,11 @@ type App struct {
 	// after Bubble Tea has returned whatever model it last had.
 	mu     sync.Mutex
 	active *Session
-	// majors remembers the versions clients reported, by path, so that
-	// opening the form does not run them again every time. A probe that
-	// failed is not remembered: a slow first start is tried again.
-	majors map[string]int
+	// majors remembers what each client said when asked its version, so
+	// that opening the form does not run it again every time. A probe that
+	// failed is remembered too: discovery runs in Update, and a client that
+	// hangs must freeze the TUI once, not on every form.
+	majors map[binaryKey]probed
 	// base is the parent of every keyring operation's context, cancelled
 	// when Wicket exits so that nothing is left waiting on the keyring.
 	base     context.Context
@@ -601,28 +603,44 @@ func (a *App) InstalledClients() []rdp.KnownClient {
 	return rdp.InstalledClients(a.lookPath, a.freerdpMajor)
 }
 
-// freerdpMajor is FreeRDPMajor, remembered by path once it has an answer.
+// binaryKey names one build of a client: an upgrade in place gives the
+// same path a new size or modification time, and so a fresh probe.
+type binaryKey struct {
+	path  string
+	size  int64
+	mtime time.Time
+}
+
+// probed is one version probe's answer.
+type probed struct {
+	major int
+	ok    bool
+}
+
+// freerdpMajor is FreeRDPMajor, remembered for each build of a client.
 func (a *App) freerdpMajor(path string) (int, bool) {
+	key := binaryKey{path: path}
+	if fi, err := os.Stat(path); err == nil {
+		key.size, key.mtime = fi.Size(), fi.ModTime()
+	}
 	a.mu.Lock()
-	v, ok := a.majors[path]
+	got, seen := a.majors[key]
 	a.mu.Unlock()
-	if ok {
-		return v, true
+	if seen {
+		return got.major, got.ok
 	}
 	probe := a.FreeRDPMajor
 	if probe == nil {
 		probe = rdp.FreeRDPMajor
 	}
-	v, ok = probe(path)
-	if ok {
-		a.mu.Lock()
-		if a.majors == nil {
-			a.majors = map[string]int{}
-		}
-		a.majors[path] = v
-		a.mu.Unlock()
+	got.major, got.ok = probe(path)
+	a.mu.Lock()
+	if a.majors == nil {
+		a.majors = map[binaryKey]probed{}
 	}
-	return v, ok
+	a.majors[key] = got
+	a.mu.Unlock()
+	return got.major, got.ok
 }
 
 // Installed reports whether client can be found on PATH.

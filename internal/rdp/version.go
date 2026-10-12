@@ -12,9 +12,9 @@ import (
 // An unsuffixed client name says nothing about its version: a Linux
 // distribution's xfreerdp can be FreeRDP 2, which Wicket does not support,
 // while Homebrew's is FreeRDP 3. Such a client is only offered once it says
-// it is FreeRDP 3. Both 2.x and 3.x print "This is FreeRDP version 3.31.1
-// (63b948ca5c)" for --version; the revision in brackets differs between
-// builds, so only the leading major version is read.
+// it is FreeRDP 3. Both 2.x and 3.x print a line such as "This is FreeRDP
+// version 3.31.1 (63b948ca5c)" for --version; the revision in brackets
+// differs between builds, so only the leading major version is read.
 
 // versionTimeout bounds a version probe. FreeRDP answers --version without
 // connecting to anything, so a client still running after this is not one
@@ -26,7 +26,9 @@ const versionTimeout = 3 * time.Second
 // memory until the timeout.
 const versionOutputLimit = 64 << 10
 
-var versionLine = regexp.MustCompile(`This is FreeRDP version (\d{1,4})\.`)
+// versionLine needs a minor version after the major, so a truncated or
+// mangled line such as "version 3." does not pass for one.
+var versionLine = regexp.MustCompile(`This is FreeRDP version (\d{1,4})\.\d`)
 
 // ParseFreeRDPMajor reads the major version from a client's --version
 // output. ok is false when the output holds no version line.

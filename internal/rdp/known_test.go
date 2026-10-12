@@ -1,7 +1,9 @@
 package rdp
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -115,6 +117,32 @@ func TestInstalledClients_RunsEachBinaryOnce(t *testing.T) {
 		}
 		return "", exec.ErrNotFound
 	}
+	got := InstalledClients(lookPath, func(string) (int, bool) { runs++; return 3, true })
+	if len(got) != 2 || runs != 1 {
+		t.Fatalf("installed %v after %d runs, want both after 1", got, runs)
+	}
+}
+
+// Names that are links to one binary run it once, as Homebrew-style
+// layouts can make them.
+func TestInstalledClients_RunsALinkedBinaryOnce(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "freerdp")
+	if err := os.WriteFile(bin, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sdl-freerdp", "xfreerdp"} {
+		if err := os.Symlink(bin, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lookPath := func(file string) (string, error) {
+		if file == "sdl-freerdp" || file == "xfreerdp" {
+			return filepath.Join(dir, file), nil
+		}
+		return "", exec.ErrNotFound
+	}
+	runs := 0
 	got := InstalledClients(lookPath, func(string) (int, bool) { runs++; return 3, true })
 	if len(got) != 2 || runs != 1 {
 		t.Fatalf("installed %v after %d runs, want both after 1", got, runs)

@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -282,23 +285,55 @@ func TestNewProfile_SkipsFreeRDP2(t *testing.T) {
 	}
 }
 
-// A probe that fails is asked again next time rather than remembered, so a
-// slow first start does not hide a FreeRDP 3 client for the whole session.
-func TestInstalledClients_RetriesAFailedProbe(t *testing.T) {
+// A probe that fails, a client that hangs say, is remembered like any other
+// answer: discovery runs in Update, so asking again on every form would
+// freeze the TUI every time.
+func TestInstalledClients_RemembersAFailedProbe(t *testing.T) {
 	h := clientHarness(t, "", rdp.ClientX11Homebrew)
-	fail := true
-	h.m.app.FreeRDPMajor = func(string) (int, bool) {
-		if fail {
-			return 0, false
+	runs := 0
+	h.m.app.FreeRDPMajor = func(string) (int, bool) { runs++; return 0, false }
+	for range 3 {
+		if got := h.m.app.InstalledClients(); len(got) != 0 {
+			t.Fatalf("failed probe offered %v", got)
 		}
-		return 3, true
 	}
-	if got := h.m.app.InstalledClients(); len(got) != 0 {
-		t.Fatalf("failed probe offered %v", got)
+	if runs != 1 {
+		t.Fatalf("failed probe ran %d times", runs)
 	}
-	fail = false
-	if got := h.m.app.InstalledClients(); len(got) != 1 || got[0].Name != rdp.ClientX11Homebrew {
-		t.Fatalf("after a good probe: %v", got)
+}
+
+// A client replaced in place is asked again: what it said before was about
+// another build.
+func TestInstalledClients_ReprobesAReplacedBinary(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), rdp.ClientX11Homebrew)
+	if err := os.WriteFile(bin, []byte("3"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := clientHarness(t, "")
+	h.m.app.LookPath = func(file string) (string, error) {
+		if file == rdp.ClientX11Homebrew {
+			return bin, nil
+		}
+		return "", exec.ErrNotFound
+	}
+	runs := 0
+	h.m.app.FreeRDPMajor = func(path string) (int, bool) {
+		runs++
+		b, _ := os.ReadFile(path)
+		return int(b[0] - '0'), true
+	}
+	if got := h.m.app.InstalledClients(); len(got) != 1 {
+		t.Fatalf("version 3 not offered: %v", got)
+	}
+	h.m.app.InstalledClients()
+	if runs != 1 {
+		t.Fatalf("unchanged binary probed %d times", runs)
+	}
+	if err := os.WriteFile(bin, []byte("2 "), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.m.app.InstalledClients(); len(got) != 0 || runs != 2 {
+		t.Fatalf("after the swap to version 2: offered %v after %d probes", got, runs)
 	}
 }
 
@@ -313,6 +348,9 @@ func TestFormClient_KeepsAFreeRDP2Profile(t *testing.T) {
 	}
 	if row := clientRow(t, m); !strings.Contains(row, rdp.ClientX11Homebrew) || strings.Contains(row, notFound) {
 		t.Fatalf("row %q", row)
+	}
+	if help := m.form.clientHelp(); !strings.HasPrefix(help, "Not FreeRDP 3") {
+		t.Fatalf("help %q", help)
 	}
 	m = press(m, "ctrl+s")
 	if p, _ := m.app.Cfg.Profile("work"); m.view != viewList || p.Client != rdp.ClientX11Homebrew {

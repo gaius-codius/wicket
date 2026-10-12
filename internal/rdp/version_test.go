@@ -22,6 +22,8 @@ func TestParseFreeRDPMajor(t *testing.T) {
 		{"This is FreeRDP version\n", 0, false},
 		{"This is FreeRDP version x.1\n", 0, false},
 		{"This is FreeRDP version 3\n", 0, false},
+		{"This is FreeRDP version 3.\n", 0, false},
+		{"This is FreeRDP version 3.garbage\n", 0, false},
 		{"xfreerdp: unknown option --version\n", 0, false},
 		{"FreeRDP 3.31.1\n", 0, false},
 	} {

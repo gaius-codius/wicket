@@ -278,6 +278,14 @@ func TestConnect_KeyringErrors(t *testing.T) {
 			[]string{"Save password"}, []string{"keyring"}, 1},
 		{"unavailable/tty", unavailable, true, 0,
 			[]string{"cannot reach the keyring", "no session bus"}, []string{"Save password"}, 0},
+		// A saved password that cannot be used was read fine, so it takes
+		// neither path above: no prompt, no keyring warning, no client.
+		{"too long/no tty", secret.ErrTooLong, false, 2,
+			[]string{"saved password cannot be used", "511 bytes"}, []string{"keyring", "no stored password"}, 0},
+		{"too long/tty", secret.ErrTooLong, true, 2,
+			[]string{"saved password cannot be used", "511 bytes"}, []string{"keyring", "Password:", "Save password"}, 0},
+		{"line break/tty", secret.ErrCRLF, true, 2,
+			[]string{"saved password cannot be used", "CR or LF"}, []string{"keyring", "Password:", "Save password"}, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -326,7 +334,11 @@ func TestConnect_KeyringErrors(t *testing.T) {
 			if store.upserts != tc.upserts {
 				t.Errorf("upserts %d, want %d", store.upserts, tc.upserts)
 			}
-			if tc.tty {
+			if tc.code != 0 {
+				if _, err := os.Stat(rec); !os.IsNotExist(err) {
+					t.Errorf("client started: %v", err)
+				}
+			} else if tc.tty {
 				if rr := testutil.ReadRecord(t, rec); rr.Stdin != "typed\n" {
 					t.Errorf("client stdin %q, want the typed password", rr.Stdin)
 				}

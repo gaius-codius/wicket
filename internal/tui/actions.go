@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -55,12 +56,21 @@ type App struct {
 	// profile's default and the retry view's hints. nil means the launcher's
 	// runner, which is exec.LookPath unless a test says otherwise.
 	LookPath func(string) (string, error)
+	// FreeRDPMajor asks a client found on PATH for its major version, to
+	// tell an unsuffixed FreeRDP 3 client from FreeRDP 2. nil means
+	// rdp.FreeRDPMajor, which runs it.
+	FreeRDPMajor func(path string) (int, bool)
 
 	// active is the session running now, if any. It is kept here rather
 	// than only in the model so that Wicket can stop it on the way out,
 	// after Bubble Tea has returned whatever model it last had.
 	mu     sync.Mutex
 	active *Session
+	// majors remembers what each client said when asked its version, so
+	// that opening the form does not run it again every time. A probe that
+	// failed is remembered too: discovery runs in Update, and a client that
+	// hangs must freeze the TUI once, not on every form.
+	majors map[binaryKey]probed
 	// base is the parent of every keyring operation's context, cancelled
 	// when Wicket exits so that nothing is left waiting on the keyring.
 	base     context.Context
@@ -586,10 +596,51 @@ func (a *App) lookPath(file string) (string, error) {
 	return rdp.OSRunner{}.LookPath(file)
 }
 
-// InstalledClients lists the known FreeRDP clients on PATH, most preferred
-// first. It searches PATH, so callers ask once, not on every frame.
+// InstalledClients lists the known FreeRDP 3 clients on PATH, most
+// preferred first. It searches PATH and may run an unsuffixed client to ask
+// its version, so callers ask once, not on every frame.
 func (a *App) InstalledClients() []rdp.KnownClient {
-	return rdp.InstalledClients(a.lookPath)
+	return rdp.InstalledClients(a.lookPath, a.freerdpMajor)
+}
+
+// binaryKey names one build of a client: an upgrade in place gives the
+// same path a new size or modification time, and so a fresh probe.
+type binaryKey struct {
+	path  string
+	size  int64
+	mtime time.Time
+}
+
+// probed is one version probe's answer.
+type probed struct {
+	major int
+	ok    bool
+}
+
+// freerdpMajor is FreeRDPMajor, remembered for each build of a client.
+func (a *App) freerdpMajor(path string) (int, bool) {
+	key := binaryKey{path: path}
+	if fi, err := os.Stat(path); err == nil {
+		key.size, key.mtime = fi.Size(), fi.ModTime()
+	}
+	a.mu.Lock()
+	got, seen := a.majors[key]
+	a.mu.Unlock()
+	if seen {
+		return got.major, got.ok
+	}
+	probe := a.FreeRDPMajor
+	if probe == nil {
+		probe = rdp.FreeRDPMajor
+	}
+	got.major, got.ok = probe(path)
+	a.mu.Lock()
+	if a.majors == nil {
+		a.majors = map[binaryKey]probed{}
+	}
+	a.majors[key] = got
+	a.mu.Unlock()
+	return got.major, got.ok
 }
 
 // Installed reports whether client can be found on PATH.

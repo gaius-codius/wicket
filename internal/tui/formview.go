@@ -468,11 +468,15 @@ func (f *formState) clientHelp() string {
 	const choose = " `←/→` to choose."
 	switch {
 	case f.detected == 0:
-		return "No FreeRDP client found on PATH. Type a binary name."
+		return "No FreeRDP 3 client found on PATH. Type a binary name."
 	case f.clientCustom():
 		return "Any FreeRDP-compatible binary on PATH. `←` from the start goes back."
 	case f.clients[f.clientAt] == f.clientMissing:
 		return "Not found on PATH; kept until you choose another." + choose
+	case f.clientAt >= f.detected && rdp.IsFreeRDP(f.clients[f.clientAt]):
+		// A known name on PATH that discovery passed over: an unsuffixed
+		// client that did not report FreeRDP 3.
+		return "Not FreeRDP 3 by its --version; kept until you choose another." + choose
 	}
 	if about, ok := rdp.AboutClient(f.clients[f.clientAt]); ok {
 		return about + "." + choose

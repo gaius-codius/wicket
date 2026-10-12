@@ -226,3 +226,39 @@ func TestImportRemmina_SkipEscapesControlCharacters(t *testing.T) {
 		t.Fatalf("stdout %q", got.stdout)
 	}
 }
+
+// Imported profiles take the preferred FreeRDP 3 client: an unsuffixed
+// xfreerdp counts only when its --version says 3, exit status aside.
+func TestImport_ClientNeedsFreeRDP3(t *testing.T) {
+	for _, tc := range []struct {
+		name, script, want string
+	}{
+		{"freerdp 2", `echo "This is FreeRDP version 2.11.7 (2.11.7)"`, config.DefaultClient},
+		{"freerdp 3", `echo "This is FreeRDP version 3.31.1 (63b948ca5c)"`, "xfreerdp"},
+		{"freerdp 3, exit 1", `echo "This is FreeRDP version 3.31.1 (63b948ca5c)"; exit 1`, "xfreerdp"},
+		{"no version", `echo "usage: xfreerdp [options]"; exit 1`, config.DefaultClient},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfgPath := filepath.Join(t.TempDir(), "config.toml")
+			t.Setenv("WICKET_CONFIG", cfgPath)
+			t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+			bin := t.TempDir()
+			if err := os.WriteFile(filepath.Join(bin, "xfreerdp"), []byte("#!/bin/sh\n"+tc.script+"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// Only the stand-in is on PATH, whatever this machine has.
+			t.Setenv("PATH", bin)
+			file := filepath.Join("..", "..", "internal", "importer", "testdata", "upn.rdp")
+			if got := runCLI(t, []string{"import", "rdp", file}); got.code != 0 {
+				t.Fatalf("import exit %d stderr %q", got.code, got.stderr)
+			}
+			c, err := config.Open(cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p, _ := c.Profile("upn"); p.Client != tc.want {
+				t.Fatalf("client %q, want %q", p.Client, tc.want)
+			}
+		})
+	}
+}

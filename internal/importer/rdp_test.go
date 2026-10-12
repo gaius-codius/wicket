@@ -331,7 +331,7 @@ func TestParseRDP_DriveSymlinkToHome(t *testing.T) {
 	if err := os.Symlink(home, link); err != nil {
 		t.Fatal(err)
 	}
-	p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:"+link+";/tmp(/home)\n"), "x")
+	p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:"+link+";/tmp("+filepath.Dir(home)+")\n"), "x")
 	if err != nil {
 		t.Fatal(err)
 	}

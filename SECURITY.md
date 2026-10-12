@@ -36,8 +36,8 @@ The latest release. There are no backports to earlier tags.
 - **Profile fields reject control characters.** A newline or an escape sequence
   in a hostname would otherwise reach both the terminal and the FreeRDP command
   line.
-- **Password length is bounded** at 511 bytes, the most FreeRDP reads from
-  stdin, so a password is never cut short on its way to the host and a
+- **Password length is bounded** at 511 bytes, the most FreeRDP keeps on
+  every path it reads a password by, so a password is never cut short on its way to the host and a
   pathological value cannot be used to stall a write to the client. A saved
   password over the limit is reported when connecting, not used.
 - **Keyring prompts are completed, not ignored.** A write against a locked

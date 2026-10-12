@@ -36,7 +36,7 @@ func TestModal_SavedPasswordTooLongCanBeReplaced(t *testing.T) {
 	if h.m.view != viewModal {
 		t.Fatalf("view %v status=%s", h.m.view, h.m.status)
 	}
-	if out := screen(h.m); !strings.Contains(out, "too long") {
+	if out := screen(h.m); !strings.Contains(out, "511 bytes") {
 		t.Fatalf("too-long copy missing:\n%s", out)
 	}
 	h.m = typeInto(h.m, sentinel)

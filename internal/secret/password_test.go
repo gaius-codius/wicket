@@ -37,8 +37,8 @@ func TestPassword_Redacted(t *testing.T) {
 	}
 }
 
-// FreeRDP reads /from-stdin into a 512-byte buffer that also holds the
-// newline, so a longer password would reach the host cut short. The bounds
+// FreeRDP keeps at most 511 bytes of a password on one of its read paths, so
+// a longer one could reach the host cut short. The bounds
 // are spelled out rather than taken from the constant, which a test of the
 // constant could not catch being wrong.
 func TestNewPassword_RejectsOneTheClientWouldCutShort(t *testing.T) {

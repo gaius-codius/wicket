@@ -8,10 +8,11 @@ import (
 	"strings"
 )
 
-// maxPasswordLen is the longest password the client can be handed. FreeRDP
-// reads /from-stdin into a 512-byte buffer that also holds the newline
-// (client/common/cmdline.c), so anything longer is cut short and the user sees
-// only a failed login. It also keeps the write to the client's stdin well
+// maxPasswordLen is the longest password the client can be handed whole.
+// FreeRDP reads it into a 512-byte buffer (client/common/cmdline.c), and with
+// FREERDP_ASKPASS set, fgets keeps only 511 bytes of that
+// (libfreerdp/utils/passphrase.c). Anything longer is cut short and the user
+// sees only a failed login. It also keeps the write to the client's stdin well
 // inside the pipe buffer: the write happens before the child is known to be
 // reading, and a value larger than the buffer would deadlock the launch.
 const maxPasswordLen = 511

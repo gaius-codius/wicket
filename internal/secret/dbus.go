@@ -163,36 +163,33 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 	if err := svc.CallWithContext(ctx, ssServiceIface+".GetSecrets", 0, items, session).Store(&secrets); err != nil {
 		return LookupResult{}, unavailable(ctx, err)
 	}
+	// A match whose password Wicket cannot use stays in the running: the
+	// newest item is the one the user saved last, and falling back to an
+	// older one would send a stale password with no word of why. Its error
+	// is returned instead, which is not the same as "not found" either.
 	type hit struct {
 		pw  Password
+		err error
 		mod uint64
 	}
 	var hits []hit
-	var rejected error
 	for p, sec := range secrets {
 		pw, err := NewPassword(string(sec.Value))
 		// The transport buffer is ours and is zeroable, unlike the string
 		// inside Password. Clear it as soon as it has been copied, including
 		// for the matches we do not return.
 		clear(sec.Value)
-		if err != nil {
-			rejected = err
-			continue
-		}
 		var mod uint64
 		_ = conn.Object(ssBus, p).CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, ssItemIface, "Modified").Store(&mod)
-		hits = append(hits, hit{pw: pw, mod: mod})
+		hits = append(hits, hit{pw: pw, err: err, mod: mod})
 	}
 	if len(hits) == 0 {
-		// A saved password Wicket cannot use is not the same as none:
-		// "not found" would ask for a new one without saying what was wrong
-		// with the old. The Keychain store returns the same error.
-		if rejected != nil {
-			return LookupResult{}, rejected
-		}
 		return LookupResult{}, ErrNotFound
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].mod > hits[j].mod })
+	if hits[0].err != nil {
+		return LookupResult{}, hits[0].err
+	}
 	return LookupResult{Password: hits[0].pw, Multiple: len(hits) > 1}, nil
 }
 

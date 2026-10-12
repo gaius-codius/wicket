@@ -193,18 +193,28 @@ func TestDBus_LookupReportsASavedPasswordTooLongToUse(t *testing.T) {
 		t.Fatalf("err = %v, want ErrTooLong", err)
 	}
 
-	// One usable match is still used, whatever else is stored.
-	srv.Seed(id.Attrs(), "s3cret", 500)
+	// An older usable password is not used in its place: it is likely stale,
+	// and sending it would fail the login with no reason given.
+	srv.Seed(id.Attrs(), "older", 500)
+	if _, err := NewDBus().Lookup(bg, id); !errors.Is(err, ErrTooLong) {
+		t.Fatalf("with an older usable match: err = %v, want ErrTooLong", err)
+	}
+
+	// A newer usable one is used, and the other matches are still counted.
+	srv.Seed(id.Attrs(), "newer", 2000)
 	got, err := NewDBus().Lookup(bg, id)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !got.Multiple {
+		t.Fatal("three matching items must be reported as multiple")
 	}
 	var buf bytes.Buffer
 	if err := got.Password.WriteLine(&buf); err != nil {
 		t.Fatal(err)
 	}
-	if buf.String() != "s3cret\n" {
-		t.Fatalf("lookup %q", buf.String())
+	if buf.String() != "newer\n" {
+		t.Fatalf("lookup %q, want the most recently modified", buf.String())
 	}
 }
 

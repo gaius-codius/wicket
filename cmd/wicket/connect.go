@@ -102,9 +102,10 @@ func execLookPath(client string) (string, error) {
 }
 
 // resolveCLICredential finds the password for id, asking on a terminal when
-// the keyring has none or cannot be reached; only the first offers to save it. Each keyring call is bounded by secret.OpTimeout, which
-// leaves room to answer an unlock prompt; Ctrl+C or SIGTERM end the wait
-// sooner, since nothing is running yet that could be left behind.
+// the keyring has none or cannot be reached; only a missing password offers
+// to save the typed one. Each keyring call is bounded by secret.OpTimeout,
+// which leaves room to answer an unlock prompt; Ctrl+C or SIGTERM end the
+// wait sooner, since nothing is running yet that could be left behind.
 func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profile, stderr io.Writer) (rdp.Credential, error) {
 	id := secret.IdentityFor(cfg.Path(), p)
 	ctx, cancel := context.WithTimeout(context.Background(), secret.OpTimeout)
@@ -130,7 +131,7 @@ func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profi
 		return nil, fmt.Errorf("no stored password for this profile; save one from the TUI first")
 	}
 	if unavailable {
-		fmt.Fprintf(stderr, "warning: keyring unavailable (%v); the password will not be saved\n", err)
+		fmt.Fprintf(stderr, "warning: cannot reach the keyring (%v); the password will not be saved\n", err)
 	}
 	fmt.Fprint(stderr, "Password: ")
 	b, err := readPassword(int(in.Fd()))

@@ -275,9 +275,9 @@ func TestConnect_KeyringErrors(t *testing.T) {
 		{"unavailable/no tty", unavailable, false, 2,
 			[]string{"keyring", "no session bus"}, []string{"no stored password", "TUI"}, 0},
 		{"not found/tty", secret.ErrNotFound, true, 0,
-			[]string{"Save password"}, []string{"keyring unavailable"}, 1},
+			[]string{"Save password"}, []string{"keyring"}, 1},
 		{"unavailable/tty", unavailable, true, 0,
-			[]string{"keyring unavailable", "no session bus"}, []string{"Save password"}, 0},
+			[]string{"cannot reach the keyring", "no session bus"}, []string{"Save password"}, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -337,8 +337,8 @@ func TestConnect_KeyringErrors(t *testing.T) {
 
 // The sandbox points DBUS_SESSION_BUS_ADDRESS at a socket that does not
 // exist, so the real Secret Service store fails the way it does on a machine
-// with no session bus. This checks that failure reaches the user as a keyring
-// problem, not as the stub's say-so.
+// with no session bus. This checks that the real store's error, not only the
+// failingStore's, reaches the user as a keyring problem.
 func TestConnect_NoSessionBus(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the Secret Service store is the default only on Linux")

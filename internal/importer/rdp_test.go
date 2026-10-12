@@ -115,3 +115,46 @@ func TestParseRDP_Encodings(t *testing.T) {
 		}
 	}
 }
+
+func TestParseRDP_ServerPort(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ addr, port, want string }{
+		{"srv3", "3390", "srv3:3390"},
+		{"srv3:3391", "3390", "srv3:3391"},
+		{"srv3", "3389", "srv3"},
+		{"srv3", "", "srv3"},
+		{"fe80::1", "3390", "[fe80::1]:3390"},
+		{"[fe80::1]", "3390", "[fe80::1]:3390"},
+		{"[fe80::1]:3391", "3390", "[fe80::1]:3391"},
+		{"srv3", "0", "srv3"},
+		{"srv3", "65536", "srv3"},
+		{"srv3", "-1", "srv3"},
+		{"srv3", "+3390", "srv3"},
+		{"srv3", "33x", "srv3"},
+		{"srv3", " 3390 ", "srv3:3390"},
+		{"", "3390", ""},
+	} {
+		doc := "full address:s:" + tc.addr + "\n"
+		if tc.port != "" {
+			doc += "server port:i:" + tc.port + "\n"
+		}
+		p, _, err := ParseRDP([]byte(doc), "srv")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Host != tc.want {
+			t.Errorf("full address %q, server port %q: host %q, want %q", tc.addr, tc.port, p.Host, tc.want)
+		}
+	}
+}
+
+func TestParseRDP_PortFixture(t *testing.T) {
+	t.Parallel()
+	p, _, err := ParseRDPFile(filepath.Join("testdata", "port.rdp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Host != "srv3:3390" {
+		t.Fatalf("host %q", p.Host)
+	}
+}

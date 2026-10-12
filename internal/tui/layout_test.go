@@ -21,6 +21,33 @@ func sized(t *testing.T, cfg string, w, h int, keys ...string) Model {
 	return m
 }
 
+// span lists lo through hi. Under the race detector it takes every third
+// value plus both ends and keep, the sizes where the layout changes, so the
+// sweeps finish in minutes; the normal run still covers every size.
+func span(lo, hi int, keep ...int) []int {
+	step := 1
+	if raceEnabled {
+		step = 3
+	}
+	var vs []int
+	for v := lo; v < hi; v += step {
+		vs = append(vs, v)
+	}
+	vs = append(vs, hi)
+	if raceEnabled {
+		for _, k := range keep {
+			if k > lo && k < hi && (k-lo)%step != 0 {
+				vs = append(vs, k)
+			}
+		}
+	}
+	return vs
+}
+
+// breakpoints are the widths where the layout changes, which every sampled
+// width sweep keeps.
+var breakpoints = []int{widthCompact, panelNormal, widthWide}
+
 func measure(s string) (w, h int) {
 	lines := strings.Split(s, "\n")
 	for _, ln := range lines {
@@ -38,8 +65,8 @@ func TestRender_NeverOverflowsTheWindow(t *testing.T) {
 	}
 	cfg := fixtureTOML("a-connection-with-a-long-name", "host.example.invalid", "user")
 	var bad int
-	for w := widthTiny; w <= 130; w++ {
-		for h := heightTiny; h <= 30; h++ {
+	for _, w := range span(widthTiny, 130, breakpoints...) {
+		for _, h := range span(heightTiny, 30) {
 			// "e" matters as much as "n": the edit form is the only one whose
 			// fields hold values, and a value wider than its column is what
 			// used to wrap the row and push the bottom border off screen.
@@ -60,8 +87,8 @@ func TestRender_NeverOverflowsTheWindow(t *testing.T) {
 	p, _ := base.m.app.Cfg.Profile("a-connection-with-a-long-name")
 	for _, stopping := range []bool{false, true} {
 		m := withSession(base.m, p, stopping)
-		for w := widthTiny; w <= 130; w++ {
-			for h := heightTiny; h <= 30; h++ {
+		for _, w := range span(widthTiny, 130, breakpoints...) {
+			for _, h := range span(heightTiny, 30) {
 				nm, _ := m.Update(teaWin(w, h))
 				gotW, gotH := measure(nm.(Model).render())
 				if gotW > w || gotH > h {
@@ -118,12 +145,9 @@ func TestForm_RowsNeverWrap(t *testing.T) {
 		// Past panelNormal the form's panel stops growing, so every wider
 		// window draws the same form; the wide layout and the sweep's
 		// widest size stand in for the rest.
-		widths := []int{widthWide, 130}
-		for w := widthTiny; w <= panelNormal; w++ {
-			widths = append(widths, w)
-		}
+		widths := append([]int{widthWide, 130}, span(widthTiny, panelNormal, breakpoints...)...)
 		for _, w := range widths {
-			for h := heightTiny; h <= 30; h++ {
+			for _, h := range span(heightTiny, 30) {
 				nm, _ := opened.Update(teaWin(w, h))
 				m := nm.(Model)
 				for _, id := range m.form.fields() {
@@ -253,7 +277,7 @@ func TestDialogs_KeepWhatMatters(t *testing.T) {
 	withFakeRDP(t)
 	cfg := fixtureTOML("work", "host.invalid", "user")
 	for w := 20; w <= 130; w += 2 {
-		for h := heightTiny; h <= 30; h++ {
+		for _, h := range span(heightTiny, 30) {
 			del := stripANSI(sized(t, cfg, w, h, "D").render())
 			if !strings.Contains(del, "Delete") {
 				t.Fatalf("%dx%d: the delete confirmation names nothing:\n%s", w, h, del)

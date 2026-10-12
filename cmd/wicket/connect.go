@@ -52,6 +52,13 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown profile %q\n", name)
 		return 2
 	}
+	if p.User == "" {
+		// An import can leave a profile with no user. Say so in Wicket's
+		// words, rather than BuildPlan's "user: must not be empty", and
+		// never hand FreeRDP an empty /u: to sign in as nobody.
+		fmt.Fprintf(stderr, "profile %q has no user: open it in wicket and add one before connecting\n", name)
+		return 2
+	}
 	plan, err := rdp.BuildPlan(p)
 	if err != nil {
 		fmt.Fprintln(stderr, err)

@@ -143,11 +143,15 @@ func validatePort(port string) error {
 	return nil
 }
 
+// validateUser allows an empty user: an imported file often has none (an
+// Azure Virtual Desktop download, a shared team file), and the profile must
+// still load so the front end can ask for one. Saving and connecting need one; see
+// ErrNoUser.
 func validateUser(user string) error {
-	u := strings.TrimSpace(user)
-	if u == "" {
-		return &FieldError{Field: "user", Msg: "must not be empty"}
+	if user == "" {
+		return nil
 	}
+	u := strings.TrimSpace(user)
 	if u != user {
 		return &FieldError{Field: "user", Msg: "must not have leading or trailing whitespace"}
 	}
@@ -249,6 +253,9 @@ func ValidateProfileInUse(p Profile) error {
 	if err := ValidateProfile(p); err != nil {
 		return err
 	}
+	if p.User == "" {
+		return ErrNoUser
+	}
 	// No host name or address has a space in it, and FreeRDP would get
 	// "/v:bad host" as one argument and fail on it at connect time.
 	if strings.ContainsFunc(strings.TrimSpace(p.Host), unicode.IsSpace) {
@@ -259,6 +266,11 @@ func ValidateProfileInUse(p Profile) error {
 	}
 	return validateSharesExist(p)
 }
+
+// ErrNoUser is a profile with no user, as an import may leave one, asked to
+// save or connect. FreeRDP would otherwise be launched with "/u:" and sign
+// in as nobody, or prompt on a terminal Wicket owns.
+var ErrNoUser = &FieldError{Field: "user", Msg: "must not be empty"}
 
 // validateSizeInRange refuses a width or height FreeRDP would reject. It is
 // held to save and connect, not load: a hand-edited "70000x1080" used to be

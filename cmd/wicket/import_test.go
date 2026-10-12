@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gaius-codius/wicket/internal/config"
+	"github.com/gaius-codius/wicket/internal/testutil"
 )
 
 func TestImportRemmina_DryRunAndWrite(t *testing.T) {
@@ -130,5 +131,34 @@ func TestImport_DoubleDashEndsFlags(t *testing.T) {
 	got := runCLI(t, []string{"import", "rdp", "--dry-run", "--", "-odd.rdp"})
 	if got.code != 1 || !strings.Contains(got.stdout, "-odd (name: must not start with '-')") {
 		t.Fatalf("exit %d stdout %q stderr %q", got.code, got.stdout, got.stderr)
+	}
+}
+
+// A file with no user, and one with a UPN user beside a domain, import
+// rather than being skipped; the profile with no user then will not connect
+// until it has one, and says why.
+func TestImportRDP_NoUserAndUPN(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	t.Setenv("WICKET_CONFIG", cfgPath)
+	t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+	dir := filepath.Join("..", "..", "internal", "importer", "testdata")
+	files := []string{filepath.Join(dir, "nouser.rdp"), filepath.Join(dir, "upn.rdp")}
+
+	got := runCLI(t, append([]string{"import", "rdp", "--dry-run"}, files...))
+	if got.code != 0 {
+		t.Fatalf("dry-run exit %d stdout %q stderr %q", got.code, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "imported 2: nouser (no user), upn (alice@corp.com)\n") {
+		t.Fatalf("stdout %q", got.stdout)
+	}
+
+	got = runCLI(t, append([]string{"import", "rdp"}, files...))
+	if got.code != 0 {
+		t.Fatalf("import exit %d stdout %q stderr %q", got.code, got.stdout, got.stderr)
+	}
+	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
+	got = runCLI(t, []string{"connect", "nouser"})
+	if got.code != 2 || !strings.Contains(got.stderr, `profile "nouser" has no user`) {
+		t.Fatalf("connect exit %d stderr %q", got.code, got.stderr)
 	}
 }

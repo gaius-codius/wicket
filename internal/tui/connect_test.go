@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -289,5 +290,40 @@ func TestRetry_NewPasswordDoesNotClaimThereIsNone(t *testing.T) {
 	}
 	if !strings.Contains(out, "Connect to work") || !strings.Contains(out, "Type a new password") {
 		t.Fatalf("%s", out)
+	}
+}
+
+// An import can leave a profile with no user. Connecting it opens the form at
+// the user field instead of launching the client, the form will not save
+// without one, and once one is typed the profile connects as that user.
+func TestConnect_NoUserAsksForOne(t *testing.T) {
+	rec := withFakeRDP(t)
+	store := secret.NewMemory()
+	h := newHarness(t, fixtureTOML("avd", "avd.example", ""), store)
+	p, _ := h.m.app.Cfg.Profile("avd")
+	_ = store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
+	if out := screen(h.m); !strings.Contains(out, noUserMsg) {
+		t.Fatalf("card does not say the user is missing:\n%s", out)
+	}
+	h.m = press(h.m, "enter")
+	if h.m.view != viewForm || h.m.form.field != fieldUser || h.m.form.errField != fieldUser {
+		t.Fatalf("view=%v field=%d errField=%d, want the form at the user field", h.m.view, h.m.form.field, h.m.form.errField)
+	}
+	if out := screen(h.m); !strings.Contains(out, noUserMsg) {
+		t.Fatalf("form does not say why:\n%s", out)
+	}
+	h.m = press(h.m, "ctrl+s")
+	if h.m.view != viewForm || h.m.form.errField != fieldUser {
+		t.Fatalf("saved with no user: view=%v err=%q", h.m.view, h.m.form.err)
+	}
+	h.m = typeInto(h.m, "alice")
+	h.m = press(h.m, "ctrl+s")
+	if h.m.view != viewList || h.m.statusKind != statusSuccess {
+		t.Fatalf("after save view=%v status=%q err=%s", h.m.view, h.m.status, h.m.form.err)
+	}
+	h.m = press(h.m, "enter")
+	got := testutil.ReadRecord(t, rec)
+	if !slices.Contains(got.Argv, "/u:alice") {
+		t.Fatalf("argv %v, want /u:alice", got.Argv)
 	}
 }

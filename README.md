@@ -82,7 +82,9 @@ Press `?` in the TUI for keys and field help.
 
 `wicket import` brings Remmina (`*.remmina`, RDP only) or Microsoft `.rdp`
 files into wicket profiles. Import only — there is no export or sync.
-Passwords are never imported; you enter them on first connect. Use
+Passwords are never imported; you enter them on first connect. A file with
+no username imports with none, and the TUI asks for one when you connect;
+`wicket connect` refuses it until one is set. Use
 `--dry-run` to preview, and `--rename` to append `-2`, `-3`… on name
 collisions (otherwise collisions are skipped). It exits 1 when entries were
 found but none was imported.

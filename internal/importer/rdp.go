@@ -59,7 +59,7 @@ func ParseRDP(data []byte, name string) (config.Profile, Skip, error) {
 	}
 	p := config.DefaultProfile()
 	p.Name = name
-	p.Host = strings.TrimSpace(vals["full address"])
+	p.Host = withPort(strings.TrimSpace(vals["full address"]), vals["server port"])
 	user := strings.TrimSpace(vals["username"])
 	domain := strings.TrimSpace(vals["domain"])
 	if user != "" {
@@ -72,7 +72,7 @@ func ParseRDP(data []byte, name string) (config.Profile, Skip, error) {
 			p.User = user
 		}
 	}
-	p.Domain = domain
+	p.User, p.Domain = dropUPNDomain(p.User, domain)
 	if sm, ok := vals["screen mode id"]; ok {
 		if n, err := strconv.Atoi(strings.TrimSpace(sm)); err == nil && n == 2 {
 			p.Fullscreen = true
@@ -89,6 +89,40 @@ func ParseRDP(data []byte, name string) (config.Profile, Skip, error) {
 	}
 	return p, Skip{}, nil
 }
+
+// withPort adds the separate "server port" the Windows client writes to a
+// host that names none. Without it the session went to 3389. A port in
+// "full address" itself wins, and 3389 or a port that is not a number from 1
+// to 65535 leaves the host as it is.
+func withPort(host, port string) string {
+	if strings.Count(host, ":") > 1 && !strings.HasPrefix(host, "[") {
+		// A bare IPv6 address: its colons are not a port, and Wicket reads
+		// an unbracketed one as a malformed host:port.
+		host = "[" + host + "]"
+	}
+	port = strings.TrimSpace(port)
+	if host == "" || port == "" || strings.Trim(port, "0123456789") != "" {
+		return host
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 || n == rdpDefaultPort {
+		return host
+	}
+	port = strconv.Itoa(n)
+	switch {
+	case strings.HasPrefix(host, "["):
+		if strings.Contains(host[strings.LastIndexByte(host, ']')+1:], ":") {
+			return host
+		}
+		return host + ":" + port
+	case strings.Contains(host, ":"):
+		return host
+	default:
+		return host + ":" + port
+	}
+}
+
+const rdpDefaultPort = 3389
 
 // decodeRDP returns the file as UTF-8 text. The Windows client saves .rdp
 // files as UTF-16LE with a byte-order mark; other tools write UTF-8, with or

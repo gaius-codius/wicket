@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"fmt"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -64,44 +66,66 @@ func TestRender_NeverOverflowsTheWindow(t *testing.T) {
 		t.Skip("fsync-heavy; too slow on macOS keychain-backed temp dirs")
 	}
 	cfg := fixtureTOML("a-connection-with-a-long-name", "host.example.invalid", "user")
-	var bad int
-	for _, w := range span(widthTiny, 130, breakpoints...) {
-		for _, h := range span(heightTiny, 30) {
-			// "e" matters as much as "n": the edit form is the only one whose
-			// fields hold values, and a value wider than its column is what
-			// used to wrap the row and push the bottom border off screen.
-			for _, keys := range [][]string{nil, {"/"}, {"n"}, {"e"}, {"y"}, {"?"}, {"D"}, {"enter"}} {
-				m := sized(t, cfg, w, h, keys...)
-				gotW, gotH := measure(m.render())
-				if gotW > w || gotH > h {
-					if bad < 10 {
-						t.Errorf("%dx%d after %v rendered %dx%d", w, h, keys, gotW, gotH)
-					}
-					bad++
-				}
-			}
+	var bad atomic.Int32
+	report := func(t *testing.T, format string, args ...any) {
+		t.Helper()
+		if bad.Add(1) <= 10 {
+			t.Errorf(format, args...)
 		}
 	}
-	// The session view, before and after a stop has put a status line up.
-	base := newHarness(t, cfg, secret.NewMemory())
-	p, _ := base.m.app.Cfg.Profile("a-connection-with-a-long-name")
-	for _, stopping := range []bool{false, true} {
-		m := withSession(base.m, p, stopping)
+	// One harness per width, copied for every height and view, rather than
+	// one per size: a harness is held until its test returns, and the tens of
+	// thousands of them ran the sweep out of memory. A copy still starts at
+	// 80x24, is resized and then opens its view, as a fresh harness did.
+	// Copies share the app and the keyring, so no key here may change them:
+	// the store is empty, enter only asks for a password, and D and y only
+	// open dialogs.
+	//
+	// Every Update copies the whole Model, so the widths run in parallel.
+	// Past four at once the garbage collector takes the gain, while the
+	// memory held keeps growing.
+	sem := make(chan struct{}, 4)
+	t.Run("widths", func(t *testing.T) {
 		for _, w := range span(widthTiny, 130, breakpoints...) {
-			for _, h := range span(heightTiny, 30) {
-				nm, _ := m.Update(teaWin(w, h))
-				gotW, gotH := measure(nm.(Model).render())
-				if gotW > w || gotH > h {
-					if bad < 10 {
-						t.Errorf("%dx%d session (stopping %v) rendered %dx%d", w, h, stopping, gotW, gotH)
+			t.Run(fmt.Sprint(w), func(t *testing.T) {
+				t.Parallel()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				base := newHarness(t, cfg, secret.NewMemory())
+				for _, h := range span(heightTiny, 30) {
+					nm, _ := base.m.Update(teaWin(w, h))
+					resized := nm.(Model)
+					// "e" matters as much as "n": the edit form is the only
+					// one whose fields hold values, and a value wider than
+					// its column is what used to wrap the row and push the
+					// bottom border off screen.
+					for _, keys := range [][]string{nil, {"/"}, {"n"}, {"e"}, {"y"}, {"?"}, {"D"}, {"enter"}} {
+						m := press(resized, keys...)
+						if m.session != nil {
+							t.Fatalf("%v started a session, which every later copy would share", keys)
+						}
+						if gotW, gotH := measure(m.render()); gotW > w || gotH > h {
+							report(t, "%dx%d after %v rendered %dx%d", w, h, keys, gotW, gotH)
+						}
 					}
-					bad++
 				}
-			}
+				// The session view, before and after a stop has put a
+				// status line up.
+				p, _ := base.m.app.Cfg.Profile("a-connection-with-a-long-name")
+				for _, stopping := range []bool{false, true} {
+					m := withSession(base.m, p, stopping)
+					for _, h := range span(heightTiny, 30) {
+						nm, _ := m.Update(teaWin(w, h))
+						if gotW, gotH := measure(nm.(Model).render()); gotW > w || gotH > h {
+							report(t, "%dx%d session (stopping %v) rendered %dx%d", w, h, stopping, gotW, gotH)
+						}
+					}
+				}
+			})
 		}
-	}
-	if bad > 0 {
-		t.Fatalf("%d size and view combinations overflowed", bad)
+	})
+	if n := bad.Load(); n > 0 {
+		t.Fatalf("%d size and view combinations overflowed", n)
 	}
 }
 

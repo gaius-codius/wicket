@@ -265,13 +265,16 @@ func (w *wrapStore) Delete(ctx context.Context, id secret.Identity) error {
 }
 
 type harness struct {
-	t      *testing.T
-	home   string
-	cfg    string
-	state  string
-	store  secret.Store
-	stdout bytes.Buffer
-	stderr bytes.Buffer
+	t     *testing.T
+	home  string
+	cfg   string
+	state string
+	store secret.Store
+	// stdout and stderr are pointers so that the launcher, which the
+	// cleanup below keeps until the test returns, does not keep the
+	// harness and its Model with it.
+	stdout *bytes.Buffer
+	stderr *bytes.Buffer
 	m      Model
 }
 
@@ -291,7 +294,8 @@ func newHarness(t *testing.T, body string, store secret.Store) *harness {
 	if store == nil {
 		store = secret.NewMemory()
 	}
-	h := &harness{t: t, home: home, cfg: cfg, state: st, store: store}
+	h := &harness{t: t, home: home, cfg: cfg, state: st, store: store,
+		stdout: new(bytes.Buffer), stderr: new(bytes.Buffer)}
 	m := New(Options{
 		Home:       home,
 		ConfigPath: cfg,
@@ -302,8 +306,8 @@ func newHarness(t *testing.T, body string, store secret.Store) *harness {
 		// The launcher's writers stand in for the terminal: the TUI must
 		// never let the client write there.
 		Launcher: &rdp.Launcher{
-			Stdout: &h.stdout,
-			Stderr: &h.stderr,
+			Stdout: h.stdout,
+			Stderr: h.stderr,
 		},
 	})
 	// Which FreeRDP clients the form offers must not depend on the machine
@@ -313,8 +317,11 @@ func newHarness(t *testing.T, body string, store secret.Store) *harness {
 	h.m = m
 	// A test that starts a client and then fails, or simply returns, must
 	// not leave it running: the app is shared by every copy of the model,
-	// so this stops whichever session it last started.
-	t.Cleanup(func() { m.app.StopSession(time.Second) })
+	// so this stops whichever session it last started. It holds the app
+	// alone: a sweep builds thousands of harnesses, and a cleanup that held
+	// each Model kept them all until the test returned.
+	app := m.app
+	t.Cleanup(func() { app.StopSession(time.Second) })
 	return h
 }
 

@@ -74,7 +74,11 @@ wicket --version
 
 `wicket connect` is for keybindings and scripts. It does not create a config.
 On a non-TTY there is no password prompt, so save the password from the TUI
-first. Press `?` in the TUI for keys and field help.
+first. If the keyring cannot be reached, connect says so and exits; on a
+terminal it asks for the password for that connection and does not offer to
+save it. A saved password it cannot use, such as one over 511 bytes (the most
+FreeRDP accepts), is reported and connect exits; save a new one from the TUI.
+Press `?` in the TUI for keys and field help.
 
 `wicket import` brings Remmina (`*.remmina`, RDP only) or Microsoft `.rdp`
 files into wicket profiles. Import only — there is no export or sync.

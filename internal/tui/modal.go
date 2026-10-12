@@ -121,7 +121,17 @@ func (m Model) modalStart(warn string) (tea.Model, tea.Cmd) {
 // canSave reports whether ctrl+s is worth offering. When the keyring could
 // not be read, a save would only fail the same way -- or wait on it again --
 // so the dialog offers to connect once and no more.
-func (md modalState) canSave() bool { return md.lookupErr == nil }
+//
+// A saved password Wicket cannot use was read fine, so saving over it works.
+func (md modalState) canSave() bool {
+	return md.lookupErr == nil || unusableSaved(md.lookupErr)
+}
+
+// unusableSaved reports whether a lookup found a password but could not use
+// it: one the client would cut short, or one with a line break in it.
+func unusableSaved(err error) bool {
+	return errors.Is(err, secret.ErrTooLong) || errors.Is(err, secret.ErrCRLF)
+}
 
 // subtitle explains why the dialog is asking. Each of the three ways
 // in says only what Wicket knows: a keyring that could not be read is not
@@ -132,6 +142,10 @@ func (md modalState) subtitle() string {
 		return "Wicket stopped waiting for the keyring, so it cannot tell whether a password is saved."
 	case errors.Is(md.lookupErr, context.DeadlineExceeded):
 		return "The keyring did not answer, so Wicket cannot tell whether a password is saved."
+	case unusableSaved(md.lookupErr):
+		// The client would cut it short, or take only its first line, and
+		// fail the login with no reason given, so it is not used at all.
+		return "The saved password cannot be used (" + md.lookupErr.Error() + "). Type a new one; ctrl+s saves it over the old one."
 	case md.lookupErr != nil:
 		return "The keyring is unavailable, so Wicket cannot tell whether a password is saved."
 	case md.replacing:

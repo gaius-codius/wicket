@@ -37,15 +37,19 @@ func TestPassword_Redacted(t *testing.T) {
 	}
 }
 
-// A password is written to the client's stdin before the child is known to be
-// reading, so it has to stay well inside the pipe buffer.
-func TestNewPassword_RejectsOneTooLongToWriteInOneGo(t *testing.T) {
-	if _, err := NewPassword(strings.Repeat("a", maxPasswordLen)); err != nil {
-		t.Fatalf("a password of exactly the limit was rejected: %v", err)
+// FreeRDP keeps at most 511 bytes of a password on one of its read paths, so
+// a longer one could reach the host cut short. The bounds
+// are spelled out rather than taken from the constant, which a test of the
+// constant could not catch being wrong.
+func TestNewPassword_RejectsOneTheClientWouldCutShort(t *testing.T) {
+	if _, err := NewPassword(strings.Repeat("a", 511)); err != nil {
+		t.Fatalf("a 511-byte password was rejected: %v", err)
 	}
-	if _, err := NewPassword(strings.Repeat("a", maxPasswordLen+1)); !errors.Is(err, ErrTooLong) {
+	if _, err := NewPassword(strings.Repeat("a", 512)); !errors.Is(err, ErrTooLong) {
 		t.Fatalf("err = %v, want ErrTooLong", err)
 	}
+	// The password is written to the client's stdin before the child is
+	// known to be reading, so it has to stay well inside the pipe buffer.
 	if maxPasswordLen >= 65536 {
 		t.Fatalf("limit %d is not below the 64 KiB pipe buffer", maxPasswordLen)
 	}

@@ -31,6 +31,15 @@ func TestBuildPlan_Goldens(t *testing.T) {
 				DynamicResolution: true, Scale: 140, Clipboard: true,
 			},
 		},
+		// Validation takes an upper-case X; FreeRDP splits on a lower-case
+		// one only.
+		{
+			file: "xfreerdp3-size-upper.argv",
+			p: config.Profile{
+				Name: "lab", Host: "h", User: "u",
+				Client: "xfreerdp3", Size: "1920X1080", Scale: 100, Clipboard: true,
+			},
+		},
 		// The sharing settings, each away from its default. Both clients
 		// take the same syntax for them.
 		{

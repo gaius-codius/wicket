@@ -46,7 +46,7 @@ func span(lo, hi int, keep ...int) []int {
 
 // breakpoints are the widths where the layout changes, which every sampled
 // width sweep keeps.
-var breakpoints = []int{widthCompact, panelNormal, widthWide}
+var breakpoints = []int{widthCompact, panelNormal, widthWide, panelWide}
 
 func measure(s string) (w, h int) {
 	lines := strings.Split(s, "\n")

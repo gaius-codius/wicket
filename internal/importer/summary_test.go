@@ -54,7 +54,7 @@ func TestWriteSummary_ClipboardAndShares(t *testing.T) {
 		Name: "files", User: "bob",
 		Shares: []config.Share{{Path: "/tmp/a"}, {Path: "~/docs", Name: "docs"}},
 	}}, nil)
-	want := "imported 1: files (bob; clipboard off; share /tmp/a; share ~/docs as docs)\n"
+	want := `imported 1: files (bob; clipboard off; share "/tmp/a"; share "~/docs" as docs)` + "\n"
 	if !strings.Contains(buf.String(), want) {
 		t.Fatalf("got %q, want %q", buf.String(), want)
 	}
@@ -69,12 +69,13 @@ func TestWriteSummary_EscapesControlCharacters(t *testing.T) {
 		{Name: "evil\x1b[2J"},
 		{Name: "bad\u009b31m", Reason: "host \x1b]0;title\x07 refused\r"},
 		{Name: "raw\xff"},
+		{Name: "flip\u202etxt.exe"},
 	})
 	got := buf.String()
 	if strings.ContainsFunc(strings.TrimSuffix(got, "\n"), func(r rune) bool { return r != '\n' && unicode.IsControl(r) }) {
 		t.Fatalf("control character in %q", got)
 	}
-	if !strings.Contains(got, "skipped 3: evil?[2J, bad?31m (host ?]0;title? refused?), raw\uFFFD\n") {
+	if !strings.Contains(got, "skipped 4: evil?[2J, bad?31m (host ?]0;title? refused?), raw\uFFFD, flip?txt.exe\n") {
 		t.Fatalf("skipped line %q", got)
 	}
 	if !strings.Contains(got, "imported 1: ok?[2J (u?)\n") {

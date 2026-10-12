@@ -185,7 +185,10 @@ func splitDomainUser(user string) (domain, bare string, ok bool) {
 
 // shareSet collects the shares an import keeps, by the rules both formats
 // share. A path must be absolute or ~/…; an empty, relative or malformed one
-// is skipped. Whether the folder exists is left to the time it is used.
+// is skipped. So is the whole home folder or the root: a file sent to the
+// user could otherwise hand a server every file they have, and Wicket offers
+// home only as share_home, which an import does not turn on. Whether the
+// folder exists is left to the time it is used.
 type shareSet struct {
 	list []config.Share
 	seen map[string]bool
@@ -194,7 +197,7 @@ type shareSet struct {
 func (s *shareSet) add(name, path string) {
 	path = strings.TrimSpace(path)
 	name = strings.TrimSpace(name)
-	if !isSharePath(path) || strings.ContainsRune(path, ',') {
+	if !isSharePath(path) || strings.ContainsRune(path, ',') || wholeHomeOrRoot(path) {
 		return
 	}
 	key := strings.ToLower(path) + "\x00" + strings.ToLower(name)
@@ -206,6 +209,21 @@ func (s *shareSet) add(name, path string) {
 	}
 	s.seen[key] = true
 	s.list = append(s.list, config.Share{Path: path, Name: name})
+}
+
+// wholeHomeOrRoot reports whether path, once expanded, is "/" or the home
+// folder itself. A path that cannot be expanded counts as one, so it is
+// skipped rather than guessed at.
+func wholeHomeOrRoot(path string) bool {
+	expanded, err := config.ExpandPath(path)
+	if err != nil {
+		return true
+	}
+	if expanded == "/" {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	return err == nil && expanded == filepath.Clean(home)
 }
 
 func isSharePath(path string) bool {

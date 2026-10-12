@@ -172,8 +172,8 @@ func TestImportRDP_ClipboardAndShares(t *testing.T) {
 	file := filepath.Join("..", "..", "internal", "importer", "testdata", "drives.rdp")
 
 	got := runCLI(t, []string{"import", "rdp", "--dry-run", file})
-	want := "imported 1: drives (bob; clipboard off; share /tmp/wicket-rdp-plain; " +
-		"share /tmp/wicket-rdp-docs as docs; share ~/wicket-rdp-proj as projects; share /tmp/wicket-rdp-nolabel)\n"
+	want := `imported 1: drives (bob; clipboard off; share "/tmp/wicket-rdp-plain"; ` +
+		`share "/tmp/wicket-rdp-docs" as docs; share "~/wicket-rdp-proj" as projects; share "/tmp/wicket-rdp-nolabel")` + "\n"
 	if got.code != 0 || !strings.Contains(got.stdout, want) {
 		t.Fatalf("dry-run exit %d stdout %q stderr %q", got.code, got.stdout, got.stderr)
 	}

@@ -271,3 +271,18 @@ func TestParseRemmina_DomainUserBesideDomain(t *testing.T) {
 	}
 	assertImports(t, []config.Profile{p})
 }
+
+// Remmina's home or root folder is not imported as a share either.
+func TestParseRemmina_SharesSkipHomeAndRoot(t *testing.T) {
+	t.Parallel()
+	for _, v := range []string{"sharefolder=~\n", "sharefolder=/\n", "drive=home,~/\n", "drive=/\n"} {
+		doc := "[remmina]\nname=r\nprotocol=RDP\nserver=h\nusername=u\n" + v
+		p, _, err := ParseRemmina([]byte(doc), "r.remmina")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(p.Shares) != 0 {
+			t.Errorf("%q: shares %+v", v, p.Shares)
+		}
+	}
+}

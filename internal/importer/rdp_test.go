@@ -114,9 +114,18 @@ func TestParseRDP_Drives(t *testing.T) {
 	assertImports(t, ps)
 }
 
+// None of these is one folder an import may share: the whole home folder
+// and the root are refused however they are written.
 func TestParseRDP_NoDrives(t *testing.T) {
 	t.Parallel()
-	for _, v := range []string{"", "*", "DynamicDrives", "%", "C:\\;D:\\", "docs(relative)", "(x)(y)"} {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{
+		"", "*", "DynamicDrives", "%", "C:\\;D:\\", "docs(relative)", "(x)(y)",
+		"~", "~/", "~/.", "home(~)", "~(home)", "/", "/..", "/(root)", "//", home, home + "/", "h(" + home + ")",
+	} {
 		p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:"+v+"\n"), "x")
 		if err != nil {
 			t.Fatal(err)
@@ -288,5 +297,18 @@ func assertImports(t *testing.T, ps []config.Profile) {
 	ok, skipped := config.PlanProfiles(nil, ps, false)
 	if len(skipped) != 0 || len(ok) != len(ps) {
 		t.Fatalf("imported %+v, skipped %+v", ok, skipped)
+	}
+}
+
+// path(path) names two folders, and both are shared, as FreeRDP shares them.
+func TestParseRDP_TwoPathDrive(t *testing.T) {
+	t.Parallel()
+	p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:/tmp/wicket-a(/tmp/wicket-b)\n"), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []config.Share{{Path: "/tmp/wicket-a"}, {Path: "/tmp/wicket-b"}}
+	if !reflect.DeepEqual(p.Shares, want) {
+		t.Fatalf("shares %+v, want %+v", p.Shares, want)
 	}
 }

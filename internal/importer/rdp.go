@@ -96,10 +96,10 @@ func rdpClipboard(v string) (on, ok bool) {
 
 // rdpDrives maps drivestoredirect onto shares. It is a ';' list with no
 // escaping, and FreeRDP reads each entry as a path, label(path) or
-// path(label). The entries that are not one local folder are skipped by the
-// share path rules: "*" and DynamicDrives (every drive, and drives plugged in
-// later), Windows drive letters, and "%", the whole home folder, which Wicket
-// offers only as share_home and an import should not turn on unasked.
+// path(label), or path(path) for two folders. The entries that are not one
+// local folder are skipped by the share path rules: "*" and DynamicDrives
+// (every drive, and drives plugged in later), Windows drive letters, and "%",
+// the whole home folder (see shareSet).
 func rdpDrives(v string) []config.Share {
 	var shares shareSet
 	for _, part := range strings.Split(v, ";") {
@@ -109,6 +109,10 @@ func rdpDrives(v string) []config.Share {
 			outer := strings.TrimSpace(part[:open])
 			inner := strings.TrimSpace(part[open+1 : len(part)-1])
 			switch {
+			case isSharePath(inner) && isSharePath(outer):
+				// Two folders, not a label: FreeRDP shares both.
+				shares.add("", outer)
+				name, path = "", inner
 			case isSharePath(inner):
 				name, path = outer, inner
 			case isSharePath(outer):

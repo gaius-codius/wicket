@@ -3,6 +3,7 @@ package importer
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -56,10 +57,11 @@ func details(p config.Profile) string {
 		parts = append(parts, "clipboard off")
 	}
 	for _, s := range p.Shares {
+		// Quoted, since a path may hold "; " or " as " itself.
 		if s.Name == "" {
-			parts = append(parts, "share "+s.Path)
+			parts = append(parts, "share "+strconv.Quote(s.Path))
 		} else {
-			parts = append(parts, "share "+s.Path+" as "+s.Name)
+			parts = append(parts, "share "+strconv.Quote(s.Path)+" as "+s.Name)
 		}
 	}
 	return strings.Join(parts, "; ")
@@ -67,10 +69,11 @@ func details(p config.Profile) string {
 
 // printable replaces each control character with '?'. A skipped entry's name
 // and reason come straight from the file, so without it a file could send
-// escape sequences to the terminal; invalid UTF-8 becomes U+FFFD.
+// escape sequences to the terminal. Bidi controls go too, so a name cannot
+// print reordered; invalid UTF-8 becomes U+FFFD.
 func printable(s string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
 			return '?'
 		}
 		return r

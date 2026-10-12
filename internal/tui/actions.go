@@ -361,6 +361,8 @@ func keyringProblem(err error) string {
 		return "keyring unavailable"
 	case errors.Is(err, secret.ErrNotFound):
 		return "no password saved"
+	case errors.Is(err, secret.ErrTooLong):
+		return "the saved password is too long to use"
 	}
 	// Anything else is unexpected, and the error is all there is to go on,
 	// so it is kept, on one line and briefly.

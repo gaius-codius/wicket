@@ -116,6 +116,9 @@ func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profi
 		}
 		return res.Password, nil
 	}
+	if errors.Is(err, secret.ErrTooLong) {
+		return nil, fmt.Errorf("the saved password cannot be used (%w); save a shorter one from the TUI", err)
+	}
 	if !errors.Is(err, secret.ErrNotFound) && !errors.Is(err, secret.ErrUnavailable) {
 		return nil, err
 	}

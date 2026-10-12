@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,6 +177,34 @@ func TestDBus_LookupPrefersTheNewestOfSeveralMatches(t *testing.T) {
 	}
 	if buf.String() != "newer\n" {
 		t.Fatalf("lookup %q, want the most recently modified", buf.String())
+	}
+}
+
+// A password saved before the limit came down, or by another tool, is too
+// long for the client. Lookup says so, rather than "not found", which would
+// ask for a new password without saying what was wrong with the old one.
+func TestDBus_LookupReportsASavedPasswordTooLongToUse(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	srv.Seed(id.Attrs(), strings.Repeat("a", 512), 1000)
+	if _, err := NewDBus().Lookup(bg, id); !errors.Is(err, ErrTooLong) {
+		t.Fatalf("err = %v, want ErrTooLong", err)
+	}
+
+	// One usable match is still used, whatever else is stored.
+	srv.Seed(id.Attrs(), "s3cret", 500)
+	got, err := NewDBus().Lookup(bg, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := got.Password.WriteLine(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "s3cret\n" {
+		t.Fatalf("lookup %q", buf.String())
 	}
 }
 

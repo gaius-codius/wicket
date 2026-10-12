@@ -231,6 +231,14 @@ func TestKeyringProblem_IsShort(t *testing.T) {
 	}
 }
 
+// A saved password too long to use was read without trouble, so it is not
+// reported as a keyring fault.
+func TestKeyringProblem_SavedPasswordTooLong(t *testing.T) {
+	if got := keyringProblem(secret.ErrTooLong); !strings.Contains(got, "too long") || strings.Contains(got, "keyring error") {
+		t.Fatalf("keyringProblem(ErrTooLong) = %q", got)
+	}
+}
+
 func TestSaveProfile_CRLFRejected(t *testing.T) {
 	a := testApp(t, "[general]\n", nil)
 	p := config.Profile{Name: "n", Host: "h", User: "u", Client: config.DefaultClient, Scale: 100, DynamicResolution: true}

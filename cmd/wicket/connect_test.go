@@ -151,6 +151,46 @@ func TestConnect_StoredSecret(t *testing.T) {
 	}
 }
 
+type tooLongStore struct{ secret.Store }
+
+func (tooLongStore) Lookup(context.Context, secret.Identity) (secret.LookupResult, error) {
+	return secret.LookupResult{}, secret.ErrTooLong
+}
+
+// A saved password the client would cut short is reported, not used, and not
+// mistaken for a missing one: no prompt, and no client started.
+func TestConnect_StoredPasswordTooLongIsReported(t *testing.T) {
+	cfg := writeConnectConfig(t, validTOML())
+	t.Setenv("WICKET_CONFIG", cfg)
+	t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+	dir := testutil.FakeRDPDir(t)
+	testutil.PrependPATH(t, dir)
+	rec := filepath.Join(t.TempDir(), "rec.json")
+	t.Setenv("FAKERDP_RECORD", rec)
+	oldStore, oldTTY, oldRead := openStore, isTerminal, readPassword
+	openStore = func() secret.Store { return tooLongStore{secret.NewMemory()} }
+	isTerminal = func(int) bool { return true }
+	readPassword = func(int) ([]byte, error) {
+		t.Error("prompted for a password although one is saved")
+		return []byte("typed"), nil
+	}
+	t.Cleanup(func() {
+		openStore = oldStore
+		isTerminal = oldTTY
+		readPassword = oldRead
+	})
+	got := runCLI(t, []string{"connect", "work"})
+	if got.code != 2 {
+		t.Fatalf("exit %d stderr %q", got.code, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "saved password") || !strings.Contains(got.stderr, "511 bytes") {
+		t.Fatalf("stderr %q", got.stderr)
+	}
+	if _, err := os.Stat(rec); !os.IsNotExist(err) {
+		t.Fatalf("client started: %v", err)
+	}
+}
+
 func TestConnect_TTYEmptyPasswordRejected(t *testing.T) {
 	cfg := writeConnectConfig(t, validTOML())
 	t.Setenv("WICKET_CONFIG", cfg)

@@ -168,6 +168,7 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 		mod uint64
 	}
 	var hits []hit
+	var rejected error
 	for p, sec := range secrets {
 		pw, err := NewPassword(string(sec.Value))
 		// The transport buffer is ours and is zeroable, unlike the string
@@ -175,6 +176,7 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 		// for the matches we do not return.
 		clear(sec.Value)
 		if err != nil {
+			rejected = err
 			continue
 		}
 		var mod uint64
@@ -182,6 +184,12 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 		hits = append(hits, hit{pw: pw, mod: mod})
 	}
 	if len(hits) == 0 {
+		// A saved password Wicket cannot use is not the same as none:
+		// "not found" would ask for a new one without saying what was wrong
+		// with the old. The Keychain store returns the same error.
+		if rejected != nil {
+			return LookupResult{}, rejected
+		}
 		return LookupResult{}, ErrNotFound
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].mod > hits[j].mod })

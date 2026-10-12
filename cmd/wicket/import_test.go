@@ -163,6 +163,70 @@ func TestImportRDP_NoUserAndUPN(t *testing.T) {
 	}
 }
 
+// An .rdp file's clipboard and folder settings come through: the dry run
+// shows them, and the import writes them, with no password in the config.
+func TestImportRDP_ClipboardAndShares(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	t.Setenv("WICKET_CONFIG", cfgPath)
+	t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+	file := filepath.Join("..", "..", "internal", "importer", "testdata", "drives.rdp")
+
+	got := runCLI(t, []string{"import", "rdp", "--dry-run", file})
+	want := `imported 1: drives (bob; clipboard off; share "/tmp/wicket-rdp-plain"; ` +
+		`share "/tmp/wicket-rdp-docs" as docs; share "~/wicket-rdp-proj" as projects; share "/tmp/wicket-rdp-nolabel")` + "\n"
+	if got.code != 0 || !strings.Contains(got.stdout, want) {
+		t.Fatalf("dry-run exit %d stdout %q stderr %q", got.code, got.stdout, got.stderr)
+	}
+
+	if got = runCLI(t, []string{"import", "rdp", file}); got.code != 0 {
+		t.Fatalf("import exit %d stdout %q stderr %q", got.code, got.stdout, got.stderr)
+	}
+	c, err := config.Open(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := c.Profile("drives")
+	if !ok {
+		t.Fatalf("profiles %+v", c.Profiles())
+	}
+	if p.Clipboard || len(p.Shares) != 4 || p.ShareHome {
+		t.Fatalf("%+v", p)
+	}
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := strings.ToLower(string(data)); strings.Contains(s, "password") || strings.Contains(s, "secret") {
+		t.Fatalf("password in config:\n%s", data)
+	}
+}
+
+// A skipped file's name reaches the summary without its control characters,
+// so a crafted file cannot rewrite the terminal.
+func TestImportRemmina_SkipEscapesControlCharacters(t *testing.T) {
+	t.Setenv("WICKET_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+	dir := t.TempDir()
+	for file, doc := range map[string]string{
+		"a.remmina": "[remmina]\nname=clear\x1b[2J\nprotocol=RDP\nserver=h\nusername=u\n",
+		"b.remmina": "[remmina]\nname=vnc\x1b]0;x\x07\nprotocol=VNC\nserver=h\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := runCLI(t, []string{"import", "remmina", "--dry-run", dir})
+	if got.code != 1 {
+		t.Fatalf("exit %d stdout %q stderr %q", got.code, got.stdout, got.stderr)
+	}
+	if strings.ContainsAny(got.stdout+got.stderr, "\x1b\x07") {
+		t.Fatalf("control character reached the terminal: stdout %q stderr %q", got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "clear?[2J (name: ") || !strings.Contains(got.stdout, "vnc?]0;x? (not RDP (VNC))") {
+		t.Fatalf("stdout %q", got.stdout)
+	}
+}
+
 // Imported profiles take the preferred FreeRDP 3 client: an unsuffixed
 // xfreerdp counts only when its --version says 3, exit status aside.
 func TestImport_ClientNeedsFreeRDP3(t *testing.T) {

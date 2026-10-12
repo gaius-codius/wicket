@@ -3,7 +3,9 @@ package importer
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/gaius-codius/wicket/internal/config"
 )
@@ -22,7 +24,7 @@ func WriteSummary(w io.Writer, imported []config.Profile, skipped []Skip) {
 		names := make([]string, len(imported))
 		noUser := false
 		for i, p := range imported {
-			names[i] = fmt.Sprintf("%s (%s)", p.Name, account(p))
+			names[i] = printable(fmt.Sprintf("%s (%s)", p.Name, details(p)))
 			noUser = noUser || p.User == ""
 		}
 		fmt.Fprintf(w, "imported %d: %s\n", len(imported), strings.Join(names, ", "))
@@ -36,14 +38,46 @@ func WriteSummary(w io.Writer, imported []config.Profile, skipped []Skip) {
 		parts := make([]string, len(skipped))
 		for i, s := range skipped {
 			if s.Reason == "" {
-				parts[i] = s.Name
+				parts[i] = printable(s.Name)
 			} else {
-				parts[i] = fmt.Sprintf("%s (%s)", s.Name, s.Reason)
+				parts[i] = printable(fmt.Sprintf("%s (%s)", s.Name, s.Reason))
 			}
 		}
 		fmt.Fprintf(w, "skipped %d: %s\n", len(skipped), strings.Join(parts, ", "))
 	}
 	fmt.Fprintln(w, passwordNotice)
+}
+
+// details is the account a profile signs in as, then the settings an
+// import carried over that differ from a new profile's: the clipboard when it
+// is off, and each shared folder.
+func details(p config.Profile) string {
+	parts := []string{account(p)}
+	if !p.Clipboard {
+		parts = append(parts, "clipboard off")
+	}
+	for _, s := range p.Shares {
+		// Quoted, since a path may hold "; " or " as " itself.
+		if s.Name == "" {
+			parts = append(parts, "share "+strconv.Quote(s.Path))
+		} else {
+			parts = append(parts, "share "+strconv.Quote(s.Path)+" as "+s.Name)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// printable replaces each control character with '?'. A skipped entry's name
+// and reason come straight from the file, so without it a file could send
+// escape sequences to the terminal. Bidi controls go too, so a name cannot
+// print reordered; invalid UTF-8 becomes U+FFFD.
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
+			return '?'
+		}
+		return r
+	}, s)
 }
 
 func account(p config.Profile) string {

@@ -1,0 +1,9 @@
+[remmina]
+name=noclip
+protocol=RDP
+server=noclip.example
+username=bob
+disableclipboard=1
+password=REMMINASECRET
+gateway_server=gw.example
+gateway_password=GATEWAYSECRET

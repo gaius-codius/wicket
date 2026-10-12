@@ -60,19 +60,7 @@ func ParseRDP(data []byte, name string) (config.Profile, Skip, error) {
 	p := config.DefaultProfile()
 	p.Name = name
 	p.Host = withPort(strings.TrimSpace(vals["full address"]), vals["server port"])
-	user := strings.TrimSpace(vals["username"])
-	domain := strings.TrimSpace(vals["domain"])
-	if user != "" {
-		if dom, bare, ok := splitDomainUser(user); ok {
-			p.User = bare
-			if domain == "" {
-				domain = dom
-			}
-		} else {
-			p.User = user
-		}
-	}
-	p.User, p.Domain = dropUPNDomain(p.User, domain)
+	p.User, p.Domain = splitAccount(vals["username"], vals["domain"])
 	if sm, ok := vals["screen mode id"]; ok {
 		if n, err := strconv.Atoi(strings.TrimSpace(sm)); err == nil && n == 2 {
 			p.Fullscreen = true
@@ -87,7 +75,55 @@ func ParseRDP(data []byte, name string) (config.Profile, Skip, error) {
 			}
 		}
 	}
+	// A file that leaves the clipboard out gets Wicket's default, as it
+	// would get FreeRDP's.
+	if on, ok := rdpClipboard(vals["redirectclipboard"]); ok {
+		p.Clipboard = on
+	}
+	p.Shares = rdpDrives(vals["drivestoredirect"])
 	return p, Skip{}, nil
+}
+
+// rdpClipboard reads redirectclipboard: 0 is off and any other number on,
+// as FreeRDP reads it. ok is false when the value is missing or not a number.
+func rdpClipboard(v string) (on, ok bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return false, false
+	}
+	return n != 0, true
+}
+
+// rdpDrives maps drivestoredirect onto shares. It is a ';' list with no
+// escaping, and FreeRDP reads each entry as a path, label(path) or
+// path(label), or path(path) for two folders. The entries that are not one
+// local folder are skipped by the share path rules: "*" and DynamicDrives
+// (every drive, and drives plugged in later), Windows drive letters, and "%",
+// the whole home folder (see shareSet).
+func rdpDrives(v string) []config.Share {
+	var shares shareSet
+	for _, part := range strings.Split(v, ";") {
+		part = strings.TrimSpace(part)
+		name, path := "", part
+		if open := strings.IndexByte(part, '('); open >= 0 && strings.HasSuffix(part, ")") {
+			outer := strings.TrimSpace(part[:open])
+			inner := strings.TrimSpace(part[open+1 : len(part)-1])
+			switch {
+			case isSharePath(inner) && isSharePath(outer):
+				// Two folders, not a label: FreeRDP shares both.
+				shares.add("", outer)
+				name, path = "", inner
+			case isSharePath(inner):
+				name, path = outer, inner
+			case isSharePath(outer):
+				name, path = inner, outer
+			default:
+				continue
+			}
+		}
+		shares.add(name, path)
+	}
+	return shares.list
 }
 
 // withPort adds the separate "server port" the Windows client writes to a
@@ -159,12 +195,11 @@ func parseRDP(data []byte) (map[string]string, error) {
 			continue
 		}
 		key := strings.ToLower(strings.TrimSpace(parts[0]))
-		typ := strings.ToLower(strings.TrimSpace(parts[1]))
 		value := parts[2]
-		if key == "password" || strings.HasPrefix(key, "password ") {
-			continue
-		}
-		if typ == "b" && strings.Contains(key, "password") {
+		// Any password-family key is dropped here, the gateway's
+		// (gatewaypassword) and the 51:b: blob included, so no value of one
+		// can reach a profile.
+		if strings.Contains(key, "password") {
 			continue
 		}
 		vals[key] = value

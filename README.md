@@ -84,6 +84,10 @@ Press `?` in the TUI for keys and field help.
 
 `wicket import` brings Remmina (`*.remmina`, RDP only) or Microsoft `.rdp`
 files into wicket profiles. Import only — there is no export or sync.
+A turned-off clipboard and shared folders come across. "All drives" (`*`,
+`DynamicDrives` in an `.rdp` file), Windows drive letters, the home folder
+(`%`, `~`) and any folder that holds it, such as `/home` or `/`, do not; turn
+on `share_home` yourself if you want home shared.
 Passwords are never imported; you enter them on first connect. A file with
 no username imports with none, and the TUI asks for one when you connect;
 `wicket connect` refuses it until one is set. Use

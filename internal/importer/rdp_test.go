@@ -2,8 +2,11 @@ package importer
 
 import (
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -31,20 +34,111 @@ func TestParseRDP_Work(t *testing.T) {
 
 func TestParseRDP_IgnoresPasswordBlob(t *testing.T) {
 	t.Parallel()
-	data, err := os.ReadFile(filepath.Join("testdata", "work.rdp"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	vals, err := parseRDP(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for k, v := range vals {
-		if strings.Contains(strings.ToLower(k), "password") {
-			t.Fatalf("password key kept: %s=%s", k, v)
+	for _, name := range []string{"work.rdp", "drives.rdp"} {
+		data, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
 		}
-		if strings.Contains(v, "DEADBEEF") || strings.Contains(v, "01000000") {
-			t.Fatalf("password blob leaked into %s", k)
+		vals, err := parseRDP(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range vals {
+			if strings.Contains(strings.ToLower(k), "password") {
+				t.Fatalf("%s: password key kept: %s=%s", name, k, v)
+			}
+			for _, secret := range []string{"DEADBEEF", "01000000", "SECRETBLOB", "GATEWAYSECRET"} {
+				if strings.Contains(v, secret) {
+					t.Fatalf("%s: password leaked into %s", name, k)
+				}
+			}
+		}
+		p, _, err := ParseRDP(data, "x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprintf("%#v", p); strings.Contains(got, "SECRET") || strings.Contains(got, "DEADBEEF") {
+			t.Fatalf("%s: password on the profile: %s", name, got)
+		}
+	}
+}
+
+// redirectclipboard turns the clipboard off only when the file says so; a
+// file without it, or with a value that is not a number, keeps the default.
+func TestParseRDP_Clipboard(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{
+		{"redirectclipboard:i:0\n", false},
+		{"redirectclipboard:i: 0\n", false},
+		{"redirectclipboard:i:1\n", true},
+		{"", true},
+		{"redirectclipboard:i:off\n", true},
+	} {
+		p, _, err := ParseRDP([]byte("full address:s:h\nusername:s:u\n"+tc.line), "x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Clipboard != tc.want {
+			t.Errorf("%q: clipboard %v, want %v", tc.line, p.Clipboard, tc.want)
+		}
+	}
+}
+
+// drives.rdp names folders in each form FreeRDP reads, among entries that are
+// not one local folder and are skipped: "*", DynamicDrives, "%", a drive
+// letter, a relative path, an empty entry and a path with a comma.
+func TestParseRDP_Drives(t *testing.T) {
+	t.Parallel()
+	p, skip, err := ParseRDPFile(filepath.Join("testdata", "drives.rdp"))
+	if err != nil || skip.Reason != "" {
+		t.Fatalf("err=%v skip=%v", err, skip)
+	}
+	if p.Clipboard {
+		t.Fatal("clipboard on, want off")
+	}
+	if p.ShareHome {
+		t.Fatal("share_home turned on by %")
+	}
+	want := []config.Share{
+		{Path: "/tmp/wicket-rdp-plain"},
+		{Path: "/tmp/wicket-rdp-docs", Name: "docs"},
+		{Path: "~/wicket-rdp-proj", Name: "projects"},
+		{Path: "/tmp/wicket-rdp-nolabel"},
+	}
+	if !reflect.DeepEqual(p.Shares, want) {
+		t.Fatalf("shares %+v, want %+v", p.Shares, want)
+	}
+	ps := []config.Profile{p}
+	assertImports(t, ps)
+}
+
+// None of these is one folder an import may share: the whole home folder
+// and the root are refused however they are written.
+func TestParseRDP_NoDrives(t *testing.T) {
+	t.Parallel()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	drives := []string{
+		"", "*", "DynamicDrives", "%", "C:\\;D:\\", "docs(relative)", "(x)(y)",
+		"~", "~/", "~/.", "home(~)", "~(home)", "/", "/..", "/(root)", "//", home, home + "/", "h(" + home + ")",
+		"~/..", "a(~/..)", filepath.Dir(home), "/proc", "/proc/self/root", "/proc/self/cwd",
+	}
+	if runtime.GOOS == "linux" {
+		// A symlink into /proc there; on macOS a folder of its own.
+		drives = append(drives, "/dev/fd")
+	}
+	for _, v := range drives {
+		p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:"+v+"\n"), "x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(p.Shares) != 0 || p.ShareHome {
+			t.Errorf("%q: shares %+v share_home %v", v, p.Shares, p.ShareHome)
 		}
 	}
 }
@@ -210,5 +304,39 @@ func assertImports(t *testing.T, ps []config.Profile) {
 	ok, skipped := config.PlanProfiles(nil, ps, false)
 	if len(skipped) != 0 || len(ok) != len(ps) {
 		t.Fatalf("imported %+v, skipped %+v", ok, skipped)
+	}
+}
+
+// path(path) names two folders, and both are shared, as FreeRDP shares them.
+func TestParseRDP_TwoPathDrive(t *testing.T) {
+	t.Parallel()
+	p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:/tmp/wicket-a(/tmp/wicket-b)\n"), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []config.Share{{Path: "/tmp/wicket-a"}, {Path: "/tmp/wicket-b"}}
+	if !reflect.DeepEqual(p.Shares, want) {
+		t.Fatalf("shares %+v, want %+v", p.Shares, want)
+	}
+}
+
+// A share that is a symlink to the home folder is refused like home itself.
+func TestParseRDP_DriveSymlinkToHome(t *testing.T) {
+	t.Parallel()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(home, link); err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:"+link+";/tmp("+filepath.Dir(home)+")\n"), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []config.Share{{Path: "/tmp"}}
+	if !reflect.DeepEqual(p.Shares, want) {
+		t.Fatalf("shares %+v, want %+v", p.Shares, want)
 	}
 }

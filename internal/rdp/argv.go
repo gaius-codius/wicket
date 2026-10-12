@@ -33,8 +33,9 @@ func BuildPlan(p config.Profile) (Plan, error) {
 	}
 	if size := strings.TrimSpace(p.Size); size != "" {
 		// A hand-edited config can hold padding that validation tolerates;
-		// FreeRDP would take the spaces as part of the value.
-		args = append(args, "/size:"+size)
+		// FreeRDP would take the spaces as part of the value. Validation also
+		// takes "1920X1080", but FreeRDP splits on a lowercase x only.
+		args = append(args, "/size:"+strings.ToLower(size))
 	}
 	if p.Fullscreen || p.Multimon {
 		args = append(args, "/f")

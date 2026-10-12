@@ -102,9 +102,10 @@ func execLookPath(client string) (string, error) {
 }
 
 // resolveCLICredential finds the password for id, asking on a terminal when
-// the keyring has none. Each keyring call is bounded by secret.OpTimeout, which
-// leaves room to answer an unlock prompt; Ctrl+C or SIGTERM end the wait
-// sooner, since nothing is running yet that could be left behind.
+// the keyring has none or cannot be reached; only a missing password offers
+// to save the typed one. Each keyring call is bounded by secret.OpTimeout,
+// which leaves room to answer an unlock prompt; Ctrl+C or SIGTERM end the
+// wait sooner, since nothing is running yet that could be left behind.
 func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profile, stderr io.Writer) (rdp.Credential, error) {
 	id := secret.IdentityFor(cfg.Path(), p)
 	ctx, cancel := context.WithTimeout(context.Background(), secret.OpTimeout)
@@ -116,15 +117,27 @@ func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profi
 		}
 		return res.Password, nil
 	}
+	// A saved password that cannot be used was read fine: it is neither
+	// missing nor behind an unreachable keyring, and a prompt would hide
+	// what is wrong with it.
 	if errors.Is(err, secret.ErrTooLong) || errors.Is(err, secret.ErrCRLF) {
 		return nil, fmt.Errorf("the saved password cannot be used (%w); save a new one from the TUI", err)
 	}
-	if !errors.Is(err, secret.ErrNotFound) && !errors.Is(err, secret.ErrUnavailable) {
+	// An unreachable keyring is not a missing password: telling the user to
+	// save one from the TUI sends them somewhere that cannot save it either.
+	unavailable := errors.Is(err, secret.ErrUnavailable)
+	if !unavailable && !errors.Is(err, secret.ErrNotFound) {
 		return nil, err
 	}
 	in := stdinFile()
 	if !isTerminal(int(in.Fd())) {
+		if unavailable {
+			return nil, fmt.Errorf("cannot read the password from the keyring: %w", err)
+		}
 		return nil, fmt.Errorf("no stored password for this profile; save one from the TUI first")
+	}
+	if unavailable {
+		fmt.Fprintf(stderr, "warning: cannot reach the keyring (%v); the password will not be saved\n", err)
 	}
 	fmt.Fprint(stderr, "Password: ")
 	b, err := readPassword(int(in.Fd()))
@@ -141,6 +154,9 @@ func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profi
 	}
 	if pw.Empty() {
 		return nil, fmt.Errorf("password required")
+	}
+	if unavailable {
+		return pw, nil
 	}
 	fmt.Fprint(stderr, "Save password for this profile? [y/N] ")
 	line, err := bufio.NewReader(in).ReadString('\n')

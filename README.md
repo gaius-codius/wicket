@@ -104,9 +104,10 @@ was. Deleting a profile also removes the comment lines directly above it. A
 file laid out in a way Wicket cannot edit in place, such as profiles written
 as an inline array, is rewritten in full instead, and the TUI says so.
 
-Keys named `password`, `pass`, `secret`, or `passwd` are stripped on save,
-with their line. A password in a comment is left alone, so do not keep one
-there either.
+Keys named `password`, `pass`, `secret`, or `passwd` are ignored when the
+file is loaded, with a warning, and the next save removes them from the file
+along with their line. A password in a comment is left alone, so do not keep
+one there either.
 
 Sharing is per profile, set in the form or by hand:
 

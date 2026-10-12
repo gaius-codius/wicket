@@ -218,11 +218,6 @@ func (m Model) statusLines(width int) []string {
 	return out
 }
 
-// kv renders an aligned label/value row for detail panes.
-func (m Model) kv(labelWidth int, label, value string) string {
-	return m.styles.muted.Render(padRight(label, labelWidth)) + "  " + m.styles.primary.Render(value)
-}
-
 // truncate shortens plain text to width cells, ending in "…" when cut.
 func truncate(s string, width int) string {
 	if width <= 0 {

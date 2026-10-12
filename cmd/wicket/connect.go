@@ -65,7 +65,8 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	launcher := newLauncher(stdout, stderr)
-	if _, err := execLookPath(plan.Client); err != nil {
+	// The same lookup Start makes, so a test's runner decides both.
+	if _, err := launcher.LookupClient(plan.Client); err != nil {
 		fmt.Fprintf(stderr, "rdp client %q not found on PATH\n", plan.Client)
 		return 2
 	}
@@ -102,10 +103,6 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	return out.ExitStatus()
-}
-
-func execLookPath(client string) (string, error) {
-	return rdp.OSRunner{}.LookPath(client)
 }
 
 // resolveCLICredential finds the password for id, asking on a terminal when

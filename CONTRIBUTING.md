@@ -32,7 +32,7 @@ blocked-by links, then put it on the board. The commands are in
 
 ## What you need
 
-- Go 1.26 or newer.
+- Go 1.26.9 or newer.
 - Linux or macOS. Linux uses the Secret Service keyring; macOS uses Keychain
   (cgo). The BSDs still compile against the D-Bus store but have no session
   bus integration tests.
@@ -48,6 +48,7 @@ blocked-by links, then put it on the board. The commands are in
 ```
 gofmt -l .        # must print nothing
 go vet ./...
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 go test ./...
 go test -race ./internal/secret ./internal/rdp ./cmd/wicket
 ```

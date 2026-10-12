@@ -231,14 +231,24 @@ func illegalBasename(client string) bool {
 	return strings.ContainsFunc(client, unicode.IsSpace)
 }
 
+// LookupClient finds client through the launcher's runner, as Start will.
+// Callers use it to report a missing client before asking for a password.
+func (l *Launcher) LookupClient(client string) (string, error) {
+	if illegalBasename(client) {
+		return "", fmt.Errorf("%w: %s", ErrClientNotFound, client)
+	}
+	path, err := l.runner().LookPath(client)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", ErrClientNotFound, client)
+	}
+	return path, nil
+}
+
 // Start looks up the client, spawns it in its own process group, writes the credential to stdin, and returns.
 func (l *Launcher) Start(plan Plan, cred Credential) (*Session, error) {
-	if illegalBasename(plan.Client) {
-		return nil, fmt.Errorf("%w: %s", ErrClientNotFound, plan.Client)
-	}
-	path, err := l.runner().LookPath(plan.Client)
+	path, err := l.LookupClient(plan.Client)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrClientNotFound, plan.Client)
+		return nil, err
 	}
 	cmd := l.runner().Command(path, plan.Args...)
 	cmd.Stdout = l.Stdout

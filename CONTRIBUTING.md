@@ -49,7 +49,7 @@ blocked-by links, then put it on the board. The commands are in
 gofmt -l .        # must print nothing
 go vet ./...
 go test ./...
-go test -race ./internal/secret
+go test -race ./internal/secret ./internal/rdp ./cmd/wicket
 ```
 
 ## Tests

@@ -21,7 +21,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: stable
+          go-version-file: go.mod
           cache: true
 
       - name: Check gofmt
@@ -39,8 +39,8 @@ jobs:
       - name: Run tests
         run: go test ./...
 
-      - name: Run race detector on secret package
-        run: go test -race ./internal/secret
+      - name: Run race detector on secret, rdp and cmd
+        run: go test -race ./internal/secret ./internal/rdp ./cmd/wicket
 
       - name: Build CLI
         run: go build -o /tmp/wicket ./cmd/wicket
@@ -55,7 +55,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: stable
+          go-version-file: go.mod
           cache: true
 
       - name: Check gofmt

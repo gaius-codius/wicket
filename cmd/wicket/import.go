@@ -102,7 +102,7 @@ func doImport(stdout, stderr io.Writer, dryRun, rename bool, parse func() ([]con
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	client := rdp.PreferredClient(rdp.InstalledClients(exec.LookPath))
+	client := rdp.PreferredClient(rdp.InstalledClients(exec.LookPath, rdp.FreeRDPMajor))
 	for i := range profiles {
 		profiles[i].Client = client
 	}

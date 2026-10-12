@@ -565,7 +565,7 @@ func (f formState) emptyHint(id int) string {
 		return "required"
 	case fieldClient:
 		if f.detected == 0 {
-			return "no FreeRDP client found"
+			return "no FreeRDP 3 client found"
 		}
 		return "binary name"
 	case fieldDomain:

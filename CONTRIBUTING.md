@@ -4,6 +4,32 @@ Bug reports and patches are welcome. Wicket is small and opinionated, so if
 you are planning something substantial, open an issue first, it is cheaper
 than finding out after the fact that it does not fit.
 
+## Issue tracking
+
+Work is tracked in GitHub issues on the
+[project board](https://github.com/users/gaius-codius/projects/3), which holds
+every open issue with a Status (Todo, In Progress, Done) and a Priority (High,
+Medium, Low).
+
+Every issue has exactly one type label:
+
+| Label | Use it for |
+|-------|------------|
+| `type:epic` | A body of work; its native sub-issues deliver it |
+| `type:feature` | Changes what Wicket does for a user |
+| `type:research` | Answers a question; the output is a note, not code |
+| `type:bug` | Incorrect behavior |
+| `type:chore` | No behavior change: upgrades, refactors, CI, tooling |
+
+Order between issues is a native "blocked by" link, not "depends on" prose.
+Repo milestones group phases inside an epic and are prefixed with its area
+(`settings: Toggles and choices`). Titles start with the area (`import: …`),
+and epics with `epic: `. Pull requests say `Closes #N`.
+
+New issues: start from a template, link the issue under its epic, add any
+blocked-by links, then put it on the board. The commands are in
+[AGENTS.md](AGENTS.md).
+
 ## What you need
 
 - Go 1.26 or newer.

@@ -95,18 +95,27 @@ func ParseRemmina(data []byte, sourceName string) (config.Profile, Skip, error) 
 	p := config.DefaultProfile()
 	p.Name = name
 	p.Host = strings.TrimSpace(vals["server"])
-	p.User = strings.TrimSpace(vals["username"])
-	p.Domain = strings.TrimSpace(vals["domain"])
-	if p.User != "" && p.Domain == "" {
-		if dom, user, ok := splitDomainUser(p.User); ok {
-			p.Domain, p.User = dom, user
-		}
-	}
-	p.User, p.Domain = dropUPNDomain(p.User, p.Domain)
+	p.User, p.Domain = splitAccount(vals["username"], vals["domain"])
 	p.Fullscreen = remminaFullscreen(vals["viewmode"])
 	p.Size = remminaSize(vals["resolution_mode"], vals["resolution_width"], vals["resolution_height"])
+	if off, ok := keyFileBool(vals["disableclipboard"]); ok {
+		p.Clipboard = !off
+	}
 	p.Shares = remminaShares(vals["sharefolder"], vals["drive"])
 	return p, Skip{}, nil
+}
+
+// keyFileBool reads a Remmina flag, which it writes as 0 or 1; GKeyFile's
+// true and false are read too. ok is false when the key is missing or holds
+// anything else, so the profile keeps Wicket's default.
+func keyFileBool(v string) (b, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true":
+		return true, true
+	case "0", "false":
+		return false, true
+	}
+	return false, false
 }
 
 func remminaFullscreen(viewmode string) bool {
@@ -152,6 +161,21 @@ func dropUPNDomain(user, domain string) (string, string) {
 	return user, domain
 }
 
+// splitAccount is the user and domain a file names. DOMAIN\user is split,
+// and a domain key set beside it wins over the one in the user, as the
+// Windows client reads the pair.
+func splitAccount(user, domain string) (string, string) {
+	user = strings.TrimSpace(user)
+	domain = strings.TrimSpace(domain)
+	if dom, bare, ok := splitDomainUser(user); ok {
+		user = bare
+		if domain == "" {
+			domain = dom
+		}
+	}
+	return dropUPNDomain(user, domain)
+}
+
 func splitDomainUser(user string) (domain, bare string, ok bool) {
 	if i := strings.IndexByte(user, '\\'); i > 0 && i < len(user)-1 {
 		return user[:i], user[i+1:], true
@@ -159,49 +183,89 @@ func splitDomainUser(user string) (domain, bare string, ok bool) {
 	return "", user, false
 }
 
+// shareSet collects the shares an import keeps, by the rules both formats
+// share. A path must be absolute or ~/…; an empty, relative or malformed one
+// is skipped. So is a folder holding the whole home folder: a file sent to the
+// user could otherwise hand a server every file they have, and Wicket offers
+// home only as share_home, which an import does not turn on. Whether the
+// folder exists is left to the time it is used.
+type shareSet struct {
+	list []config.Share
+	seen map[string]bool
+}
+
+func (s *shareSet) add(name, path string) {
+	path = strings.TrimSpace(path)
+	name = strings.TrimSpace(name)
+	if !isSharePath(path) || strings.ContainsRune(path, ',') || wholeHomeOrRoot(path) {
+		return
+	}
+	key := strings.ToLower(path) + "\x00" + strings.ToLower(name)
+	if s.seen[key] {
+		return
+	}
+	if s.seen == nil {
+		s.seen = map[string]bool{}
+	}
+	s.seen[key] = true
+	s.list = append(s.list, config.Share{Path: path, Name: name})
+}
+
+// wholeHomeOrRoot reports whether path holds the whole home folder: the
+// root, home itself, or a folder above it such as /home. A symlink is
+// followed when the path exists, so /proc/self/root counts, and anything
+// under /proc is refused outright, since what its links name changes with
+// the process that reads them. A path that cannot be expanded counts as one,
+// so it is skipped rather than guessed at.
+func wholeHomeOrRoot(path string) bool {
+	expanded, err := config.ExpandPath(path)
+	if err != nil {
+		return true
+	}
+	inProc := func(p string) bool { return p == "/proc" || strings.HasPrefix(p, "/proc/") }
+	// Checked before and after the symlinks are followed: /proc/self/cwd
+	// leads out of /proc, and /dev/fd leads into it.
+	if inProc(expanded) {
+		return true
+	}
+	if resolved, err := filepath.EvalSymlinks(expanded); err == nil {
+		expanded = resolved
+	}
+	if expanded == "/" || inProc(expanded) {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	home = filepath.Clean(home)
+	if resolved, err := filepath.EvalSymlinks(home); err == nil {
+		home = resolved
+	}
+	return strings.HasPrefix(home+"/", expanded+"/")
+}
+
+func isSharePath(path string) bool {
+	return strings.HasPrefix(path, "/") || path == "~" || strings.HasPrefix(path, "~/")
+}
+
 // remminaShares maps Remmina's sharefolder (one path) and drive
-// (name,path;name,path or a bare path) into wicket shares. Paths that are
-// empty or not absolute / ~/… are skipped; existence is left to save time.
+// (name,path;name,path or a bare path) into wicket shares.
 func remminaShares(sharefolder, drive string) []config.Share {
-	var out []config.Share
-	seen := map[string]bool{}
-	add := func(name, path string) {
-		path = strings.TrimSpace(path)
-		name = strings.TrimSpace(name)
-		if path == "" {
-			return
-		}
-		if strings.ContainsRune(path, ',') {
-			return
-		}
-		if !strings.HasPrefix(path, "/") && path != "~" && !strings.HasPrefix(path, "~/") {
-			return
-		}
-		key := strings.ToLower(path) + "\x00" + strings.ToLower(name)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		out = append(out, config.Share{Path: path, Name: name})
-	}
-	if sf := strings.TrimSpace(sharefolder); sf != "" {
-		add("", sf)
-	}
+	var shares shareSet
+	shares.add("", sharefolder)
 	for _, part := range strings.Split(drive, ";") {
 		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
 		// FreeRDP / Remmina: name,path — or a bare path starting with /.
-		if strings.HasPrefix(part, "/") || part == "~" || strings.HasPrefix(part, "~/") {
-			add("", part)
+		if isSharePath(part) {
+			shares.add("", part)
 			continue
 		}
 		name, path, ok := strings.Cut(part, ",")
 		if !ok {
 			continue
 		}
-		add(name, path)
+		shares.add(name, path)
 	}
-	return out
+	return shares.list
 }

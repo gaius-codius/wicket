@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -17,11 +20,28 @@ func clientTOML(client string) string {
 	return strings.Replace(fixtureTOML("work", "h", "u"), `client = "sdl-freerdp3"`, `client = "`+client+`"`, 1)
 }
 
-// clientHarness is a harness whose PATH holds only installed.
+// clientHarness is a harness whose PATH holds only installed, every one of
+// them FreeRDP 3 when asked.
 func clientHarness(t *testing.T, cfg string, installed ...string) *harness {
 	t.Helper()
 	h := newHarness(t, cfg, secret.NewMemory())
 	h.m.app.LookPath = onPath(installed...)
+	h.m.app.FreeRDPMajor = func(string) (int, bool) { return 3, true }
+	return h
+}
+
+// freerdp2Harness is a clientHarness whose unsuffixed xfreerdp is FreeRDP 2.
+// runs counts the version probes.
+func freerdp2Harness(t *testing.T, cfg string, runs *int, installed ...string) *harness {
+	t.Helper()
+	h := clientHarness(t, cfg, installed...)
+	h.m.app.FreeRDPMajor = func(path string) (int, bool) {
+		*runs++
+		if path == "/fake/bin/"+rdp.ClientX11Homebrew {
+			return 2, true
+		}
+		return 3, true
+	}
 	return h
 }
 
@@ -180,7 +200,7 @@ func TestFormClient_NoClientInstalled(t *testing.T) {
 		t.Fatalf("client %q, want the fallback %q", m.form.p.Client, config.DefaultClient)
 	}
 	out := screen(m)
-	if !strings.Contains(out, "No FreeRDP client found") {
+	if !strings.Contains(out, "No FreeRDP 3 client found") {
 		t.Fatalf("no hint:\n%s", out)
 	}
 	if row := clientRow(t, m); !strings.Contains(row, config.DefaultClient) || !strings.Contains(row, notFound) {
@@ -193,7 +213,7 @@ func TestFormClient_NoClientInstalled(t *testing.T) {
 	}
 	m.form.inputs[fieldClient].SetValue("")
 	m.form.p.Client = ""
-	if row := clientRow(t, m); !strings.Contains(row, "no FreeRDP client found") {
+	if row := clientRow(t, m); !strings.Contains(row, "no FreeRDP 3 client found") {
 		t.Fatalf("empty row %q", row)
 	}
 }
@@ -229,6 +249,112 @@ func TestNewProfile_DefaultsToAnInstalledClient(t *testing.T) {
 		if p, _ := m.app.Cfg.Profile("work"); p.Client != tc.want {
 			t.Fatalf("%v: client %q, want %q", tc.installed, p.Client, tc.want)
 		}
+	}
+}
+
+// An unsuffixed xfreerdp that is FreeRDP 2 is neither offered nor picked
+// for a new profile, and the form asks it once however often it opens.
+func TestNewProfile_SkipsFreeRDP2(t *testing.T) {
+	for _, tc := range []struct {
+		installed []string
+		choices   []string
+	}{
+		{[]string{rdp.ClientX11Homebrew}, nil},
+		{[]string{rdp.ClientSDLHomebrew, rdp.ClientX11Homebrew}, []string{rdp.ClientSDLHomebrew}},
+		{[]string{rdp.ClientX11, rdp.ClientX11Homebrew}, []string{rdp.ClientX11}},
+	} {
+		runs := 0
+		h := freerdp2Harness(t, "", &runs, tc.installed...)
+		m := press(h.m, "n")
+		if !slices.Equal(m.form.clients[:m.form.detected], tc.choices) {
+			t.Fatalf("%v: choices %q, want %q", tc.installed, m.form.clients, tc.choices)
+		}
+		want := config.DefaultClient
+		if len(tc.choices) > 0 {
+			want = tc.choices[0]
+		}
+		if m.form.p.Client != want {
+			t.Fatalf("%v: new profile client %q, want %q", tc.installed, m.form.p.Client, want)
+		}
+		before := runs
+		m = press(m, "esc")
+		m = press(m, "n")
+		if runs != before || m.form.p.Client != want {
+			t.Fatalf("%v: second form ran %d more probes, client %q", tc.installed, runs-before, m.form.p.Client)
+		}
+	}
+}
+
+// A probe that fails, a client that hangs say, is remembered like any other
+// answer: discovery runs in Update, so asking again on every form would
+// freeze the TUI every time.
+func TestInstalledClients_RemembersAFailedProbe(t *testing.T) {
+	h := clientHarness(t, "", rdp.ClientX11Homebrew)
+	runs := 0
+	h.m.app.FreeRDPMajor = func(string) (int, bool) { runs++; return 0, false }
+	for range 3 {
+		if got := h.m.app.InstalledClients(); len(got) != 0 {
+			t.Fatalf("failed probe offered %v", got)
+		}
+	}
+	if runs != 1 {
+		t.Fatalf("failed probe ran %d times", runs)
+	}
+}
+
+// A client replaced in place is asked again: what it said before was about
+// another build.
+func TestInstalledClients_ReprobesAReplacedBinary(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), rdp.ClientX11Homebrew)
+	if err := os.WriteFile(bin, []byte("3"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := clientHarness(t, "")
+	h.m.app.LookPath = func(file string) (string, error) {
+		if file == rdp.ClientX11Homebrew {
+			return bin, nil
+		}
+		return "", exec.ErrNotFound
+	}
+	runs := 0
+	h.m.app.FreeRDPMajor = func(path string) (int, bool) {
+		runs++
+		b, _ := os.ReadFile(path)
+		return int(b[0] - '0'), true
+	}
+	if got := h.m.app.InstalledClients(); len(got) != 1 {
+		t.Fatalf("version 3 not offered: %v", got)
+	}
+	h.m.app.InstalledClients()
+	if runs != 1 {
+		t.Fatalf("unchanged binary probed %d times", runs)
+	}
+	if err := os.WriteFile(bin, []byte("2 "), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.m.app.InstalledClients(); len(got) != 0 || runs != 2 {
+		t.Fatalf("after the swap to version 2: offered %v after %d probes", got, runs)
+	}
+}
+
+// A profile that already names a FreeRDP 2 xfreerdp keeps it: the form shows
+// it as it is, not as missing, and saving does not change it.
+func TestFormClient_KeepsAFreeRDP2Profile(t *testing.T) {
+	runs := 0
+	h := freerdp2Harness(t, clientTOML(rdp.ClientX11Homebrew), &runs, rdp.ClientSDL, rdp.ClientX11Homebrew)
+	m := focusField(t, press(h.m, "e"), fieldClient)
+	if m.form.p.Client != rdp.ClientX11Homebrew || m.form.dirty() {
+		t.Fatalf("opened with client %q, dirty %v", m.form.p.Client, m.form.dirty())
+	}
+	if row := clientRow(t, m); !strings.Contains(row, rdp.ClientX11Homebrew) || strings.Contains(row, notFound) {
+		t.Fatalf("row %q", row)
+	}
+	if help := m.form.clientHelp(); !strings.HasPrefix(help, "Not FreeRDP 3") {
+		t.Fatalf("help %q", help)
+	}
+	m = press(m, "ctrl+s")
+	if p, _ := m.app.Cfg.Profile("work"); m.view != viewList || p.Client != rdp.ClientX11Homebrew {
+		t.Fatalf("view %v, saved client %q", m.view, p.Client)
 	}
 }
 
@@ -367,6 +493,26 @@ func TestRetry_FullscreenHint(t *testing.T) {
 				t.Fatalf("no fullscreen-off advice:\n%s", out)
 			}
 		})
+	}
+}
+
+// The fullscreen hint does not suggest an unsuffixed xfreerdp that is
+// FreeRDP 2: it falls back to a suffixed X11 client, or to fullscreen off.
+func TestRetry_FullscreenHintSkipsFreeRDP2(t *testing.T) {
+	for _, tc := range []struct {
+		installed []string
+		want      string
+	}{
+		{[]string{rdp.ClientSDLHomebrew, rdp.ClientX11Homebrew}, "Try turning fullscreen off."},
+		{[]string{rdp.ClientSDL, rdp.ClientX11, rdp.ClientX11Homebrew}, "Try the xfreerdp3 client, or turn fullscreen off."},
+	} {
+		runs := 0
+		h := freerdp2Harness(t, fixtureTOML("work", "h", "u"), &runs, tc.installed...)
+		p, _ := h.m.app.Cfg.Profile("work")
+		p.Fullscreen = true
+		if action, _ := h.m.app.fullscreenHint(p, failed(rdp.ClientSDLHomebrew, 136).Outcome); action != tc.want {
+			t.Fatalf("%v: hint %q, want %q", tc.installed, action, tc.want)
+		}
 	}
 }
 

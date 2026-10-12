@@ -46,7 +46,9 @@ Needs a FreeRDP 3 client on `PATH`. New profiles use the first one found:
 1. `sdl-freerdp3`, then `sdl-freerdp`
 2. `xfreerdp3`, then `xfreerdp`
 
-Linux packages usually install the names with a `3` suffix.
+Linux packages usually install the names with a `3` suffix. A name without
+it counts only when its `--version` reports FreeRDP 3, so a FreeRDP 2
+`xfreerdp` is passed over.
 
 ### macOS
 
@@ -82,6 +84,10 @@ Press `?` in the TUI for keys and field help.
 
 `wicket import` brings Remmina (`*.remmina`, RDP only) or Microsoft `.rdp`
 files into wicket profiles. Import only — there is no export or sync.
+A turned-off clipboard and shared folders come across. "All drives" (`*`,
+`DynamicDrives` in an `.rdp` file), Windows drive letters, the home folder
+(`%`, `~`) and any folder that holds it, such as `/home` or `/`, do not; turn
+on `share_home` yourself if you want home shared.
 Passwords are never imported; you enter them on first connect. A file with
 no username imports with none, and the TUI asks for one when you connect;
 `wicket connect` refuses it until one is set. Use

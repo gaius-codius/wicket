@@ -43,31 +43,56 @@ type KnownClient struct {
 	Name string
 	// About says in a few words what the client is, for the form's help.
 	About string
+	// Unversioned marks a name without the major version in it, which is
+	// offered only once the client reports FreeRDP 3 (see FreeRDPMajor).
+	Unversioned bool
 }
 
 // KnownClients are the clients the form offers, most preferred first; a new
 // profile gets the first one installed. SDL is preferred to X11, and the
 // version-suffixed name to the unsuffixed one when both are installed, so a
 // Linux package of sdl-freerdp3 still wins over a stray sdl-freerdp. The
-// unsuffixed names are what Homebrew's freerdp formula puts on PATH.
-// wlfreerdp3 is left out for now: how well it copes with Wicket's options is
-// still being looked into.
+// unsuffixed names are what Homebrew's freerdp formula puts on PATH, and
+// only count when they report FreeRDP 3. wlfreerdp3 is left out for now: how
+// well it copes with Wicket's options is still being looked into.
 var KnownClients = []KnownClient{
-	{ClientSDL, "FreeRDP's SDL client (native Wayland and X11)"},
-	{ClientSDLHomebrew, "FreeRDP's SDL client (native Wayland and X11)"},
-	{ClientX11, "FreeRDP's X11 client (runs through XWayland on Wayland)"},
-	{ClientX11Homebrew, "FreeRDP's X11 client (runs through XWayland on Wayland)"},
+	{ClientSDL, "FreeRDP's SDL client (native Wayland and X11)", false},
+	{ClientSDLHomebrew, "FreeRDP's SDL client (native Wayland and X11)", true},
+	{ClientX11, "FreeRDP's X11 client (runs through XWayland on Wayland)", false},
+	{ClientX11Homebrew, "FreeRDP's X11 client (runs through XWayland on Wayland)", true},
 }
 
 // InstalledClients returns the known clients lookPath finds, in order of
-// preference. lookPath is exec.LookPath in production; tests pass their own
-// so that nothing depends on what the machine has installed.
-func InstalledClients(lookPath func(string) (string, error)) []KnownClient {
+// preference, leaving out an unversioned one that major does not report as
+// FreeRDP 3. lookPath and major are exec.LookPath and FreeRDPMajor in
+// production; tests pass their own so that nothing depends on what the
+// machine has installed. Each binary is run at most once per call, however
+// many names link to it.
+func InstalledClients(lookPath func(string) (string, error), major func(path string) (int, bool)) []KnownClient {
 	var out []KnownClient
+	supported := map[string]bool{}
 	for _, c := range KnownClients {
-		if _, err := lookPath(c.Name); err == nil {
-			out = append(out, c)
+		path, err := lookPath(c.Name)
+		if err != nil {
+			continue
 		}
+		if c.Unversioned {
+			// Names that are links to one binary share its answer.
+			real, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				real = path
+			}
+			ok, seen := supported[real]
+			if !seen {
+				v, found := major(path)
+				ok = found && v == 3
+				supported[real] = ok
+			}
+			if !ok {
+				continue
+			}
+		}
+		out = append(out, c)
 	}
 	return out
 }

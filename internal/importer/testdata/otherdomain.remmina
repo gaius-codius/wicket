@@ -1,0 +1,6 @@
+[remmina]
+name=otherdomain
+protocol=RDP
+server=h
+username=OTHER\\alice
+domain=CORP

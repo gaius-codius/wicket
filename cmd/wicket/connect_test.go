@@ -5,13 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/gaius-codius/wicket/internal/config"
+	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
 	"github.com/gaius-codius/wicket/internal/testutil"
 )
@@ -187,6 +190,34 @@ func TestConnect_MissingClient(t *testing.T) {
 		t.Fatalf("exit %d", got.code)
 	}
 	if !strings.Contains(got.stderr, "sdl-freerdp3") {
+		t.Fatalf("stderr %q", got.stderr)
+	}
+}
+
+// missingRunner finds no client, whatever PATH holds.
+type missingRunner struct{ rdp.OSRunner }
+
+func (missingRunner) LookPath(file string) (string, error) {
+	return "", exec.ErrNotFound
+}
+
+// The client check before the password prompt must go through the launcher's
+// runner, the one Start uses, so a test that swaps the runner controls both.
+func TestConnect_MissingClientUsesLauncherRunner(t *testing.T) {
+	cfg := writeConnectConfig(t, validTOML())
+	t.Setenv("WICKET_CONFIG", cfg)
+	t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
+	oldLauncher := newLauncher
+	newLauncher = func(stdout, stderr io.Writer) *rdp.Launcher {
+		return &rdp.Launcher{Runner: missingRunner{}, Stdout: stdout, Stderr: stderr}
+	}
+	t.Cleanup(func() { newLauncher = oldLauncher })
+	got := runCLI(t, []string{"connect", "work"})
+	if got.code != 2 {
+		t.Fatalf("exit %d stderr %q", got.code, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "not found on PATH") {
 		t.Fatalf("stderr %q", got.stderr)
 	}
 }

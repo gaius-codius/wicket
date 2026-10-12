@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -206,4 +207,67 @@ func TestParseRemmina_NoUserAndUPN(t *testing.T) {
 		t.Fatalf("upn: %+v", ps[1])
 	}
 	assertImports(t, ps)
+}
+
+// disableclipboard=1 turns the clipboard off; a file without the key, or
+// with a value Remmina would not write, keeps it on.
+func TestParseRemmina_Clipboard(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{
+		{"disableclipboard=1\n", false},
+		{"disableclipboard=true\n", false},
+		{"disableclipboard=0\n", true},
+		{"", true},
+		{"disableclipboard=maybe\n", true},
+	} {
+		doc := "[remmina]\nname=r\nprotocol=RDP\nserver=h\nusername=u\n" + tc.line
+		p, _, err := ParseRemmina([]byte(doc), "r.remmina")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Clipboard != tc.want {
+			t.Errorf("%q: clipboard %v, want %v", tc.line, p.Clipboard, tc.want)
+		}
+	}
+}
+
+// noclip.remmina has the clipboard off beside a password and a gateway
+// password, neither of which may reach the profile.
+func TestParseRemmina_NoClipboardNoPassword(t *testing.T) {
+	t.Parallel()
+	p, skip, err := ParseRemminaFile(filepath.Join("testdata", "noclip.remmina"))
+	if err != nil || skip.Reason != "" {
+		t.Fatalf("err=%v skip=%v", err, skip)
+	}
+	if p.Clipboard {
+		t.Fatal("clipboard on, want off")
+	}
+	if got := fmt.Sprintf("%#v", p); strings.Contains(got, "SECRET") {
+		t.Fatalf("password on the profile: %s", got)
+	}
+	assertImports(t, []config.Profile{p})
+}
+
+// A DOMAIN\user beside a domain key is split like the .rdp importer splits
+// it: the user keeps its bare name and the domain key wins.
+func TestParseRemmina_DomainUserBesideDomain(t *testing.T) {
+	t.Parallel()
+	p, skip, err := ParseRemminaFile(filepath.Join("testdata", "otherdomain.remmina"))
+	if err != nil || skip.Reason != "" {
+		t.Fatalf("err=%v skip=%v", err, skip)
+	}
+	if p.User != "alice" || p.Domain != "CORP" {
+		t.Fatalf("user %q domain %q, want alice and CORP", p.User, p.Domain)
+	}
+	r, _, err := ParseRDP([]byte("full address:s:h\nusername:s:OTHER\\alice\ndomain:s:CORP\n"), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.User != p.User || r.Domain != p.Domain {
+		t.Fatalf(".rdp made %q %q of the same pair", r.User, r.Domain)
+	}
+	assertImports(t, []config.Profile{p})
 }

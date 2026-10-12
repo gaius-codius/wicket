@@ -12,6 +12,9 @@ import (
 
 const (
 	maxPort = 65535
+	// maxDimension is the widest or tallest /size FreeRDP takes: it reads
+	// each side into a UINT16 and refuses the connection over it.
+	maxDimension = 65535
 )
 
 // FieldError is a validation failure for a single profile field.
@@ -258,6 +261,9 @@ func ValidateProfileInUse(p Profile) error {
 	if strings.ContainsFunc(strings.TrimSpace(p.Host), unicode.IsSpace) {
 		return &FieldError{Field: "host", Msg: "must not contain spaces"}
 	}
+	if err := validateSizeInRange(p.Size); err != nil {
+		return err
+	}
 	return validateSharesExist(p)
 }
 
@@ -265,6 +271,23 @@ func ValidateProfileInUse(p Profile) error {
 // save or connect. FreeRDP would otherwise be launched with "/u:" and sign
 // in as nobody, or prompt on a terminal Wicket owns.
 var ErrNoUser = &FieldError{Field: "user", Msg: "must not be empty"}
+
+// validateSizeInRange refuses a width or height FreeRDP would reject. It is
+// held to save and connect, not load: a hand-edited "70000x1080" used to be
+// accepted, and the config holding it must still open. ValidateProfile has
+// already checked the shape, so only the numbers are left to judge.
+func validateSizeInRange(size string) error {
+	w, h, ok := strings.Cut(strings.ToLower(strings.TrimSpace(size)), "x")
+	if !ok {
+		return nil
+	}
+	for _, d := range []string{w, h} {
+		if n, err := strconv.Atoi(d); err == nil && n > maxDimension {
+			return &FieldError{Field: "size", Msg: "width and height must be at most 65535"}
+		}
+	}
+	return nil
+}
 
 // validateImported is what AddProfiles holds a profile to: the same as a
 // save, except a shared folder that is not on disk yet is kept. Import
@@ -277,7 +300,7 @@ func validateImported(p Profile) error {
 	if strings.ContainsFunc(strings.TrimSpace(p.Host), unicode.IsSpace) {
 		return &FieldError{Field: "host", Msg: "must not contain spaces"}
 	}
-	return nil
+	return validateSizeInRange(p.Size)
 }
 
 // dropUnimportableShares keeps shares a loaded config would accept, and

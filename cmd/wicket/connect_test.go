@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -233,4 +235,126 @@ func writeConnectConfig(t *testing.T, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// failingStore answers every Lookup with err and counts the saves it is asked
+// for, so a test can tell whether connect offered to save a typed password.
+type failingStore struct {
+	err     error
+	upserts int
+}
+
+func (f *failingStore) Lookup(context.Context, secret.Identity) (secret.LookupResult, error) {
+	return secret.LookupResult{}, f.err
+}
+
+func (f *failingStore) Upsert(context.Context, secret.Identity, secret.Password) error {
+	f.upserts++
+	return nil
+}
+
+func (f *failingStore) Delete(context.Context, secret.Identity) error { return nil }
+
+func (f *failingStore) Presence(context.Context, secret.Identity) (secret.Presence, error) {
+	return secret.NotSaved, f.err
+}
+
+func TestConnect_KeyringErrors(t *testing.T) {
+	unavailable := fmt.Errorf("%w: no session bus", secret.ErrUnavailable)
+	cases := []struct {
+		name    string
+		err     error
+		tty     bool
+		code    int
+		want    []string
+		notWant []string
+		upserts int
+	}{
+		{"not found/no tty", secret.ErrNotFound, false, 2,
+			[]string{"no stored password", "TUI"}, nil, 0},
+		{"unavailable/no tty", unavailable, false, 2,
+			[]string{"keyring", "no session bus"}, []string{"no stored password", "TUI"}, 0},
+		{"not found/tty", secret.ErrNotFound, true, 0,
+			[]string{"Save password"}, []string{"keyring"}, 1},
+		{"unavailable/tty", unavailable, true, 0,
+			[]string{"cannot reach the keyring", "no session bus"}, []string{"Save password"}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("WICKET_CONFIG", writeConnectConfig(t, validTOML()))
+			t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+			testutil.PrependPATH(t, testutil.FakeRDPDir(t))
+			rec := filepath.Join(t.TempDir(), "rec.json")
+			t.Setenv("FAKERDP_RECORD", rec)
+
+			// Stdin already holds a "y", so a save offer that should not
+			// have been made is answered and shows up as an upsert.
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = r.Close() })
+			if _, err := w.Write([]byte("y\n")); err != nil {
+				t.Fatal(err)
+			}
+			_ = w.Close()
+
+			store := &failingStore{err: tc.err}
+			oldStore, oldTTY, oldRead, oldIn := openStore, isTerminal, readPassword, stdinFile
+			openStore = func() secret.Store { return store }
+			isTerminal = func(int) bool { return tc.tty }
+			readPassword = func(int) ([]byte, error) { return []byte("typed"), nil }
+			stdinFile = func() *os.File { return r }
+			t.Cleanup(func() {
+				openStore, isTerminal, readPassword, stdinFile = oldStore, oldTTY, oldRead, oldIn
+			})
+
+			got := runCLI(t, []string{"connect", "work"})
+			if got.code != tc.code {
+				t.Fatalf("exit %d stderr %q", got.code, got.stderr)
+			}
+			for _, s := range tc.want {
+				if !strings.Contains(got.stderr, s) {
+					t.Errorf("stderr %q lacks %q", got.stderr, s)
+				}
+			}
+			for _, s := range tc.notWant {
+				if strings.Contains(got.stderr, s) {
+					t.Errorf("stderr %q has %q", got.stderr, s)
+				}
+			}
+			if store.upserts != tc.upserts {
+				t.Errorf("upserts %d, want %d", store.upserts, tc.upserts)
+			}
+			if tc.tty {
+				if rr := testutil.ReadRecord(t, rec); rr.Stdin != "typed\n" {
+					t.Errorf("client stdin %q, want the typed password", rr.Stdin)
+				}
+			}
+		})
+	}
+}
+
+// The sandbox points DBUS_SESSION_BUS_ADDRESS at a socket that does not
+// exist, so the real Secret Service store fails the way it does on a machine
+// with no session bus. This checks that the real store's error, not only the
+// failingStore's, reaches the user as a keyring problem.
+func TestConnect_NoSessionBus(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the Secret Service store is the default only on Linux")
+	}
+	t.Setenv("WICKET_CONFIG", writeConnectConfig(t, validTOML()))
+	t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
+	oldTTY := isTerminal
+	isTerminal = func(int) bool { return false }
+	t.Cleanup(func() { isTerminal = oldTTY })
+
+	got := runCLI(t, []string{"connect", "work"})
+	if got.code != 2 {
+		t.Fatalf("exit %d stderr %q", got.code, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "keyring") || strings.Contains(got.stderr, "TUI") {
+		t.Fatalf("stderr %q", got.stderr)
+	}
 }

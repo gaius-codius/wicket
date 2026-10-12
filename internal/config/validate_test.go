@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -235,5 +236,50 @@ user = "u"
 	p.Host = "other host"
 	if err := cfg.Upsert(p, "work"); err == nil {
 		t.Fatal("spaced host saved")
+	}
+}
+
+// FreeRDP reads each side of /size into a UINT16, so "70000x1080" passed
+// validation and then failed the connect. A config that already holds one
+// still opens; saving, connecting and importing refuse it.
+func TestSize_DimensionsCappedOnSaveNotOnLoad(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []string{"70000x1080", "1920x65536", "65536X1"} {
+		p := validProfile()
+		p.Size = bad
+		err := ValidateProfileInUse(p)
+		var fe *FieldError
+		if !errors.As(err, &fe) || fe.Field != "size" || !strings.Contains(fe.Msg, "65535") {
+			t.Errorf("size %q for save: %v", bad, err)
+		}
+		if err := validateImported(p); err == nil {
+			t.Errorf("size %q accepted for import", bad)
+		}
+		if err := ValidateProfile(p); err != nil {
+			t.Errorf("size %q rejected on load: %v", bad, err)
+		}
+	}
+	for _, good := range []string{"65535x65535", "1920x1080", "1920X1080", " 1x1 ", "100%", "500%", ""} {
+		p := validProfile()
+		p.Size = good
+		if err := ValidateProfileInUse(p); err != nil {
+			t.Errorf("size %q rejected for save: %v", good, err)
+		}
+	}
+	path := writeTOML(t, `
+[[profiles]]
+name = "work"
+host = "h"
+user = "u"
+size = "70000x1080"
+`)
+	cfg, err := Open(path)
+	if err != nil {
+		t.Fatalf("config with an oversized size did not open: %v", err)
+	}
+	p, _ := cfg.Profile("work")
+	p.User = "other"
+	if err := cfg.Upsert(p, "work"); err == nil {
+		t.Fatal("oversized size saved")
 	}
 }

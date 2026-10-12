@@ -1,0 +1,5 @@
+xfreerdp3
+/v:h
+/u:u
+/size:1920x1080
+/from-stdin:force

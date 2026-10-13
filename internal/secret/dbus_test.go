@@ -227,6 +227,41 @@ func TestDBus_LookupPrefersTheNewestOfSeveralMatches(t *testing.T) {
 	}
 }
 
+// A profile can match an item in an open collection and a newer one in a
+// locked collection. If the unlock is refused, the open one is readable but
+// stale, and sending it would ignore the password the user saved last with
+// no word of why (issue #80). Lookup reports the lock instead.
+func TestDBus_LookupWithARefusedUnlockIgnoresAnOlderReadableMatch(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	srv.Seed(id.Attrs(), "older", 100)
+	srv.LockItem(srv.Seed(id.Attrs(), "newer", 200))
+	srv.SetPrompt(fakesecret.PromptDismiss)
+
+	store := NewDBus()
+	got, err := store.Lookup(bg, id)
+	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrPromptDismissed) {
+		var buf bytes.Buffer
+		_ = got.Password.WriteLine(&buf)
+		t.Fatalf("dismissed unlock: password %q, err = %v, want ErrLocked wrapping the dismissal", buf.String(), err)
+	}
+
+	srv.SetPrompt(fakesecret.PromptAccept)
+	got, err = store.Lookup(bg, id)
+	if err != nil {
+		t.Fatalf("accepted unlock: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := got.Password.WriteLine(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "newer\n" || !got.Multiple {
+		t.Fatalf("accepted unlock: %q, multiple %v, want the newer password and a warning", buf.String(), got.Multiple)
+	}
+}
+
 // A password saved before the limit came down, or by another tool, is too
 // long for the client. Lookup says so, rather than "not found", which would
 // ask for a new password without saying what was wrong with the old one.

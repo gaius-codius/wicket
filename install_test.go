@@ -281,7 +281,7 @@ type installer struct {
 
 // tools are what install.sh and its stubs run besides the fetcher and gh.
 var tools = []string{
-	"awk", "cat", "chmod", "cp", "cut", "env", "grep", "gzip", "head",
+	"awk", "cat", "chmod", "cp", "cut", "date", "env", "grep", "gzip", "head",
 	"mkdir", "mktemp", "mv", "rm", "sed", "sleep", "tar",
 }
 

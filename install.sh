@@ -75,12 +75,14 @@ run() {
 
 # stop kills the running command, cleans up and exits with $1. Background
 # commands ignore INT and QUIT, so it has to kill them for Ctrl-C and Ctrl-\
-# too. Whatever ignores TERM as well gets 2 s and then KILL. The tree is
+# too. Whatever ignores TERM as well gets 2 to 3 s and then KILL. The tree is
 # listed first, as a process that ignores TERM outlives the parent that
 # would lead to it. The command itself is timed by a watcher: kill -0 cannot
 # tell when it has gone, as a child that has exited stays a zombie until it
-# is waited for. What it started belongs to init by then, so kill -0 can;
-# under an init that does not reap, that costs the 2 s and no more.
+# is waited for. The watcher goes as soon as it has been, before its pid can
+# be reused. What it started belongs to init by then, so kill -0 can tell,
+# and only what is still running at the deadline is killed. Under an init
+# that does not reap, that costs the time left and no more.
 stop() {
 	if [ -n "$starting" ]; then
 		stopping=$1
@@ -88,27 +90,26 @@ stop() {
 	fi
 	if [ -n "$child" ]; then
 		st_tree=$(tree_pids "$child")
+		st_end=$(($(date +%s) + 3))
 		# shellcheck disable=SC2086 # a list of pids
 		kill -TERM $st_tree 2>/dev/null || :
 		# Off the installer's output, or a sleep this leaves behind (with
 		# no pgrep) would hold a pipe the installer writes to open.
 		(
 			sleep 2
-			# shellcheck disable=SC2086
-			kill -KILL $st_tree 2>/dev/null
+			kill_tree KILL "$child"
 		) >/dev/null 2>&1 &
 		st_watch=$!
 		wait "$child" 2>/dev/null || :
-		st_n=0
+		kill_tree KILL "$st_watch"
+		wait "$st_watch" 2>/dev/null || :
 		# shellcheck disable=SC2086
-		while st_left=$(alive_pids "$child" $st_tree) && [ -n "$st_left" ] && [ "$st_n" -lt 20 ]; do
+		while st_left=$(alive_pids "$child" $st_tree) && [ -n "$st_left" ] &&
+			[ "$(date +%s)" -lt "$st_end" ]; do
 			sleep 0.1
-			st_n=$((st_n + 1))
 		done
 		# shellcheck disable=SC2086
 		[ -z "$st_left" ] || kill -KILL $st_left 2>/dev/null || :
-		kill_tree KILL "$st_watch"
-		wait "$st_watch" 2>/dev/null || :
 	fi
 	cleanup
 	exit "$1"

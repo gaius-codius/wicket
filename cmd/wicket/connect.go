@@ -178,7 +178,13 @@ func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profi
 		ctx, cancel := context.WithTimeout(context.Background(), secret.OpTimeout)
 		defer cancel()
 		if err := store.Upsert(ctx, id, pw); err != nil {
-			fmt.Fprintln(stderr, "warning: could not save password:", err)
+			if errors.Is(err, secret.ErrLocked) {
+				// The user would not unlock the keyring. The error goes on
+				// to say "unavailable", which is not what happened.
+				fmt.Fprintln(stderr, "warning: could not save password: the keyring is locked")
+			} else {
+				fmt.Fprintln(stderr, "warning: could not save password:", err)
+			}
 		}
 	}
 	return pw, nil

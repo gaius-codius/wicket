@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -499,6 +500,76 @@ func TestConnect_DismissedUnlock(t *testing.T) {
 			}
 			if rr := testutil.ReadRecord(t, rec); rr.Stdin != "typed\n" {
 				t.Errorf("client stdin %q, want the typed password", rr.Stdin)
+			}
+		})
+	}
+}
+
+// gnome-keyring refuses a save into a locked collection rather than
+// prompting. Connect has to raise the unlock dialog, and when the user
+// refuses it, say the keyring is locked: it used to say the Secret Service
+// was unavailable, and never showed a dialog at all (issue #101).
+func TestConnect_SaveIntoALockedKeyring(t *testing.T) {
+	// prompted is KeePassXC, which answers the write itself with a prompt
+	// rather than refusing it; the dismissal is still not "unavailable".
+	for name, mode := range map[string]fakesecret.PromptMode{"refused": fakesecret.PromptDismiss, "accepted": fakesecret.PromptAccept, "prompted": fakesecret.PromptDismiss} {
+		t.Run(name, func(t *testing.T) {
+			_, srv, cleanup := fakesecret.Start(t)
+			defer cleanup()
+			cfgPath := writeConnectConfig(t, validTOML())
+			t.Setenv("WICKET_CONFIG", cfgPath)
+			t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+			testutil.PrependPATH(t, testutil.FakeRDPDir(t))
+			t.Setenv("FAKERDP_RECORD", filepath.Join(t.TempDir(), "rec.json"))
+			if name != "prompted" {
+				srv.RefuseLockedWrites()
+			}
+			srv.SetLocked(true)
+			srv.SetPrompt(mode)
+
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = r.Close() })
+			if _, err := w.Write([]byte("y\n")); err != nil {
+				t.Fatal(err)
+			}
+			_ = w.Close()
+
+			oldStore, oldTTY, oldRead, oldIn := openStore, isTerminal, readPassword, stdinFile
+			openStore = func() secret.Store { return secret.NewDBus() }
+			isTerminal = func(int) bool { return true }
+			readPassword = func(int) ([]byte, error) { return []byte("typed"), nil }
+			stdinFile = func() *os.File { return r }
+			t.Cleanup(func() {
+				openStore, isTerminal, readPassword, stdinFile = oldStore, oldTTY, oldRead, oldIn
+			})
+
+			got := runCLI(t, []string{"connect", "work"})
+			if got.code != 0 {
+				t.Fatalf("exit %d stderr %q", got.code, got.stderr)
+			}
+			if name == "prompted" {
+				if !strings.Contains(got.stderr, "could not save password: the keyring prompt was dismissed") || strings.Contains(got.stderr, "unavailable") || srv.Stored() != 0 {
+					t.Fatalf("stderr %q, %d items stored, want the dismissal and nothing saved", got.stderr, srv.Stored())
+				}
+				return
+			}
+			if !slices.Contains(srv.Calls(), "Unlock") {
+				t.Fatalf("calls %v: the save never asked to unlock the keyring", srv.Calls())
+			}
+			if mode == fakesecret.PromptAccept {
+				if strings.Contains(got.stderr, "warning") || srv.Stored() != 1 {
+					t.Fatalf("accepted unlock: stderr %q, %d items stored, want the password saved", got.stderr, srv.Stored())
+				}
+				return
+			}
+			if !strings.Contains(got.stderr, "could not save password: the keyring is locked; its unlock prompt was dismissed") || strings.Contains(got.stderr, "unavailable") {
+				t.Fatalf("stderr %q, want it to say the keyring is locked", got.stderr)
+			}
+			if n := srv.Stored(); n != 0 {
+				t.Fatalf("%d items stored after a refused unlock", n)
 			}
 		})
 	}

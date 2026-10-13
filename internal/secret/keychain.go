@@ -209,7 +209,7 @@ func (k *Keychain) copyPasswordByPersistentRef(ctx context.Context, pref C.CFDat
 	if status == C.errSecItemNotFound {
 		return Password{}, ErrNotFound
 	}
-	if err := mapSecStatus(ctx, status); err != nil {
+	if err := readStatusErr(ctx, status); err != nil {
 		return Password{}, err
 	}
 	defer C.CFRelease(result)
@@ -379,6 +379,31 @@ func mapSecStatus(ctx context.Context, status C.OSStatus) error {
 		return fmt.Errorf("%w: %s", ErrUnavailable, secMessage(status))
 	}
 }
+
+// readStatusErr maps the status of reading a password the search has already
+// found. A cancelled or refused unlock there is ErrLocked, as the Store
+// contract asks: a password is stored, and the keychain stayed locked.
+// Reported as merely unavailable, it told macOS users the keychain could not
+// be reached when they had cancelled its dialog.
+func readStatusErr(ctx context.Context, status C.OSStatus) error {
+	err := mapSecStatus(ctx, status)
+	if err == nil || ctx.Err() != nil {
+		return err
+	}
+	switch status {
+	case C.errSecUserCanceled, C.errSecAuthFailed, C.errSecInteractionNotAllowed:
+		return fmt.Errorf("%w (%w)", ErrLocked, err)
+	}
+	return err
+}
+
+// Statuses the tests pass to readStatusErr, which cannot name C themselves.
+const (
+	statusUserCanceled = C.errSecUserCanceled
+	statusAuthFailed   = C.errSecAuthFailed
+	statusNoUI         = C.errSecInteractionNotAllowed
+	statusParam        = C.errSecParam
+)
 
 func secMessage(status C.OSStatus) string {
 	if msg := C.SecCopyErrorMessageString(status, nil); msg != 0 {

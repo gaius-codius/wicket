@@ -23,6 +23,7 @@ const (
 	itemIface       = "org.freedesktop.Secret.Item"
 	promptPath      = "/org/freedesktop/secrets/prompt/p1"
 	promptIface     = "org.freedesktop.Secret.Prompt"
+	isLockedErr     = "org.freedesktop.Secret.Error.IsLocked"
 	// maxItems bounds the item object paths exported up front. Exporting on
 	// demand raced: CreateItem runs on a D-Bus dispatch goroutine, and
 	// godbus mutates its handler map without a lock.
@@ -43,6 +44,9 @@ const (
 	// PromptStall accepts the Prompt call and then never completes it, as a
 	// dialog nobody answers does.
 	PromptStall
+	// PromptHang never replies to the Prompt call itself until the server
+	// shuts down, as a daemon that goes away mid-call does.
+	PromptHang
 )
 
 type secretBlob struct {
@@ -64,6 +68,9 @@ type item struct {
 	locked bool
 	// stuck keeps it locked through an accepted Unlock as well.
 	stuck bool
+	// relock locks it again just before GetSecrets reads it, as a keyring
+	// locked by another program between a search and a read is.
+	relock bool
 }
 
 // Server is an in-process Secret Service on a private bus.
@@ -76,6 +83,7 @@ type Server struct {
 	prompt    PromptMode
 	pending   func()
 	locked    bool
+	refuse    bool
 	dismissed int
 	calls     []string
 	stall     bool
@@ -149,6 +157,27 @@ func (s *Server) KeepLocked(p dbus.ObjectPath) {
 	if it, ok := s.items[p]; ok {
 		it.locked = true
 		it.stuck = true
+	}
+}
+
+// RefuseLockedWrites makes the fake answer a write to a locked collection,
+// or a delete of a locked item, with IsLocked rather than a prompt, as
+// gnome-keyring does. The client must unlock and ask again; once unlocked,
+// writes need no prompt. Without it the fake prompts, as KeePassXC does.
+func (s *Server) RefuseLockedWrites() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refuse = true
+}
+
+// RelockBeforeRead makes one item lock again just before GetSecrets reads it,
+// as if another program locked its collection between SearchItems and
+// GetSecrets. GetSecrets then leaves it out without an error.
+func (s *Server) RelockBeforeRead(p dbus.ObjectPath) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if it, ok := s.items[p]; ok {
+		it.relock = true
 	}
 }
 
@@ -335,6 +364,11 @@ func (o *promptObj) Prompt(window string) *dbus.Error {
 	o.s.record("Prompt")
 	o.s.mu.Lock()
 	mode, apply := o.s.prompt, o.s.pending
+	if mode == PromptHang {
+		o.s.mu.Unlock()
+		<-o.s.stop
+		return nil
+	}
 	if mode == PromptStall {
 		// Leave pending in place: the dialog is still up.
 		o.s.mu.Unlock()
@@ -408,6 +442,9 @@ func (s *Server) GetSecrets(items []dbus.ObjectPath, session dbus.ObjectPath) (m
 	out := map[dbus.ObjectPath]secretBlob{}
 	for _, p := range items {
 		it, ok := s.items[p]
+		if ok && it.relock {
+			it.locked, it.relock = true, false
+		}
 		if !ok || s.isLocked(it) {
 			continue
 		}
@@ -446,7 +483,7 @@ func (s *Server) CreateItem(properties map[string]dbus.Variant, secret secretBlo
 		}
 	}
 	if s.next >= maxItems {
-		return "/", "/", dbus.NewError("org.freedesktop.Secret.Error.IsLocked", []any{"fake keyring is full"})
+		return "/", "/", dbus.NewError("org.freedesktop.DBus.Error.Failed", []any{"fake keyring is full"})
 	}
 	write := func() dbus.ObjectPath {
 		if replace {
@@ -466,6 +503,12 @@ func (s *Server) CreateItem(properties map[string]dbus.Variant, secret secretBlo
 		it := &item{path: p, label: label, attrs: attrs, value: secret.Value, created: now, modified: now}
 		s.items[p] = it
 		return p
+	}
+	if s.refuse {
+		if s.locked {
+			return "/", "/", dbus.NewError(isLockedErr, []any{"Cannot create an item in a locked collection"})
+		}
+		return write(), "/", nil
 	}
 	if s.prompt != PromptNone {
 		s.pending = func() { write() }
@@ -521,6 +564,13 @@ func (o *itemObj) Delete() (dbus.ObjectPath, *dbus.Error) {
 	o.s.record("Delete")
 	o.s.mu.Lock()
 	defer o.s.mu.Unlock()
+	if o.s.refuse {
+		if it, ok := o.s.items[o.path]; ok && o.s.isLocked(it) {
+			return "/", dbus.NewError(isLockedErr, []any{"Cannot delete a locked item"})
+		}
+		delete(o.s.items, o.path)
+		return "/", nil
+	}
 	if o.s.prompt != PromptNone {
 		path := o.path
 		o.s.pending = func() { delete(o.s.items, path) }

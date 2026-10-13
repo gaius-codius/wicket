@@ -7,8 +7,11 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/godbus/dbus/v5"
 
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/testutil/fakesecret"
@@ -502,5 +505,318 @@ func TestDBus_CancelledPromptIsDismissed(t *testing.T) {
 	}
 	if n := srv.Stored(); n != 0 {
 		t.Fatalf("%d items stored although the prompt was never answered", n)
+	}
+}
+
+// waitForCall waits until the fake has seen method, so a test can act while
+// the client is in the middle of an operation, a prompt on screen.
+func waitForCall(t *testing.T, srv *fakesecret.Server, method string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if slices.Contains(srv.Calls(), method) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("the client never called %s; calls: %v", method, srv.Calls())
+}
+
+// gnome-keyring does not prompt for a write to a locked collection or a
+// delete of a locked item; it refuses both with IsLocked. Wicket has to
+// unlock and ask again, as libsecret does. It used to report the keyring as
+// unavailable instead, so a save after a locked login never raised the
+// unlock dialog at all (issue #101).
+func TestDBus_WritesUnlockAKeyringThatRefusesThem(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+	srv.RefuseLockedWrites()
+
+	store := NewDBus()
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv.SetLocked(true)
+	srv.SetPrompt(fakesecret.PromptDismiss)
+	err = store.Upsert(bg, id, pw)
+	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrPromptDismissed) || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Upsert, unlock refused: err = %v, want ErrLocked wrapping the dismissal", err)
+	}
+	if n := srv.Stored(); n != 0 {
+		t.Fatalf("%d items stored after a refused unlock", n)
+	}
+
+	srv.SetPrompt(fakesecret.PromptAccept)
+	if err := store.Upsert(bg, id, pw); err != nil {
+		t.Fatalf("Upsert, unlock accepted: %v", err)
+	}
+	if n := srv.Stored(); n != 1 {
+		t.Fatalf("%d items stored after an accepted unlock, want 1", n)
+	}
+	if n := countCalls(srv, "CreateItem"); n != 3 {
+		t.Fatalf("CreateItem called %d times, want 3: one refused, one retried after each unlock", n)
+	}
+
+	srv.SetLocked(true)
+	srv.SetPrompt(fakesecret.PromptDismiss)
+	err = store.Delete(bg, id)
+	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrPromptDismissed) {
+		t.Fatalf("Delete, unlock refused: err = %v, want ErrLocked wrapping the dismissal", err)
+	}
+	if n := srv.Stored(); n != 1 {
+		t.Fatalf("%d items stored after a refused delete, want 1", n)
+	}
+
+	srv.SetPrompt(fakesecret.PromptAccept)
+	if err := store.Delete(bg, id); err != nil {
+		t.Fatalf("Delete, unlock accepted: %v", err)
+	}
+	if n := srv.Stored(); n != 0 {
+		t.Fatalf("%d items stored after an accepted delete, want 0", n)
+	}
+
+	// An unlock that goes through and still leaves the item locked is a
+	// lock that held, not a keyring out of reach.
+	srv.KeepLocked(srv.Seed(id.Attrs(), "s3cret", 100))
+	err = store.Delete(bg, id)
+	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Delete, item still locked after the unlock: err = %v, want ErrLocked", err)
+	}
+	if n := srv.Stored(); n != 1 {
+		t.Fatalf("%d items stored after a delete the lock refused, want 1", n)
+	}
+}
+
+func countCalls(srv *fakesecret.Server, method string) int {
+	n := 0
+	for _, c := range srv.Calls() {
+		if c == method {
+			n++
+		}
+	}
+	return n
+}
+
+// A match that was open at SearchItems can be locked again before
+// GetSecrets, which then leaves it out without a word. The older match that
+// is left must not stand in for it (issue #102).
+func TestDBus_LookupWithAMatchLockedBeforeTheReadIgnoresAnOlderOne(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	srv.Seed(id.Attrs(), "older", 100)
+	srv.RelockBeforeRead(srv.Seed(id.Attrs(), "newer", 200))
+
+	got, err := NewDBus().Lookup(bg, id)
+	if !errors.Is(err, ErrLocked) {
+		var buf bytes.Buffer
+		_ = got.Password.WriteLine(&buf)
+		t.Fatalf("relocked match: password %q, err = %v, want ErrLocked", buf.String(), err)
+	}
+}
+
+// When the session bus goes away under an open prompt, godbus closes the
+// signal channel. Wicket used to spin on it until the prompt timed out, two
+// minutes of a busy core, and then blame the user for not answering. It is
+// the bus that failed, and that is said at once.
+func TestDBus_LostBusDuringAPromptIsUnavailable(t *testing.T) {
+	// LookupMidCall loses the bus before the Prompt call itself is answered,
+	// which once came back as ErrLocked: the call failed, not the unlock.
+	for name, mode := range map[string]fakesecret.PromptMode{"Lookup": fakesecret.PromptStall, "Upsert": fakesecret.PromptStall, "LookupMidCall": fakesecret.PromptHang} {
+		op := strings.TrimSuffix(name, "MidCall")
+		t.Run(name, func(t *testing.T) {
+			_, srv, stop := fakesecret.Start(t)
+			cleanup := sync.OnceFunc(stop)
+			defer cleanup()
+			id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+			pw, err := NewPassword("s3cret")
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := NewDBus()
+			if op == "Lookup" {
+				if err := store.Upsert(bg, id, pw); err != nil {
+					t.Fatal(err)
+				}
+				srv.SetLocked(true)
+			}
+			srv.SetPrompt(mode)
+
+			errc := make(chan error, 1)
+			go func() {
+				if op == "Lookup" {
+					_, err := store.Lookup(bg, id)
+					errc <- err
+					return
+				}
+				errc <- store.Upsert(bg, id, pw)
+			}()
+			waitForCall(t, srv, "Prompt")
+			cleanup()
+			select {
+			case err := <-errc:
+				if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) || errors.Is(err, ErrPromptTimeout) {
+					t.Fatalf("err = %v, want ErrUnavailable, not a lock or a timeout", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("still waiting a second after the bus went away")
+			}
+		})
+	}
+}
+
+// Completed decides whether a write went through, and any process of the
+// same user can emit one on the prompt's path. Only the keyring's counts.
+func TestDBus_PromptIgnoresACompletedFromAnotherSender(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	old := promptTimeout
+	promptTimeout = 500 * time.Millisecond
+	defer func() { promptTimeout = old }()
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.SetPrompt(fakesecret.PromptStall)
+	errc := make(chan error, 1)
+	go func() { errc <- NewDBus().Upsert(bg, id, pw) }()
+	waitForCall(t, srv, "Prompt")
+
+	forger, err := dbus.ConnectSessionBus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = forger.Close() }()
+	if err := forger.Emit("/org/freedesktop/secrets/prompt/p1", ssPromptIface+".Completed", false, dbus.MakeVariant("")); err != nil {
+		t.Fatal(err)
+	}
+	// The bus delivers a signal addressed to a connection whatever its match
+	// rules say, so the forger also sends one straight to every other client.
+	var names []string
+	if err := forger.BusObject().Call("org.freedesktop.DBus.ListNames", 0).Store(&names); err != nil {
+		t.Fatal(err)
+	}
+	var keyring string
+	if err := forger.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, "org.freedesktop.secrets").Store(&keyring); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if !strings.HasPrefix(name, ":") || name == keyring || name == forger.Names()[0] {
+			continue
+		}
+		if err := forger.Send(forgedCompleted(name), nil).Err; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := <-errc; !errors.Is(err, ErrPromptTimeout) {
+		t.Fatalf("err = %v, want the prompt to time out: another sender's Completed must not count", err)
+	}
+	if n := srv.Stored(); n != 0 {
+		t.Fatalf("%d items stored although the prompt was never answered", n)
+	}
+}
+
+// A caller that gives up while Lookup's unlock prompt is open -- the user
+// pressed esc -- is told so. It is not the keyring staying locked, and the
+// dialog is dismissed on the way out.
+func TestDBus_CancelledLookupPromptIsNotLocked(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	store := NewDBus()
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Upsert(bg, id, pw); err != nil {
+		t.Fatal(err)
+	}
+	srv.SetLocked(true)
+	srv.SetPrompt(fakesecret.PromptStall)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() { _, err := store.Lookup(ctx, id); errc <- err }()
+	waitForCall(t, srv, "Prompt")
+	cancel()
+	err = <-errc
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) {
+		t.Fatalf("err = %v, want ErrUnavailable and the cancellation, not ErrLocked", err)
+	}
+	if n := srv.Dismissed(); n != 1 {
+		t.Fatalf("prompt dismissed %d times, want 1", n)
+	}
+}
+
+// A profile can match an open item and one behind a lock of its own. If the
+// open one goes and the locked one stays, the password is still stored, and
+// Delete must not report success: the TUI would say it was forgotten.
+func TestDBus_DeleteThatLeavesAMatchBehindFails(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+	srv.RefuseLockedWrites()
+	srv.SetPrompt(fakesecret.PromptDismiss)
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	srv.Seed(id.Attrs(), "open", 100)
+	srv.LockItem(srv.Seed(id.Attrs(), "locked", 200))
+
+	err := NewDBus().Delete(bg, id)
+	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrPromptDismissed) {
+		t.Fatalf("err = %v, want ErrLocked wrapping the dismissal", err)
+	}
+	if n := srv.Stored(); n != 1 {
+		t.Fatalf("%d items stored, want the locked one left", n)
+	}
+}
+
+// forgedCompleted is a prompt's Completed signal, saying it was accepted,
+// addressed to dest alone.
+func forgedCompleted(dest string) *dbus.Message {
+	body := []any{false, dbus.MakeVariant("")}
+	return &dbus.Message{
+		Type: dbus.TypeSignal,
+		Headers: map[dbus.HeaderField]dbus.Variant{
+			dbus.FieldPath:        dbus.MakeVariant(dbus.ObjectPath("/org/freedesktop/secrets/prompt/p1")),
+			dbus.FieldInterface:   dbus.MakeVariant(ssPromptIface),
+			dbus.FieldMember:      dbus.MakeVariant("Completed"),
+			dbus.FieldDestination: dbus.MakeVariant(dest),
+			dbus.FieldSignature:   dbus.MakeVariant(dbus.SignatureOf(body...)),
+		},
+		Body: body,
+	}
+}
+
+// A user who refuses the unlock is asked once, not once per duplicate
+// entry: a restored backup can leave several items with the same details.
+func TestDBus_DeleteAsksToUnlockOnce(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+	srv.RefuseLockedWrites()
+	srv.SetPrompt(fakesecret.PromptDismiss)
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	for i := range 3 {
+		srv.Seed(id.Attrs(), "s3cret", int64(100+i))
+	}
+	srv.SetLocked(true)
+
+	if err := NewDBus().Delete(bg, id); !errors.Is(err, ErrLocked) || !errors.Is(err, ErrPromptDismissed) {
+		t.Fatalf("err = %v, want ErrLocked wrapping the dismissal", err)
+	}
+	if n := countCalls(srv, "Prompt"); n != 1 {
+		t.Fatalf("%d unlock prompts, want 1", n)
+	}
+	if n := srv.Stored(); n != 3 {
+		t.Fatalf("%d items stored, want all 3 left", n)
 	}
 }

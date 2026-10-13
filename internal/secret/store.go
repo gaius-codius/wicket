@@ -36,7 +36,8 @@ func (p Presence) String() string {
 // person answering a keyring prompt, so they can take minutes; see OpTimeout.
 // Lookup returns ErrNotFound only when nothing is stored. A stored password
 // behind a keyring that stayed locked is ErrLocked, which also wraps
-// ErrUnavailable.
+// ErrUnavailable. Upsert and Delete return ErrLocked too, when the keyring
+// refuses them while locked and the user does not unlock it.
 type Store interface {
 	Lookup(context.Context, Identity) (LookupResult, error)
 	Upsert(context.Context, Identity, Password) error

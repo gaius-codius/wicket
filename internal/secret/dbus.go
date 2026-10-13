@@ -21,6 +21,7 @@ const (
 	ssItemAttrs       = "org.freedesktop.Secret.Item.Attributes"
 	ssItemLabel       = "org.freedesktop.Secret.Item.Label"
 	ssPromptIface     = "org.freedesktop.Secret.Prompt"
+	ssErrIsLocked     = "org.freedesktop.Secret.Error.IsLocked"
 )
 
 // promptTimeout bounds the wait for the user to answer a keyring prompt.
@@ -50,12 +51,17 @@ var (
 	ErrPromptDismissed = errors.New("the keyring prompt was dismissed")
 	// ErrPromptTimeout means nobody answered a keyring prompt in time.
 	ErrPromptTimeout = errors.New("timed out waiting for the keyring prompt")
-	// ErrLocked means a lookup found a stored password it could not read
-	// because the keyring stayed locked. Another match may have been
-	// readable, but the locked one may be newer, so none is returned. It
-	// wraps why the unlock failed, usually ErrPromptDismissed, and that
+	// ErrLocked means the keyring stayed locked: a lookup found a stored
+	// password it could not read, or a write or delete the keyring refused
+	// while locked could not unlock it. On a lookup another match may have
+	// been readable, but the locked one may be newer, so none is returned.
+	// It wraps why the unlock failed, usually ErrPromptDismissed, and that
 	// cause wraps ErrUnavailable.
 	ErrLocked = errors.New("the keyring is locked")
+
+	// errBusLost means the session bus connection closed under a prompt. It
+	// is the bus that failed, not the unlock, so it is never ErrLocked.
+	errBusLost = errors.New("lost the session bus connection")
 )
 
 type ssSecret struct {
@@ -163,34 +169,28 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 	// of GetSecrets, which some backends fail outright, hiding the lock
 	// behind a generic "unavailable".
 	if len(locked) > 0 {
-		var opened []dbus.ObjectPath
-		var prompt dbus.ObjectPath
-		err := svc.CallWithContext(ctx, ssServiceIface+".Unlock", 0, locked).Store(&opened, &prompt)
-		if err != nil {
-			err = unavailable(ctx, err)
-		} else {
-			err = runPrompt(ctx, conn, prompt)
-		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return LookupResult{}, err
-			}
-			return LookupResult{}, fmt.Errorf("%w (%w)", ErrLocked, err)
+		if err := unlock(ctx, conn, svc, locked); err != nil {
+			return LookupResult{}, err
 		}
 	}
 	secrets := map[dbus.ObjectPath]ssSecret{}
 	if err := svc.CallWithContext(ctx, ssServiceIface+".GetSecrets", 0, items, session).Store(&secrets); err != nil {
 		return LookupResult{}, unavailable(ctx, err)
 	}
-	// An unlock can complete and still leave a match locked: a backend may
-	// let the user open some items and not others. GetSecrets skips it, and
-	// the older match that is left must not stand in for it.
-	for _, p := range locked {
+	// GetSecrets leaves out any match it cannot read, without a word. An
+	// unlock can complete and still leave one locked (a backend may let the
+	// user open some items and not others), and a match that was open at
+	// SearchItems can be locked again before GetSecrets (Seahorse,
+	// secret-tool lock, KeePassXC's auto-lock). Either way the older match
+	// that is left must not stand in for it. A match deleted in between
+	// lands here too and could have been read around, but nothing tells the
+	// two apart, and calling it locked costs only a retry.
+	for _, p := range items {
 		if _, ok := secrets[p]; !ok {
 			for _, sec := range secrets {
 				clear(sec.Value)
 			}
-			return LookupResult{}, fmt.Errorf("%w (%w: the unlock left a match locked)", ErrLocked, ErrUnavailable)
+			return LookupResult{}, fmt.Errorf("%w (%w: a match could not be read)", ErrLocked, ErrUnavailable)
 		}
 	}
 	// A match whose password Wicket cannot use stays in the running: the
@@ -244,14 +244,72 @@ func (d *DBus) Upsert(ctx context.Context, id Identity, pw Password) error {
 	}
 	sec := ssSecret{Session: session, Value: []byte(pw.v), ContentType: "text/plain"}
 	defer clear(sec.Value)
-	var item, prompt dbus.ObjectPath
-	if err := conn.Object(ssBus, collPath).CallWithContext(ctx, ssCollectionIface+".CreateItem", 0, props, sec, true).Store(&item, &prompt); err != nil {
-		return unavailable(ctx, err)
+	create := func() (prompt dbus.ObjectPath, err error) {
+		var item dbus.ObjectPath
+		err = conn.Object(ssBus, collPath).CallWithContext(ctx, ssCollectionIface+".CreateItem", 0, props, sec, true).Store(&item, &prompt)
+		return prompt, err
+	}
+	prompt, err := create()
+	// KeePassXC answers a write to a locked collection with a prompt, but
+	// gnome-keyring refuses it with IsLocked: the client has to unlock the
+	// collection and ask again, as libsecret does.
+	if isLockedErr(err) {
+		if err := unlock(ctx, conn, svc, []dbus.ObjectPath{collPath}); err != nil {
+			return err
+		}
+		prompt, err = create()
+	}
+	if err != nil {
+		return writeFailed(ctx, err)
 	}
 	// Against a locked keyring the item is not written until the prompt is
 	// answered. Returning nil here would tell the user the password was saved
 	// when nothing was stored.
 	return runPrompt(ctx, conn, prompt)
+}
+
+// isLockedErr reports whether a keyring call was refused because its target
+// is locked.
+func isLockedErr(err error) bool {
+	var e dbus.Error
+	return errors.As(err, &e) && e.Name == ssErrIsLocked
+}
+
+// writeFailed wraps a failed CreateItem or Item.Delete. One still refused as
+// locked after an unlock that went through is ErrLocked: the backend kept
+// the lock, which is not the keyring being out of reach.
+func writeFailed(ctx context.Context, err error) error {
+	if isLockedErr(err) && ctx.Err() == nil {
+		return fmt.Errorf("%w (%w)", ErrLocked, unavailable(ctx, err))
+	}
+	return unavailable(ctx, err)
+}
+
+// unlock opens paths, through the keyring's prompt when it raises one. A
+// refused, unanswered or failed unlock is ErrLocked, wrapping why. A caller
+// that gave up is told so instead, which is not the same as the user saying
+// no, and so is a lost bus, which says nothing about the lock.
+func unlock(ctx context.Context, conn *dbus.Conn, svc dbus.BusObject, paths []dbus.ObjectPath) error {
+	var opened []dbus.ObjectPath
+	var prompt dbus.ObjectPath
+	err := svc.CallWithContext(ctx, ssServiceIface+".Unlock", 0, paths).Store(&opened, &prompt)
+	if err != nil {
+		err = unavailable(ctx, err)
+	} else {
+		err = runPrompt(ctx, conn, prompt)
+	}
+	if err == nil {
+		return nil
+	}
+	// Only the keyring's own answer says the lock held: the prompt refused
+	// or left unanswered, or an error reply from the daemon. Anything else
+	// is the transport (the bus dropped mid-call, or under the prompt), and
+	// says nothing about the lock.
+	var reply dbus.Error
+	if ctx.Err() == nil && (errors.Is(err, ErrPromptDismissed) || errors.Is(err, ErrPromptTimeout) || errors.As(err, &reply)) {
+		return fmt.Errorf("%w (%w)", ErrLocked, err)
+	}
+	return err
 }
 
 func (d *DBus) Delete(ctx context.Context, id Identity) error {
@@ -269,27 +327,42 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 	if len(items) == 0 {
 		return ErrNotFound
 	}
-	var last error
-	found := false
+	// Every match must go. One left behind -- its unlock refused while
+	// another was open -- is still a stored password, and reporting success
+	// would have the TUI say it was forgotten.
+	var last, refused error
 	for _, p := range items {
-		var prompt dbus.ObjectPath
-		if err := conn.Object(ssBus, p).CallWithContext(ctx, ssItemIface+".Delete", 0).Store(&prompt); err != nil {
-			last = unavailable(ctx, err)
+		del := func() (prompt dbus.ObjectPath, err error) {
+			err = conn.Object(ssBus, p).CallWithContext(ctx, ssItemIface+".Delete", 0).Store(&prompt)
+			return prompt, err
+		}
+		prompt, err := del()
+		// gnome-keyring refuses to delete a locked item rather than
+		// prompting: unlock it and ask again, as Upsert does. A user who
+		// refused one unlock is not asked again for each duplicate.
+		if isLockedErr(err) {
+			if refused != nil {
+				last = refused
+				continue
+			}
+			if err := unlock(ctx, conn, svc, []dbus.ObjectPath{p}); err != nil {
+				if errors.Is(err, ErrLocked) {
+					refused = err
+				}
+				last = err
+				continue
+			}
+			prompt, err = del()
+		}
+		if err != nil {
+			last = writeFailed(ctx, err)
 			continue
 		}
 		if err := runPrompt(ctx, conn, prompt); err != nil {
 			last = err
-			continue
 		}
-		found = true
 	}
-	if !found {
-		if last != nil {
-			return last
-		}
-		return ErrNotFound
-	}
-	return nil
+	return last
 }
 
 // runPrompt completes a Secret Service prompt. The service hands back a prompt
@@ -301,10 +374,19 @@ func runPrompt(ctx context.Context, conn *dbus.Conn, prompt dbus.ObjectPath) err
 	if prompt == "" || prompt == "/" {
 		return nil
 	}
+	// Completed decides whether a write went through, so only the keyring
+	// may send it: any process of the same user can emit a signal on any
+	// path. The bus delivers a signal addressed to us whatever our match
+	// rules say, so the sender is checked here as well as in the rule.
+	var owner string
+	if err := conn.BusObject().CallWithContext(ctx, "org.freedesktop.DBus.GetNameOwner", 0, ssBus).Store(&owner); err != nil {
+		return unavailable(ctx, err)
+	}
 	sigs := make(chan *dbus.Signal, 4)
 	conn.Signal(sigs)
 	defer conn.RemoveSignal(sigs)
 	match := []dbus.MatchOption{
+		dbus.WithMatchSender(ssBus),
 		dbus.WithMatchObjectPath(prompt),
 		dbus.WithMatchInterface(ssPromptIface),
 		dbus.WithMatchMember("Completed"),
@@ -328,8 +410,14 @@ func runPrompt(ctx context.Context, conn *dbus.Conn, prompt dbus.ObjectPath) err
 	defer deadline.Stop()
 	for {
 		select {
-		case sig := <-sigs:
-			if sig == nil || sig.Path != prompt || sig.Name != ssPromptIface+".Completed" {
+		case sig, ok := <-sigs:
+			if !ok {
+				// godbus closes the channel when the connection drops, and a
+				// closed channel would otherwise spin here until the timeout
+				// and then be blamed on the user.
+				return unavailable(ctx, errBusLost)
+			}
+			if sig.Sender != owner || sig.Path != prompt || sig.Name != ssPromptIface+".Completed" {
 				continue
 			}
 			if len(sig.Body) > 0 {

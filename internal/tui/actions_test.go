@@ -14,6 +14,7 @@ import (
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
+	"github.com/gaius-codius/wicket/internal/testutil/fakesecret"
 )
 
 func testApp(t *testing.T, body string, store secret.Store) *App {
@@ -641,5 +642,42 @@ func TestProbeClient_AgreesWithLookupClient(t *testing.T) {
 				t.Fatalf("error %v, want ErrClientNotFound", probeErr)
 			}
 		})
+	}
+}
+
+// gnome-keyring refuses a save or a delete on a locked keyring until the
+// client unlocks it. When the user refuses that unlock, the warning says the
+// keyring is locked; it used to say "keyring unavailable", which sent the
+// user looking for a missing daemon (issue #101).
+func TestKeyringWrites_RefusedUnlockSaysLocked(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+	srv.RefuseLockedWrites()
+
+	a := testApp(t, fixtureTOML("work", "h", "u"), secret.NewDBus())
+	p, _ := a.Cfg.Profile("work")
+	srv.Seed(secret.IdentityFor(a.Cfg.Path(), p).Attrs(), "old", 100)
+	srv.SetLocked(true)
+	srv.SetPrompt(fakesecret.PromptDismiss)
+
+	warns, err := a.SaveProfile(bg, "work", p, PasswordIntent{Action: PasswordSet, Password: mustPassword(t, "new")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := strings.Join(warns, "; ")
+	if !strings.Contains(msg, "could not save password: the keyring is locked; its unlock prompt was dismissed") || strings.Contains(msg, "unavailable") {
+		t.Fatalf("save warnings %q, want them to say the keyring is locked", msg)
+	}
+
+	warns, err = a.DeleteProfile(bg, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg = strings.Join(warns, "; ")
+	if !strings.Contains(msg, "the keyring is locked") || !strings.Contains(msg, "left in place") || strings.Contains(msg, "unavailable") {
+		t.Fatalf("delete warnings %q, want them to say the keyring is locked", msg)
+	}
+	if n := srv.Stored(); n != 1 {
+		t.Fatalf("%d items stored, want the old password left in place", n)
 	}
 }

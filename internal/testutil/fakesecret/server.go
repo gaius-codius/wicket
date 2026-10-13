@@ -44,6 +44,9 @@ const (
 	// PromptStall accepts the Prompt call and then never completes it, as a
 	// dialog nobody answers does.
 	PromptStall
+	// PromptHang never replies to the Prompt call itself until the server
+	// shuts down, as a daemon that goes away mid-call does.
+	PromptHang
 )
 
 type secretBlob struct {
@@ -361,6 +364,11 @@ func (o *promptObj) Prompt(window string) *dbus.Error {
 	o.s.record("Prompt")
 	o.s.mu.Lock()
 	mode, apply := o.s.prompt, o.s.pending
+	if mode == PromptHang {
+		o.s.mu.Unlock()
+		<-o.s.stop
+		return nil
+	}
 	if mode == PromptStall {
 		// Leave pending in place: the dialog is still up.
 		o.s.mu.Unlock()

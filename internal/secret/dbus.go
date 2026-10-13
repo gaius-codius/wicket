@@ -300,10 +300,15 @@ func unlock(ctx context.Context, conn *dbus.Conn, svc dbus.BusObject, paths []db
 	if err == nil {
 		return nil
 	}
-	if ctx.Err() != nil || errors.Is(err, errBusLost) {
-		return err
+	// Only the keyring's own answer says the lock held: the prompt refused
+	// or left unanswered, or an error reply from the daemon. Anything else
+	// is the transport (the bus dropped mid-call, or under the prompt), and
+	// says nothing about the lock.
+	var reply dbus.Error
+	if ctx.Err() == nil && (errors.Is(err, ErrPromptDismissed) || errors.Is(err, ErrPromptTimeout) || errors.As(err, &reply)) {
+		return fmt.Errorf("%w (%w)", ErrLocked, err)
 	}
-	return fmt.Errorf("%w (%w)", ErrLocked, err)
+	return err
 }
 
 func (d *DBus) Delete(ctx context.Context, id Identity) error {
@@ -321,8 +326,10 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 	if len(items) == 0 {
 		return ErrNotFound
 	}
+	// Every match must go. One left behind -- its unlock refused while
+	// another was open -- is still a stored password, and reporting success
+	// would have the TUI say it was forgotten.
 	var last error
-	found := false
 	for _, p := range items {
 		del := func() (prompt dbus.ObjectPath, err error) {
 			err = conn.Object(ssBus, p).CallWithContext(ctx, ssItemIface+".Delete", 0).Store(&prompt)
@@ -344,17 +351,9 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 		}
 		if err := runPrompt(ctx, conn, prompt); err != nil {
 			last = err
-			continue
 		}
-		found = true
 	}
-	if !found {
-		if last != nil {
-			return last
-		}
-		return ErrNotFound
-	}
-	return nil
+	return last
 }
 
 // runPrompt completes a Secret Service prompt. The service hands back a prompt

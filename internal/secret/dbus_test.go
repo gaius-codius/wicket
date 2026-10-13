@@ -623,8 +623,11 @@ func TestDBus_LookupWithAMatchLockedBeforeTheReadIgnoresAnOlderOne(t *testing.T)
 // minutes of a busy core, and then blame the user for not answering. It is
 // the bus that failed, and that is said at once.
 func TestDBus_LostBusDuringAPromptIsUnavailable(t *testing.T) {
-	for _, op := range []string{"Lookup", "Upsert"} {
-		t.Run(op, func(t *testing.T) {
+	// LookupMidCall loses the bus before the Prompt call itself is answered,
+	// which once came back as ErrLocked: the call failed, not the unlock.
+	for name, mode := range map[string]fakesecret.PromptMode{"Lookup": fakesecret.PromptStall, "Upsert": fakesecret.PromptStall, "LookupMidCall": fakesecret.PromptHang} {
+		op := strings.TrimSuffix(name, "MidCall")
+		t.Run(name, func(t *testing.T) {
 			_, srv, cleanup := fakesecret.Start(t)
 			id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
 			pw, err := NewPassword("s3cret")
@@ -638,7 +641,7 @@ func TestDBus_LostBusDuringAPromptIsUnavailable(t *testing.T) {
 				}
 				srv.SetLocked(true)
 			}
-			srv.SetPrompt(fakesecret.PromptStall)
+			srv.SetPrompt(mode)
 
 			errc := make(chan error, 1)
 			go func() {
@@ -730,5 +733,27 @@ func TestDBus_CancelledLookupPromptIsNotLocked(t *testing.T) {
 	}
 	if n := srv.Dismissed(); n != 1 {
 		t.Fatalf("prompt dismissed %d times, want 1", n)
+	}
+}
+
+// A profile can match an open item and one behind a lock of its own. If the
+// open one goes and the locked one stays, the password is still stored, and
+// Delete must not report success: the TUI would say it was forgotten.
+func TestDBus_DeleteThatLeavesAMatchBehindFails(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+	srv.RefuseLockedWrites()
+	srv.SetPrompt(fakesecret.PromptDismiss)
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	srv.Seed(id.Attrs(), "open", 100)
+	srv.LockItem(srv.Seed(id.Attrs(), "locked", 200))
+
+	err := NewDBus().Delete(bg, id)
+	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrPromptDismissed) {
+		t.Fatalf("err = %v, want ErrLocked wrapping the dismissal", err)
+	}
+	if n := srv.Stored(); n != 1 {
+		t.Fatalf("%d items stored, want the locked one left", n)
 	}
 }

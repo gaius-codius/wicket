@@ -1,6 +1,7 @@
 # Pinned toolchain for local work, agents, and CI (jdx/mise-action).
 # Run `mise install` after cloning or after this file changes.
-# Dependabot does not update these; bump them by hand with the go.mod toolchain line.
+# Renovate (renovate.json5) bumps these weekly, and Go together with the
+# go.mod toolchain line.
 [tools]
 go = "1.27.2"
 golangci-lint = "2.14.0"

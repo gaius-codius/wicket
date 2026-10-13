@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -241,10 +240,8 @@ user = "u2"
 	if got.code != 2 {
 		t.Fatalf("exit %d", got.code)
 	}
-	if _, ok := errors.AsType[*config.LoadError](errors.New(strings.TrimSpace(got.stderr))); !ok {
-		if !strings.Contains(got.stderr, "duplicate") {
-			t.Fatalf("stderr %q", got.stderr)
-		}
+	if !strings.Contains(got.stderr, "duplicate") {
+		t.Fatalf("stderr %q", got.stderr)
 	}
 }
 

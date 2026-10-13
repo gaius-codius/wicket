@@ -36,12 +36,9 @@ linters:
       # A default case counts as handling the remaining values.
       default-signifies-exhaustive: true
 
-    gosec:
-      excludes:
-        # Wicket reads the config, state and theme files the user's own
-        # environment names, and the .rdp and Remmina files the user asks it
-        # to import. Reading a path from a variable is the job.
-        - G304
+    # gosec:
+    #   excludes:
+    #     - G204 # only when the project runs commands with arguments by design; say why
 
     nolintlint:
       require-explanation: true
@@ -76,6 +73,13 @@ linters:
       - path: _test\.go
         linters:
           - gosec
+      # These packages read the config, state and theme files the user's own
+      # environment names, and the .rdp and Remmina files the user asks to
+      # import. Reading a path from a variable is their job.
+      - path: internal/(config|importer|theme)/
+        linters:
+          - gosec
+        text: G304
       # Test-only helpers and fakes, never built into the wicket binary.
       - path: internal/testutil/
         linters:

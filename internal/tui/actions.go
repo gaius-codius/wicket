@@ -363,12 +363,20 @@ func keyringProblem(err error) string {
 		return "stopped waiting for the keyring"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "the keyring did not answer"
+	case errors.Is(err, secret.ErrLocked):
+		// Checked before the prompt's own outcome: what the user needs to
+		// know is that the keyring stayed locked, and why comes second.
+		switch {
+		case errors.Is(err, secret.ErrPromptDismissed):
+			return "the keyring is locked; its unlock prompt was dismissed"
+		case errors.Is(err, secret.ErrPromptTimeout):
+			return "the keyring is locked; nobody answered its unlock prompt"
+		}
+		return "the keyring is locked"
 	case errors.Is(err, secret.ErrPromptDismissed):
 		return "the keyring prompt was dismissed"
 	case errors.Is(err, secret.ErrPromptTimeout):
 		return "nobody answered the keyring prompt"
-	case errors.Is(err, secret.ErrLocked):
-		return "the keyring is locked"
 	case errors.Is(err, secret.ErrUnavailable):
 		return "keyring unavailable"
 	case errors.Is(err, secret.ErrNotFound):

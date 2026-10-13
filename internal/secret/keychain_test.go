@@ -349,3 +349,24 @@ func TestAccountAttr_FoldsConfig(t *testing.T) {
 		t.Fatalf("accountAttr = %q", accountAttr(id))
 	}
 }
+
+// A keychain whose unlock the user cancels, or fails, after the search found
+// a password still has that password stored. The Store contract calls that
+// ErrLocked; it used to read as "cannot reach the keyring" (issue #102). The
+// same statuses from anywhere else stay plain ErrUnavailable, and a caller
+// that gave up is told so instead.
+func TestKeychain_RefusedReadOfAFoundItemIsLocked(t *testing.T) {
+	for _, err := range []error{readStatusErr(bg, statusUserCanceled), readStatusErr(bg, statusAuthFailed), readStatusErr(bg, statusNoUI)} {
+		if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrUnavailable) {
+			t.Errorf("err = %v, want ErrLocked wrapping ErrUnavailable", err)
+		}
+	}
+	if err := readStatusErr(bg, statusParam); errors.Is(err, ErrLocked) || !errors.Is(err, ErrUnavailable) {
+		t.Errorf("errSecParam: err = %v, want ErrUnavailable and not ErrLocked", err)
+	}
+	ctx, cancel := context.WithCancel(bg)
+	cancel()
+	if err := readStatusErr(ctx, statusUserCanceled); errors.Is(err, ErrLocked) || !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled caller: err = %v, want the cancellation and not ErrLocked", err)
+	}
+}

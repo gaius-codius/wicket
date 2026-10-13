@@ -14,6 +14,8 @@ set -eu
 
 REPO="gaius-codius/wicket"
 RELEASES="${WICKET_RELEASES_URL:-https://github.com/$REPO/releases}"
+# Where the wget path reads the latest tag; curl reads it from $RELEASES.
+API="${WICKET_API_URL:-https://api.github.com/repos/$REPO}"
 BINDIR="${WICKET_BINDIR:-$HOME/.local/bin}"
 # Releases published before the release workflow attested its builds, and
 # the SHA-256 of each of their tarballs. Their SHA256SUMS sits next to the
@@ -138,11 +140,15 @@ latest_tag() {
 		tag=${url##*/}
 	else
 		: >"$tmp/latest"
-		wget_https "https://api.github.com/repos/$REPO/releases/latest" "$tmp/latest" || :
+		wget_https "$API/releases/latest" "$tmp/latest" || :
 		tag=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmp/latest" | head -n 1)
 	fi
+	# Only a plain vX.Y.Z, as the tag goes into a path and a URL. The curl
+	# path keeps what follows the last /, but the API's tag_name can hold
+	# anything.
 	case "$tag" in
-	v[0-9]*) ;;
+	v*[!0-9.]* | v*..* | v*. | v*.*.*.*) die "no release found at $RELEASES" ;;
+	v[0-9]*.[0-9]*.[0-9]*) ;;
 	*) die "no release found at $RELEASES" ;;
 	esac
 }
@@ -251,6 +257,10 @@ main() {
 	case "$RELEASES" in
 	https://*) ;;
 	*) die "WICKET_RELEASES_URL must be an https URL: $RELEASES" ;;
+	esac
+	case "$API" in
+	https://*) ;;
+	*) die "WICKET_API_URL must be an https URL: $API" ;;
 	esac
 
 	os=$(uname -s)

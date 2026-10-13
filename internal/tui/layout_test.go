@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -62,9 +61,6 @@ func measure(s string) (w, h int) {
 // an eight-line floor, so every terminal shorter than that lost its footer and
 // bottom border, and the form ran wider than a narrow panel.
 func TestRender_NeverOverflowsTheWindow(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip("fsync-heavy; too slow on macOS keychain-backed temp dirs")
-	}
 	cfg := fixtureTOML("a-connection-with-a-long-name", "host.example.invalid", "user")
 	var bad atomic.Int32
 	report := func(t *testing.T, format string, args ...any) {

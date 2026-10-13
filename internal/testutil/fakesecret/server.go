@@ -61,6 +61,8 @@ type item struct {
 	// locked keeps this item locked whatever SetLocked says, as an item in
 	// a second collection that has its own lock.
 	locked bool
+	// stuck keeps it locked through an accepted Unlock as well.
+	stuck bool
 }
 
 // Server is an in-process Secret Service on a private bus.
@@ -138,6 +140,17 @@ func (s *Server) LockItem(p dbus.ObjectPath) {
 	}
 }
 
+// KeepLocked makes an accepted Unlock leave one item locked, as a backend
+// that lets the user open some items and not others does.
+func (s *Server) KeepLocked(p dbus.ObjectPath) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if it, ok := s.items[p]; ok {
+		it.locked = true
+		it.stuck = true
+	}
+}
+
 // isLocked reports whether an item yields no secret yet. Callers hold s.mu.
 func (s *Server) isLocked(it *item) bool {
 	return s.locked || it.locked
@@ -147,7 +160,7 @@ func (s *Server) isLocked(it *item) bool {
 func (s *Server) unlock(paths []dbus.ObjectPath) {
 	s.locked = false
 	for _, p := range paths {
-		if it, ok := s.items[p]; ok {
+		if it, ok := s.items[p]; ok && !it.stuck {
 			it.locked = false
 		}
 	}

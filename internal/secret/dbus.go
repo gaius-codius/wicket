@@ -49,9 +49,11 @@ var (
 	ErrPromptDismissed = errors.New("the keyring prompt was dismissed")
 	// ErrPromptTimeout means nobody answered a keyring prompt in time.
 	ErrPromptTimeout = errors.New("timed out waiting for the keyring prompt")
-	// ErrLocked means a lookup found a stored password but could not read
-	// it because the keyring stayed locked. It wraps why the unlock failed,
-	// usually ErrPromptDismissed, and that cause wraps ErrUnavailable.
+	// ErrLocked means a lookup found a stored password it could not read
+	// because the keyring stayed locked. Another match may have been
+	// readable, but the locked one may be newer, so none is returned. It
+	// wraps why the unlock failed, usually ErrPromptDismissed, and that
+	// cause wraps ErrUnavailable.
 	ErrLocked = errors.New("the keyring is locked")
 )
 
@@ -178,6 +180,17 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 	secrets := map[dbus.ObjectPath]ssSecret{}
 	if err := svc.CallWithContext(ctx, ssServiceIface+".GetSecrets", 0, items, session).Store(&secrets); err != nil {
 		return LookupResult{}, unavailable(ctx, err)
+	}
+	// An unlock can complete and still leave a match locked: a backend may
+	// let the user open some items and not others. GetSecrets skips it, and
+	// the older match that is left must not stand in for it.
+	for _, p := range locked {
+		if _, ok := secrets[p]; !ok {
+			for _, sec := range secrets {
+				clear(sec.Value)
+			}
+			return LookupResult{}, fmt.Errorf("%w (%w: the unlock left a match locked)", ErrLocked, ErrUnavailable)
+		}
 	}
 	// A match whose password Wicket cannot use stays in the running: the
 	// newest item is the one the user saved last, and falling back to an

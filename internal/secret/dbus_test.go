@@ -242,10 +242,14 @@ func TestDBus_LookupWithARefusedUnlockIgnoresAnOlderReadableMatch(t *testing.T) 
 
 	store := NewDBus()
 	got, err := store.Lookup(bg, id)
-	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrPromptDismissed) {
+	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrPromptDismissed) || !errors.Is(err, ErrUnavailable) {
 		var buf bytes.Buffer
 		_ = got.Password.WriteLine(&buf)
 		t.Fatalf("dismissed unlock: password %q, err = %v, want ErrLocked wrapping the dismissal", buf.String(), err)
+	}
+	// Not even the older password should cross the bus.
+	if slices.Contains(srv.Calls(), "GetSecrets") {
+		t.Fatal("dismissed unlock: Lookup fetched secrets anyway")
 	}
 
 	srv.SetPrompt(fakesecret.PromptAccept)
@@ -259,6 +263,26 @@ func TestDBus_LookupWithARefusedUnlockIgnoresAnOlderReadableMatch(t *testing.T) 
 	}
 	if buf.String() != "newer\n" || !got.Multiple {
 		t.Fatalf("accepted unlock: %q, multiple %v, want the newer password and a warning", buf.String(), got.Multiple)
+	}
+}
+
+// An unlock the user accepts can still leave a match locked, when the
+// backend lets them open some items and not others. The older readable
+// match must not stand in for it then either.
+func TestDBus_LookupWithAPartialUnlockIgnoresAnOlderReadableMatch(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	srv.Seed(id.Attrs(), "older", 100)
+	srv.KeepLocked(srv.Seed(id.Attrs(), "newer", 200))
+	srv.SetPrompt(fakesecret.PromptAccept)
+
+	got, err := NewDBus().Lookup(bg, id)
+	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrUnavailable) {
+		var buf bytes.Buffer
+		_ = got.Password.WriteLine(&buf)
+		t.Fatalf("partial unlock: password %q, err = %v, want ErrLocked", buf.String(), err)
 	}
 }
 

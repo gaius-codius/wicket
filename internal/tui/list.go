@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
 	"github.com/gaius-codius/wicket/internal/config"
 )
 
@@ -285,7 +286,7 @@ func shellQuote(s string) string {
 	}
 	safe := true
 	for _, r := range s {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("@%+:,./_-", r)) {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && !strings.ContainsRune("@%+:,./_-", r) {
 			safe = false
 			break
 		}
@@ -567,15 +568,32 @@ func (m Model) listHints() []keyHint {
 		return []keyHint{{"↑/↓", "move", intentNormal}, {"enter", "done", intentPrimary}, {"esc", "clear", intentNormal}}
 	case m.filter.Value() != "":
 		if len(m.visible()) == 0 {
-			return []keyHint{{"/", "edit filter", intentPrimary}, {"esc", "clear filter", intentNormal},
-				{"?", "help", intentNormal}, {"q", "quit", intentNormal}}
+			return []keyHint{
+				{"/", "edit filter", intentPrimary},
+				{"esc", "clear filter", intentNormal},
+				{"?", "help", intentNormal},
+				{"q", "quit", intentNormal},
+			}
 		}
-		return []keyHint{{"enter", "connect", intentPrimary}, {"/", "edit filter", intentNormal},
-			{"esc", "clear filter", intentNormal}, {"?", "help", intentNormal}, {"q", "quit", intentNormal}}
+		return []keyHint{
+			{"enter", "connect", intentPrimary},
+			{"/", "edit filter", intentNormal},
+			{"esc", "clear filter", intentNormal},
+			{"?", "help", intentNormal},
+			{"q", "quit", intentNormal},
+		}
 	}
-	return []keyHint{{"enter", "connect", intentPrimary}, {"n", "new", intentNormal}, {"e", "edit", intentNormal},
-		{"y", "copy", intentNormal}, {"D", "delete", intentNormal}, {"/", "filter", intentNormal}, {"s", "sort", intentNormal},
-		{"?", "help", intentNormal}, {"q", "quit", intentNormal}}
+	return []keyHint{
+		{"enter", "connect", intentPrimary},
+		{"n", "new", intentNormal},
+		{"e", "edit", intentNormal},
+		{"y", "copy", intentNormal},
+		{"D", "delete", intentNormal},
+		{"/", "filter", intentNormal},
+		{"s", "sort", intentNormal},
+		{"?", "help", intentNormal},
+		{"q", "quit", intentNormal},
+	}
 }
 
 func (m Model) listContext() string {

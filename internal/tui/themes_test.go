@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/gaius-codius/wicket/internal/secret"
 	"github.com/gaius-codius/wicket/internal/theme"
 )
@@ -43,12 +45,7 @@ func asksForBackground(cmd tea.Cmd) bool {
 	}
 	msg := cmd()
 	if b, ok := msg.(tea.BatchMsg); ok {
-		for _, c := range b {
-			if asksForBackground(c) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(b, asksForBackground)
 	}
 	return reflect.TypeOf(msg) == reflect.TypeOf(tea.RequestBackgroundColor())
 }

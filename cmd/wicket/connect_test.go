@@ -241,8 +241,7 @@ user = "u2"
 	if got.code != 2 {
 		t.Fatalf("exit %d", got.code)
 	}
-	var le *config.LoadError
-	if !errors.As(errors.New(strings.TrimSpace(got.stderr)), &le) {
+	if _, ok := errors.AsType[*config.LoadError](errors.New(strings.TrimSpace(got.stderr))); !ok {
 		if !strings.Contains(got.stderr, "duplicate") {
 			t.Fatalf("stderr %q", got.stderr)
 		}
@@ -302,22 +301,49 @@ func TestConnect_KeyringErrors(t *testing.T) {
 		notWant []string
 		upserts int
 	}{
-		{"not found/no tty", secret.ErrNotFound, false, 2,
-			[]string{"no stored password", "TUI"}, nil, 0},
-		{"unavailable/no tty", unavailable, false, 2,
-			[]string{"keyring", "no session bus"}, []string{"no stored password", "TUI"}, 0},
-		{"not found/tty", secret.ErrNotFound, true, 0,
-			[]string{"Save password"}, []string{"keyring"}, 1},
-		{"unavailable/tty", unavailable, true, 0,
-			[]string{"cannot reach the keyring", "no session bus"}, []string{"Save password"}, 0},
+		{
+			"not found/no tty", secret.ErrNotFound, false, 2,
+			[]string{"no stored password", "TUI"},
+			nil, 0,
+		},
+		{
+			"unavailable/no tty", unavailable, false, 2,
+			[]string{"keyring", "no session bus"},
+			[]string{"no stored password", "TUI"},
+			0,
+		},
+		{
+			"not found/tty", secret.ErrNotFound, true, 0,
+			[]string{"Save password"},
+			[]string{"keyring"},
+			1,
+		},
+		{
+			"unavailable/tty", unavailable, true, 0,
+			[]string{"cannot reach the keyring", "no session bus"},
+			[]string{"Save password"},
+			0,
+		},
 		// A saved password that cannot be used was read fine, so it takes
 		// neither path above: no prompt, no keyring warning, no client.
-		{"too long/no tty", secret.ErrTooLong, false, 2,
-			[]string{"saved password cannot be used", "511 bytes"}, []string{"keyring", "no stored password"}, 0},
-		{"too long/tty", secret.ErrTooLong, true, 2,
-			[]string{"saved password cannot be used", "511 bytes"}, []string{"keyring", "Password:", "Save password"}, 0},
-		{"line break/tty", secret.ErrCRLF, true, 2,
-			[]string{"saved password cannot be used", "CR or LF"}, []string{"keyring", "Password:", "Save password"}, 0},
+		{
+			"too long/no tty", secret.ErrTooLong, false, 2,
+			[]string{"saved password cannot be used", "511 bytes"},
+			[]string{"keyring", "no stored password"},
+			0,
+		},
+		{
+			"too long/tty", secret.ErrTooLong, true, 2,
+			[]string{"saved password cannot be used", "511 bytes"},
+			[]string{"keyring", "Password:", "Save password"},
+			0,
+		},
+		{
+			"line break/tty", secret.ErrCRLF, true, 2,
+			[]string{"saved password cannot be used", "CR or LF"},
+			[]string{"keyring", "Password:", "Save password"},
+			0,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

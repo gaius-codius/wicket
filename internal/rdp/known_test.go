@@ -71,11 +71,20 @@ func TestInstalledClients_UnversionedNeedFreeRDP3(t *testing.T) {
 		preferred string
 	}{
 		{"both 3", all, map[string]int{"/fake/bin/sdl-freerdp": 3, "/fake/bin/xfreerdp": 3}, all, "sdl-freerdp3"},
-		{"xfreerdp 2 beside suffixed", all, map[string]int{"/fake/bin/sdl-freerdp": 3, "/fake/bin/xfreerdp": 2},
-			[]string{"sdl-freerdp3", "sdl-freerdp", "xfreerdp3"}, "sdl-freerdp3"},
+		{
+			"xfreerdp 2 beside suffixed", all,
+			map[string]int{"/fake/bin/sdl-freerdp": 3, "/fake/bin/xfreerdp": 2},
+			[]string{"sdl-freerdp3", "sdl-freerdp", "xfreerdp3"},
+			"sdl-freerdp3",
+		},
 		{"only xfreerdp 2", []string{"xfreerdp"}, map[string]int{"/fake/bin/xfreerdp": 2}, nil, config.DefaultClient},
-		{"xfreerdp 2 with homebrew sdl", []string{"sdl-freerdp", "xfreerdp"}, map[string]int{"/fake/bin/sdl-freerdp": 3, "/fake/bin/xfreerdp": 2},
-			[]string{"sdl-freerdp"}, "sdl-freerdp"},
+		{
+			"xfreerdp 2 with homebrew sdl",
+			[]string{"sdl-freerdp", "xfreerdp"},
+			map[string]int{"/fake/bin/sdl-freerdp": 3, "/fake/bin/xfreerdp": 2},
+			[]string{"sdl-freerdp"},
+			"sdl-freerdp",
+		},
 		{"xfreerdp 3 alone", []string{"xfreerdp"}, map[string]int{"/fake/bin/xfreerdp": 3}, []string{"xfreerdp"}, "xfreerdp"},
 		{"xfreerdp 4", []string{"xfreerdp"}, map[string]int{"/fake/bin/xfreerdp": 4}, nil, config.DefaultClient},
 		{"probe failed", []string{"sdl-freerdp", "xfreerdp"}, nil, nil, config.DefaultClient},

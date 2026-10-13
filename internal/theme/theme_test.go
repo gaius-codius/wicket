@@ -206,7 +206,7 @@ background = 12345
 foreground = "#2A2A32"
 `)
 	first, _ := Load(home)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		got, _ := Load(home)
 		if got.Hex["surface"] != first.Hex["surface"] {
 			t.Fatalf("run %d surface %s, first run %s", i, got.Hex["surface"], first.Hex["surface"])

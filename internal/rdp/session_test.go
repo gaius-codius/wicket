@@ -217,7 +217,7 @@ func TestSession_OwnSignalsDoesNotForward(t *testing.T) {
 	t.Setenv("FAKERDP_SIGINT_HOLD", "1")
 	sess := startOwned(t, &Launcher{Stdout: NewTail(0), Stderr: NewTail(0)})
 	time.Sleep(200 * time.Millisecond)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
 		<-outer
 	}

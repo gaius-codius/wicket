@@ -306,7 +306,7 @@ func isSharePath(path string) bool {
 func remminaShares(sharefolder, drive string) ([]config.Share, []config.DroppedShare) {
 	var shares shareSet
 	shares.add("", sharefolder)
-	for _, part := range strings.Split(drive, ";") {
+	for part := range strings.SplitSeq(drive, ";") {
 		part = strings.TrimSpace(part)
 		// FreeRDP / Remmina: name,path — or a bare path starting with /.
 		if isSharePath(part) {

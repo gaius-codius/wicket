@@ -12,10 +12,10 @@ func TestNewPassword_RejectsCRLF(t *testing.T) {
 	if _, err := NewPassword("ok"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewPassword("a\nb"); err != ErrCRLF {
+	if _, err := NewPassword("a\nb"); !errors.Is(err, ErrCRLF) {
 		t.Fatalf("lf: %v", err)
 	}
-	if _, err := NewPassword("a\rb"); err != ErrCRLF {
+	if _, err := NewPassword("a\rb"); !errors.Is(err, ErrCRLF) {
 		t.Fatalf("cr: %v", err)
 	}
 }

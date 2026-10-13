@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -34,7 +35,7 @@ func FakeRDPDir(t *testing.T) string {
 		}
 		fakeDir = dir
 		bin := filepath.Join(dir, "fakerdp")
-		cmd := exec.Command("go", "build", "-o", bin, "github.com/gaius-codius/wicket/internal/testutil/fakerdp")
+		cmd := exec.CommandContext(context.Background(), "go", "build", "-o", bin, "github.com/gaius-codius/wicket/internal/testutil/fakerdp")
 		cmd.Dir = moduleRoot(t)
 		out, err := cmd.CombinedOutput()
 		if err != nil {

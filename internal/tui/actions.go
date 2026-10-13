@@ -250,7 +250,7 @@ func (a *App) finishSave(ctx context.Context, plan savePlan, c carry) (warnings 
 			return warnings
 		}
 	}
-	if plan.old == nil || !(plan.moved || plan.intent.forget()) {
+	if plan.old == nil || (!plan.moved && !plan.intent.forget()) {
 		return warnings
 	}
 	if c.unknown {
@@ -540,7 +540,7 @@ var (
 func clientNote(out []byte, cred rdp.Credential) string {
 	pw, _ := cred.(secret.Password)
 	var last, lastErr, lastCode string
-	for _, ln := range bytes.Split(out, []byte("\n")) {
+	for ln := range bytes.SplitSeq(out, []byte("\n")) {
 		raw := string(ln)
 		if terminalNoise(raw) {
 			continue

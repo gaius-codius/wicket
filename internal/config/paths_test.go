@@ -76,16 +76,16 @@ func TestResolve_WicketConfigOverrideRelative(t *testing.T) {
 func TestCanonical_Symlink(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	real := filepath.Join(dir, "real")
-	if err := os.Mkdir(real, 0o700); err != nil {
+	realDir := filepath.Join(dir, "real")
+	if err := os.Mkdir(realDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(real, "config.toml")
+	target := filepath.Join(realDir, "config.toml")
 	if err := os.WriteFile(target, []byte("[general]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	linkDir := filepath.Join(dir, "link")
-	if err := os.Symlink(real, linkDir); err != nil {
+	if err := os.Symlink(realDir, linkDir); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Canonical(filepath.Join(linkDir, "config.toml"), dir)

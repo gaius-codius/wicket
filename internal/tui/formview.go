@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
 	"github.com/gaius-codius/wicket/internal/rdp"
 )
 

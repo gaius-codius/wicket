@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
@@ -259,7 +260,7 @@ func (m Model) beginSave(f formState, intent PasswordIntent) (tea.Model, tea.Cmd
 	m.form = f
 	plan, err := m.app.planSave(f.oldName, f.p, intent)
 	if err != nil {
-		return m.saveFailed(err)
+		return m.saveFailed(err), nil
 	}
 	if !plan.carries() {
 		return m.commitSave(plan, carry{})
@@ -348,7 +349,7 @@ func (m Model) handleCarryUndone(r carryUndoneMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleSaveCarried(r saveCarriedMsg) (tea.Model, tea.Cmd) {
 	m.forgetPresence(r.plan.oldID, r.plan.newID)
 	if r.err != nil {
-		return m.saveFailed(carryFailed(r.err))
+		return m.saveFailed(carryFailed(r.err)), nil
 	}
 	return m.commitSave(r.plan, r.c)
 }
@@ -365,7 +366,7 @@ func (m Model) commitSave(plan savePlan, c carry) (tea.Model, tea.Cmd) {
 	app := m.app
 	if err != nil {
 		if !c.copied {
-			return m.saveFailed(err)
+			return m.saveFailed(err), nil
 		}
 		// The password was copied for a config that was never written;
 		// the copy goes, and the original was never touched.
@@ -373,9 +374,9 @@ func (m Model) commitSave(plan savePlan, c carry) (tea.Model, tea.Cmd) {
 			"Not saved; waiting for the keyring to put the password back…",
 			stopWaitingKeys,
 			func(m Model, _ string) (tea.Model, tea.Cmd) {
-				m, cmd := m.saveFailed(err)
+				m = m.saveFailed(err)
 				m.setStatus("a copy of its password may be left in the keyring", statusError)
-				return m, cmd
+				return m, nil
 			},
 			func(ctx context.Context) tea.Msg {
 				return saveFinishedMsg{plan: plan, c: c, warns: app.undoCarry(ctx, plan), failed: err}
@@ -412,17 +413,17 @@ func unfinishedSave(plan savePlan) string {
 func (m Model) handleSaveFinished(r saveFinishedMsg) (tea.Model, tea.Cmd) {
 	m.forgetPresence(r.plan.oldID, r.plan.newID)
 	if r.failed != nil {
-		nm, cmd := m.saveFailed(r.failed)
+		nm := m.saveFailed(r.failed)
 		if len(r.warns) > 0 {
 			nm.setStatus(strings.Join(r.warns, "; "), statusError)
 		}
-		return nm, cmd
+		return nm, nil
 	}
 	return m.saveDone(r.plan, r.c, r.warns)
 }
 
 // saveFailed leaves the form up with the error under the field at fault.
-func (m Model) saveFailed(err error) (Model, tea.Cmd) {
+func (m Model) saveFailed(err error) Model {
 	f := m.form
 	f.setError(err)
 	// The invalid field may be scrolled out of a short panel, so focus goes
@@ -431,7 +432,7 @@ func (m Model) saveFailed(err error) (Model, tea.Cmd) {
 		f.focus(f.errField)
 	}
 	m.form = f
-	return m, nil
+	return m
 }
 
 // saveDone closes the form and says what the save did.

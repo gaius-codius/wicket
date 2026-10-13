@@ -144,7 +144,7 @@ func TestRetry_UseOnceUntilDismiss(t *testing.T) {
 		t.Fatalf("retry help:\n%s", help)
 	}
 	h.m = press(helpM, "esc")
-	os.Remove(rec)
+	_ = os.Remove(rec)
 	h.m = press(h.m, "enter")
 	got := testutil.ReadRecord(t, rec)
 	if got.Stdin != sentinel+"\n" {

@@ -168,7 +168,7 @@ func TestGoModuleFloor(t *testing.T) {
 		t.Fatal("go.mod missing module github.com/gaius-codius/wicket")
 	}
 	found := false
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		if !strings.HasPrefix(line, "go ") {
 			continue
 		}

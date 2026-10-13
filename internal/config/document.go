@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -247,8 +249,7 @@ func assignShares(m map[string]any, p *Profile) error {
 }
 
 func shareFieldErr(i int, err error) error {
-	var fe *FieldError
-	if errors.As(err, &fe) {
+	if fe, ok := errors.AsType[*FieldError](err); ok {
 		return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %s %s", i+1, fe.Field, fe.Msg)}
 	}
 	return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %v", i+1, err)}
@@ -325,6 +326,9 @@ func assignInt(m map[string]any, key string, dst *int) error {
 	case int64:
 		*dst = int(n)
 	case uint64:
+		if n > math.MaxInt {
+			return &FieldError{Field: key, Msg: "is out of range"}
+		}
 		*dst = int(n)
 	default:
 		return &FieldError{Field: key, Msg: "must be an integer"}
@@ -488,9 +492,7 @@ func cloneMap(m map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 

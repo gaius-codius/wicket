@@ -103,7 +103,7 @@ func rdpClipboard(v string) (on, ok bool) {
 // letters, and "%", the whole home folder (see shareSet).
 func rdpDrives(v string) ([]config.Share, []config.DroppedShare) {
 	var shares shareSet
-	for _, part := range strings.Split(v, ";") {
+	for part := range strings.SplitSeq(v, ";") {
 		part = strings.TrimSpace(part)
 		switch {
 		case part == "*" || strings.EqualFold(part, "DynamicDrives"):

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+
 	"github.com/gaius-codius/wicket/internal/config"
 )
 
@@ -39,7 +40,7 @@ func TestList_SelectedCardDetailsAndLastUsed(t *testing.T) {
 
 // lineWith returns the first line of out containing sub.
 func lineWith(out, sub string) string {
-	for _, ln := range strings.Split(out, "\n") {
+	for ln := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(ln, sub) {
 			return ln
 		}
@@ -178,20 +179,20 @@ func TestListWindow(t *testing.T) {
 func TestList_ViewportKeepsSelectionVisible(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("[general]\n")
-	for i := 0; i < 30; i++ {
-		b.WriteString(fmt.Sprintf(`[[profiles]]
+	for i := range 30 {
+		fmt.Fprintf(&b, `[[profiles]]
 name = "p%02d"
 host = "h"
 user = "u"
 client = "sdl-freerdp3"
 dynamic_resolution = true
 scale = 100
-`, i))
+`, i)
 	}
 	h := newHarness(t, b.String(), panicStore{})
 	nm, _ := h.m.Update(teaWin(80, 12))
 	h.m = nm.(Model)
-	for i := 0; i < 29; i++ {
+	for range 29 {
 		h.m = press(h.m, "j")
 	}
 	out := screen(h.m)
@@ -316,7 +317,7 @@ func TestList_WideTwoPane(t *testing.T) {
 	h.m = press(h.m, "j")
 	out := screen(h.m)
 	var detail string
-	for _, ln := range strings.Split(out, "\n") {
+	for ln := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(ln, "work") && strings.Contains(ln, "│") {
 			detail = ln
 		}
@@ -332,7 +333,7 @@ func TestList_WideTwoPane(t *testing.T) {
 	if !strings.Contains(lineWith(out, "work  p-host-1"), "never") || strings.Contains(out, "last used") {
 		t.Fatalf("wide rows should carry last-used, and the pane not repeat it:\n%s", out)
 	}
-	for _, ln := range strings.Split(out, "\n") {
+	for ln := range strings.SplitSeq(out, "\n") {
 		if w := lipgloss.Width(ln); w > 140 {
 			t.Fatalf("line wider than terminal (%d):\n%s", w, ln)
 		}
@@ -389,7 +390,7 @@ func TestList_TerminalModeSelectsWithReverseVideo(t *testing.T) {
 func TestList_FitsShortTerminal(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("[general]\n")
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		fmt.Fprintf(&b, "[[profiles]]\nname = \"p%02d\"\nhost = \"h\"\nuser = \"u\"\nscale = 100\n", i)
 	}
 	for _, size := range [][2]int{{50, 10}, {80, 12}, {140, 12}} {

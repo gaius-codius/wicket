@@ -91,12 +91,14 @@ func Canonical(path, cwd string) (string, error) {
 		return "", err
 	}
 	abs = filepath.Clean(abs)
+	// A path that does not exist yet, or cannot be resolved, is still a
+	// usable name for it: callers create it, or report the error on use.
 	if _, err := os.Lstat(abs); err != nil {
-		return abs, nil
+		return abs, nil //nolint:nilerr // see above
 	}
 	eval, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return abs, nil
+		return abs, nil //nolint:nilerr // see above
 	}
 	return filepath.Clean(eval), nil
 }

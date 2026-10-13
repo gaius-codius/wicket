@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
 	"github.com/gaius-codius/wicket/internal/testutil"

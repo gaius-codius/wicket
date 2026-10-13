@@ -101,7 +101,7 @@ func TestSaveProfile_TOMLFailAfterNewPasswordRollsBack(t *testing.T) {
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(dir, 0o700)
+	defer func() { _ = os.Chmod(dir, 0o700) }()
 	_, err = a.SaveProfile(bg, "", p, PasswordIntent{Action: PasswordSet, Password: mustPassword(t, "secret")})
 	if err == nil {
 		t.Fatal("want TOML write failure")
@@ -221,7 +221,7 @@ func TestSaveProfile_FailedTypedPasswordKeepsTheOldOne(t *testing.T) {
 func TestKeyringProblem_IsShort(t *testing.T) {
 	raw := errors.New("dial unix /tmp/x/nobus: connect: no such file or directory")
 	for _, err := range []error{
-		fmt.Errorf("%w: %v", secret.ErrUnavailable, raw),
+		fmt.Errorf("%w: %w", secret.ErrUnavailable, raw),
 		fmt.Errorf("%w: %w", secret.ErrUnavailable, context.DeadlineExceeded),
 		fmt.Errorf("%w: %w", secret.ErrUnavailable, secret.ErrPromptDismissed),
 		errors.New("line one\nline two " + strings.Repeat("x", 200)),
@@ -236,7 +236,7 @@ func TestKeyringProblem_IsShort(t *testing.T) {
 func TestKeyringProblem_Locked(t *testing.T) {
 	// An Unlock call that failed outright carries no prompt sentinel; the
 	// phrase still says what is wrong rather than "unavailable".
-	err := fmt.Errorf("%w (%w: %v)", secret.ErrLocked, secret.ErrUnavailable, errors.New("org.freedesktop.DBus.Error.Failed"))
+	err := fmt.Errorf("%w (%w: %w)", secret.ErrLocked, secret.ErrUnavailable, errors.New("org.freedesktop.DBus.Error.Failed"))
 	if got := keyringProblem(err); got != "the keyring is locked" {
 		t.Errorf("keyringProblem(%v) = %q", err, got)
 	}

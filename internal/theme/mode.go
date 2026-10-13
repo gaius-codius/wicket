@@ -3,6 +3,7 @@ package theme
 import (
 	"fmt"
 	"image/color"
+	"maps"
 	"strings"
 )
 
@@ -106,8 +107,10 @@ func Choose(mode Mode, home string) Setup {
 	case ModeOmarchy:
 		p, rep := Load(home)
 		if rep.MissingFile || rep.InvalidTOML {
-			return Setup{Mode: mode, Look: Look{Kind: KindTerminal},
-				Warning: "no readable Omarchy theme; using terminal colours"}
+			return Setup{
+				Mode: mode, Look: Look{Kind: KindTerminal},
+				Warning: "no readable Omarchy theme; using terminal colours",
+			}
 		}
 		return omarchySetup(mode, p)
 	default:
@@ -173,9 +176,7 @@ func IsDark(bg color.Color) bool {
 // text lifted to read on it as well.
 func readableTextOn(p Palette, surface string) Palette {
 	hex := make(map[string]string, len(p.Hex))
-	for k, v := range p.Hex {
-		hex[k] = v
-	}
+	maps.Copy(hex, p.Hex)
 	for _, role := range []string{"secondary", "muted", "success", "warning", "danger", "accent", "brand"} {
 		hex[role] = liftTo(surface, hex[role], minTextContrast)
 	}

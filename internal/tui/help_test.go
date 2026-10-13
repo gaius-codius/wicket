@@ -41,7 +41,7 @@ func TestHelp_FormKeys(t *testing.T) {
 	h := newHarness(t, "", nil)
 	h.m = press(h.m, "n")
 	// unfocus text field so ? opens help
-	for i := 0; i < fieldCount; i++ {
+	for range fieldCount {
 		if !h.m.form.textFocused() {
 			break
 		}

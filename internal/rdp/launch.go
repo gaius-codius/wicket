@@ -45,7 +45,11 @@ type OSRunner struct{}
 
 func (OSRunner) LookPath(file string) (string, error) { return exec.LookPath(file) }
 func (OSRunner) Command(name string, arg ...string) *exec.Cmd {
-	return exec.Command(name, arg...)
+	// The client is one of the known FreeRDP names found on PATH, and the
+	// arguments are built from the profile; running it is the point. A
+	// Session stops it by signalling its process group, not through a
+	// context, so a helper the client started stops with it.
+	return exec.Command(name, arg...) //nolint:gosec,noctx // see above
 }
 
 // Launcher starts a FreeRDP child.
@@ -415,10 +419,10 @@ func (s *Session) noteStopped(sig os.Signal) bool {
 	return true
 }
 
-func (s *Session) signal(sig syscall.Signal) bool {
+func (s *Session) signal(sig syscall.Signal) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.signalLocked(sig)
+	s.signalLocked(sig)
 }
 
 // signalLocked signals the whole process group, so a helper the client

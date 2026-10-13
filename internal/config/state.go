@@ -98,17 +98,17 @@ func (s *StateStore) Record(name string) error {
 }
 
 // Rename moves a last_used key. No-op if the old key is absent.
-func (s *StateStore) Rename(old, new string) error {
-	if old == new {
+func (s *StateStore) Rename(from, to string) error {
+	if from == to {
 		return nil
 	}
 	return s.mutate(func(m map[string]time.Time) {
-		t, ok := m[old]
+		t, ok := m[from]
 		if !ok {
 			return
 		}
-		delete(m, old)
-		m[new] = t
+		delete(m, from)
+		m[to] = t
 	})
 }
 

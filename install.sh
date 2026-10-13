@@ -101,7 +101,7 @@ stop() {
 		) >/dev/null 2>&1 &
 		st_watch=$!
 		wait "$child" 2>/dev/null || :
-		kill_tree KILL "$st_watch"
+		kill_watcher "$st_watch"
 		wait "$st_watch" 2>/dev/null || :
 		# shellcheck disable=SC2086
 		while st_left=$(alive_pids "$child" $st_tree) && [ -n "$st_left" ] &&
@@ -153,6 +153,15 @@ kill_tree() {
 		kill_tree "$1" "$kt_child"
 	done
 	kill "-$1" "$2" 2>/dev/null || :
+}
+
+# kill_watcher kills watcher $1 and its sleep. It is stopped first, as a
+# stopped process starts nothing: one that started its sleep after
+# kill_tree had listed its children would leave the sleep running, handed to
+# init, once it was killed.
+kill_watcher() {
+	kill -STOP "$1" 2>/dev/null || :
+	kill_tree KILL "$1"
 }
 
 # curl's -q, which has to come first, skips ~/.curlrc, where "insecure"
@@ -500,13 +509,13 @@ freerdp3_probe() {
 	wait "$fr_pid" || :
 	# KILL, as the watcher loses a TERM that comes before its trap is set,
 	# and would then report a timeout for a client that answered.
-	kill_tree KILL "$fr_watch"
+	kill_watcher "$fr_watch"
 	wait "$fr_watch" || :
 }
 
 freerdp3_probe_stop() {
 	kill_tree KILL "$fr_pid"
-	kill_tree KILL "$fr_watch"
+	kill_watcher "$fr_watch"
 	wait
 	exit 143
 }

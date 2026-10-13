@@ -1081,6 +1081,62 @@ func TestInstallStopsHungFreeRDPWrapper(t *testing.T) {
 	}
 }
 
+// A watcher that starts its sleep only after kill_tree has listed its
+// children takes the sleep with it all the same: in stop, and in the FreeRDP
+// probe once the client has answered. The script is a copy whose watcher
+// starts its sleep only once pgrep has listed the watcher's children, and
+// that pgrep lingers before the watcher is killed, as a loaded machine might
+// schedule them. The sleep is long, so a leaked one is still there to find.
+func TestInstallKillsLateWatcherSleep(t *testing.T) {
+	t.Parallel()
+	needPgrep(t)
+	for _, tc := range []struct{ name, sleep, long string }{
+		{"stop", "\t\t\tsleep 2\n", "\t\t\tsleep 30\n"},
+		{"freerdp probe", "\t\tsleep 3 >/dev/null 2>&1 &\n", "\t\tsleep 30 >/dev/null 2>&1 &\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRelease(t, "curl")
+			in := newInstaller(t, r, "curl")
+			listed := filepath.Join(in.dir, "watcher-listed")
+			b, err := os.ReadFile(in.installSh)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(b, []byte(tc.sleep)) {
+				t.Fatalf("install.sh has no %q", tc.sleep)
+			}
+			wait := fmt.Sprintf("\t\twhile [ ! -e %q ]; do sleep 0.01; done\n", listed)
+			b = bytes.Replace(b, []byte(tc.sleep), []byte(wait+tc.long), 1)
+			in.installSh = filepath.Join(in.dir, "install.sh")
+			if err := os.WriteFile(in.installSh, b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// Only the watcher, of what pgrep -P is asked about, is a
+			// shell running install.sh.
+			in.script(t, "pgrep", fmt.Sprintf(`%q "$@"
+s=$?
+if [ "$1" = -P ] && grep -qF install.sh "/proc/$2/cmdline" 2>/dev/null; then
+	: >%q
+	sleep 0.3
+fi
+exit $s`, mustLookPath(t, "pgrep"), listed))
+			if tc.name == "stop" {
+				r.set(func() { r.stall = tag + "/" + asset + ".tar.gz" })
+				in.signalDuring(t, r.stalled, signal{sig: syscall.SIGTERM, code: 143, within: 5 * time.Second})
+			} else {
+				in.script(t, "xfreerdp", "echo 'This is FreeRDP version 2.11.7 (n/a)'")
+				out, code := in.run(t)
+				wantOutput(t, out, code, 0, "warning: no FreeRDP 3 client on PATH")
+			}
+			if _, err := os.Stat(listed); err != nil {
+				t.Errorf("the watcher's children were never listed: %v", err)
+			}
+			in.checkNothingLeft(t)
+		})
+	}
+}
+
 // appears is closed once path exists.
 func appears(t *testing.T, path string) <-chan struct{} {
 	t.Helper()

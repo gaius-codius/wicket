@@ -19,6 +19,8 @@ jobs:
       build: ./cmd/wicket/
       fuzz: |
         ./internal/config FuzzSave
+        ./internal/importer FuzzParseRDP
+        ./internal/importer FuzzParseRemmina
 
   # install.sh's tests skip a fetcher that is not installed. This job
   # installs every one, and makes a missing one fail instead.

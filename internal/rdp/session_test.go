@@ -377,6 +377,12 @@ func TestSession_SignalsDuringWaitDelayAreDropped(t *testing.T) {
 func TestSession_LeavesNoGoroutines(t *testing.T) {
 	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
 	t.Setenv("FAKERDP_EXIT", "0")
+	// The first signal.Notify in a process starts os/signal's watcher, which
+	// runs for good. Start it before counting, or a shuffled run that puts
+	// this test first counts it as a leak.
+	warm := make(chan os.Signal, 1)
+	signal.Notify(warm, os.Interrupt)
+	signal.Stop(warm)
 	runtime.GC()
 	before := runtime.NumGoroutine()
 	for _, own := range []bool{false, true} {

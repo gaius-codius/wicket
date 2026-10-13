@@ -1,6 +1,7 @@
 package rdp
 
 import (
+	"crypto/rand"
 	"errors"
 	"io"
 	"os"
@@ -74,8 +75,12 @@ func TestStart_WaitExitCodeAndStdin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A fixed word such as "secret" turns up in the client's environment by
+	// chance -- a checkout path in PWD, a branch name in CI's
+	// GITHUB_HEAD_REF -- and fails the leak checks below for nothing.
+	pw := "pw-" + rand.Text()
 	l := &Launcher{Stdout: os.Stdout, Stderr: os.Stderr}
-	sess, err := l.Start(plan, lineCred("secret"))
+	sess, err := l.Start(plan, lineCred(pw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,15 +95,15 @@ func TestStart_WaitExitCodeAndStdin(t *testing.T) {
 		t.Fatalf("class %v", Classify(o))
 	}
 	r := testutil.ReadRecord(t, rec)
-	if r.Stdin != "secret\n" {
+	if r.Stdin != pw+"\n" {
 		t.Fatalf("stdin %q", r.Stdin)
 	}
 	joined := strings.Join(r.Argv, "\x00")
-	if strings.Contains(joined, "secret") {
+	if strings.Contains(joined, pw) {
 		t.Fatal("password on argv")
 	}
 	for k, v := range r.Environ {
-		if strings.Contains(k, "secret") || strings.Contains(v, "secret") {
+		if strings.Contains(k, pw) || strings.Contains(v, pw) {
 			t.Fatalf("password in environ %s=%s", k, v)
 		}
 	}

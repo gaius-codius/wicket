@@ -208,9 +208,10 @@ func (s *shareSet) add(name, path string) {
 		s.refuse(path, reason)
 		return
 	}
-	// Exact, not folded: /srv/Data and /srv/data are two folders, and the
-	// plan reports the drive name they then share.
-	if s.first(path + "\x00" + name) {
+	// Cleaned, so /srv/data/ is /srv/data, but not folded: /srv/Data and
+	// /srv/data are two folders, and the plan reports the drive name they
+	// then share.
+	if s.first(filepath.Clean(path) + "\x00" + name) {
 		s.list = append(s.list, config.Share{Path: path, Name: name})
 	}
 }
@@ -243,6 +244,7 @@ const (
 	refusedHome     = "holds the whole home folder; turn on share_home to share it"
 	refusedProc     = "folders under /proc are not shared"
 	refusedAllDrive = "only folders are shared, not all drives"
+	refusedNoHome   = "the home folder is unknown (HOME is not set), so no folder is shared"
 )
 
 // shareRefusal is why path cannot be imported as a share, or "".
@@ -254,46 +256,6 @@ func shareRefusal(path string) string {
 		return refusedComma
 	}
 	return wholeHomeOrRoot(path)
-}
-
-// wholeHomeOrRoot is why path cannot be shared when it holds the whole home
-// folder: the root, home itself, or a folder above it such as /home. A
-// symlink is followed when the path exists, so /proc/self/root counts, and
-// anything under /proc is refused outright, since what its links name
-// changes with the process that reads them. A path that cannot be expanded
-// is refused rather than guessed at. "" means it may be shared.
-func wholeHomeOrRoot(path string) string {
-	expanded, err := config.ExpandPath(path)
-	if err != nil {
-		return err.Error()
-	}
-	inProc := func(p string) bool { return p == "/proc" || strings.HasPrefix(p, "/proc/") }
-	// Checked before and after the symlinks are followed: /proc/self/cwd
-	// leads out of /proc, and /dev/fd leads into it.
-	if inProc(expanded) {
-		return refusedProc
-	}
-	if resolved, err := filepath.EvalSymlinks(expanded); err == nil {
-		expanded = resolved
-	}
-	if inProc(expanded) {
-		return refusedProc
-	}
-	if expanded == "/" {
-		return refusedHome
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	home = filepath.Clean(home)
-	if resolved, err := filepath.EvalSymlinks(home); err == nil {
-		home = resolved
-	}
-	if strings.HasPrefix(home+"/", expanded+"/") {
-		return refusedHome
-	}
-	return ""
 }
 
 func isSharePath(path string) bool {

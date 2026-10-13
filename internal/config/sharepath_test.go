@@ -1,12 +1,14 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -337,7 +339,8 @@ func TestShareRefusal_QuotesNames(t *testing.T) {
 // too long to look up, though FreeRDP, given the short one, reaches them.
 // What the walk cannot look up is refused, not passed over, whether that is
 // the share itself or a folder below it. The tree is built through links,
-// each a short name for the folder below the last.
+// each a short name for the folder below the last, as deep as the system
+// allows.
 func TestShareRefusal_PathTooLong(t *testing.T) {
 	t.Parallel()
 	base, err := filepath.EvalSymlinks(t.TempDir())
@@ -351,6 +354,11 @@ func TestShareRefusal_PathTooLong(t *testing.T) {
 	for i := 0; len(base)+i*(len(long)+1) < 4600; i++ {
 		dir := filepath.Join(prev, long)
 		if err := os.Mkdir(dir, 0o700); err != nil {
+			// macOS will not make a folder through a link past its path
+			// limit, so it cannot reach one there either.
+			if errors.Is(err, syscall.ENAMETOOLONG) && len(aliases) > 0 {
+				break
+			}
 			t.Fatal(err)
 		}
 		alias := filepath.Join(base, fmt.Sprint("s", i))
@@ -371,8 +379,11 @@ func TestShareRefusal_PathTooLong(t *testing.T) {
 			fits = a
 		}
 	}
-	if fits == "" || fits == prev {
-		t.Fatalf("no share at the limit: deepest that resolves is %q", fits)
+	if fits == "" {
+		t.Fatal("no share resolves")
+	}
+	if fits == prev {
+		t.Skip("this system reaches no folder through a link past its path limit")
 	}
 	for _, share := range []string{fits, prev} {
 		if got := ShareRefusal(share); !strings.Contains(got, "too long") {

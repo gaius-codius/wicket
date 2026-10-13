@@ -35,6 +35,20 @@ This installs the latest release for amd64 or arm64 into `~/.local/bin` (set
 ... | sh -s -- --uninstall        # remove the binary
 ```
 
+Releases after v0.3.1 carry a signed build provenance attestation. When the
+[GitHub CLI](https://cli.github.com/) 2.68 or newer is installed, logged in or
+not, the installer checks it with `gh attestation verify` and refuses a
+download the release workflow did not build, or one it could not check because
+GitHub was unreachable or rate limited. When `gh` is missing or older, it says
+the check was skipped and installs anyway. v0.1.0 to v0.3.1 predate attestations;
+the installer checks those against digests it carries itself. To check a
+download yourself:
+
+```
+gh attestation verify wicket_<version>_<os>_<arch>.tar.gz --repo gaius-codius/wicket \
+  --cert-identity https://github.com/gaius-codius/wicket/.github/workflows/release.yml@refs/tags/v<version>
+```
+
 Config, state, and keyring entries are never touched. Or, with Go:
 
 ```

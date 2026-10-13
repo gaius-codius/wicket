@@ -101,6 +101,11 @@ publishes them with `SHA256SUMS` as a GitHub release, which is what
 `install.sh` downloads. Linux builds are static (`CGO_ENABLED=0`); darwin
 builds use cgo against Security.framework.
 
+The workflow also attests each tarball, and `install.sh` refuses a release
+after v0.3.1 that has no attestation when `gh` is available. A tag runs the
+`release.yml` at its own commit, so tag only a commit that has the attest
+step. Never add a new release to `UNATTESTED` in `install.sh`.
+
 ```
 git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0
 ```

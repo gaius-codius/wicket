@@ -661,14 +661,10 @@ func (a *App) ProbeClient(p config.Profile) error {
 	if l == nil {
 		l = &rdp.Launcher{}
 	}
-	runner := l.Runner
-	if runner == nil {
-		runner = rdp.OSRunner{}
-	}
-	if _, err := runner.LookPath(plan.Client); err != nil {
-		return fmt.Errorf("%w: %s", rdp.ErrClientNotFound, plan.Client)
-	}
-	return nil
+	// The lookup wicket connect and Start make, so all three accept and
+	// refuse the same names.
+	_, err = l.LookupClient(plan.Client)
+	return err
 }
 
 func (a *App) StoreSecret(ctx context.Context, p config.Profile, pw secret.Password) error {

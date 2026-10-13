@@ -73,20 +73,72 @@ run() {
 	return "$run_status"
 }
 
-# stop kills the running command, removes the temp dir and exits with $1.
-# Background commands ignore INT and QUIT, so it has to kill them for
-# Ctrl-C and Ctrl-\ too.
+# stop kills the running command, cleans up and exits with $1. Background
+# commands ignore INT and QUIT, so it has to kill them for Ctrl-C and Ctrl-\
+# too. Whatever ignores TERM as well gets 2 to 3 s and then KILL. The tree is
+# listed first, as a process that ignores TERM outlives the parent that
+# would lead to it. The command itself is timed by a watcher: kill -0 cannot
+# tell when it has gone, as a child that has exited stays a zombie until it
+# is waited for. The watcher goes as soon as it has been, before its pid can
+# be reused. What it started belongs to init by then, so kill -0 can tell,
+# and only what is still running at the deadline is killed. Under an init
+# that does not reap, that costs the time left and no more.
 stop() {
 	if [ -n "$starting" ]; then
 		stopping=$1
 		return
 	fi
 	if [ -n "$child" ]; then
-		kill_tree TERM "$child"
+		st_tree=$(tree_pids "$child")
+		st_end=$(($(date +%s) + 3))
+		# shellcheck disable=SC2086 # a list of pids
+		kill -TERM $st_tree 2>/dev/null || :
+		# Off the installer's output, or a sleep this leaves behind (with
+		# no pgrep) would hold a pipe the installer writes to open.
+		(
+			sleep 2
+			kill_tree KILL "$child"
+		) >/dev/null 2>&1 &
+		st_watch=$!
 		wait "$child" 2>/dev/null || :
+		kill_tree KILL "$st_watch"
+		wait "$st_watch" 2>/dev/null || :
+		# shellcheck disable=SC2086
+		while st_left=$(alive_pids "$child" $st_tree) && [ -n "$st_left" ] &&
+			[ "$(date +%s)" -lt "$st_end" ]; do
+			sleep 0.1
+		done
+		# shellcheck disable=SC2086
+		[ -z "$st_left" ] || kill -KILL $st_left 2>/dev/null || :
 	fi
-	rm -rf "$tmp"
+	cleanup
 	exit "$1"
+}
+
+# tree_pids prints process $1 and everything under it, the deepest first.
+# Without pgrep, only $1.
+tree_pids() {
+	for tp_child in $(pgrep -P "$1" 2>/dev/null); do
+		tree_pids "$tp_child"
+	done
+	echo "$1"
+}
+
+# alive_pids prints those of the pids after $1 that are still running, but
+# never $1.
+alive_pids() {
+	ap_skip=$1
+	shift
+	for ap_pid; do
+		[ "$ap_pid" = "$ap_skip" ] || ! kill -0 "$ap_pid" 2>/dev/null || echo "$ap_pid"
+	done
+}
+
+# cleanup removes the temp dir and, once the copy into $BINDIR has started,
+# the copy, which is gone by then if it was renamed into place.
+cleanup() {
+	rm -rf "$tmp"
+	[ -z "$copying" ] || rm -f "$BINDIR/.wicket.new"
 }
 
 # kill_tree sends signal $1 to process $2 and everything under it, the
@@ -103,9 +155,11 @@ kill_tree() {
 	kill "-$1" "$2" 2>/dev/null || :
 }
 
+# curl's -q, which has to come first, skips ~/.curlrc, where "insecure"
+# would turn off the certificate check.
 fetch() { # url dest
 	if command -v curl >/dev/null 2>&1; then
-		run curl -fsSL --proto-redir '=https' -o "$2" "$1"
+		run curl -q -fsSL --proto-redir '=https' -o "$2" "$1"
 	elif command -v wget >/dev/null 2>&1; then
 		wget_https "$1" "$2"
 	else
@@ -121,17 +175,47 @@ fetch() { # url dest
 # printed for -S; a download that came over plain http is never used. A log
 # with no status line means this wget did not print its headers, and an
 # unchecked redirect is not let through.
+#
+# Only a wget known to check certificates is used, and --check-certificate
+# overrides a wgetrc that turns the check off. Busybox runs openssl
+# s_client for https, which enforces the check since 1.33 and before that
+# did not, saying nothing. Without openssl on PATH, or built without that
+# helper, it falls back to TLS of its own that checks nothing, and says so.
+# With http_proxy set it sends an https URL to the proxy as a plain GET, with
+# no TLS at all. Any of these would let anyone on the path serve a tarball
+# with a SHA256SUMS to match, so all are refused, a failed download or not.
+# Busybox has no --version; it prints its usage, which names its version.
 wget_https() {
 	: >"$tmp/wget-version"
-	run wget --version >"$tmp/wget-version" 2>/dev/null || :
+	run wget --version >"$tmp/wget-version" 2>&1 || :
 	if grep -q 'Wget2' "$tmp/wget-version"; then
 		rm -f "$2"
-		run wget -q --https-only -O "$2" "$1" || return
+		run wget -q --https-only --check-certificate -O "$2" "$1" || return
 		[ -e "$2" ] ||
 			die "wget2 wrote nothing for $1; it skips a redirect away from https"
 		return
+	elif grep -q 'BusyBox' "$tmp/wget-version"; then
+		bb_version=$(sed -n 's/.*BusyBox v\([0-9]*\.[0-9]*\).*/\1/p' "$tmp/wget-version" | head -n 1)
+		case "$bb_version" in
+		"" | 0.* | 1.[0-9] | 1.[12][0-9] | 1.3[0-2])
+			die "busybox wget ${bb_version:-of unknown version} does not check TLS certificates; install curl, or busybox 1.33 or newer with openssl"
+			;;
+		esac
+		[ -z "${http_proxy:-}" ] ||
+			die "busybox wget sends https through http_proxy unencrypted; install curl, or unset http_proxy"
+		wg_check=""
+	elif grep -q 'GNU Wget 1\.' "$tmp/wget-version"; then
+		wg_check=--check-certificate
+	else
+		die "this wget is not GNU Wget, Wget2 or busybox, so whether it checks TLS certificates is unknown; install curl"
 	fi
-	run wget -S -O "$2" "$1" 2>"$tmp/wget.log" || return
+	wg_status=0
+	# shellcheck disable=SC2086 # no option for busybox
+	run wget -S $wg_check -O "$2" "$1" 2>"$tmp/wget.log" || wg_status=$?
+	if grep -q 'TLS certificate validation not implemented' "$tmp/wget.log"; then
+		die "this wget (busybox without openssl) does not check TLS certificates; install curl, or openssl for busybox to use"
+	fi
+	[ "$wg_status" -eq 0 ] || return "$wg_status"
 	grep -q 'HTTP/' "$tmp/wget.log" ||
 		die "wget did not show its redirects, so they could not be checked; install curl"
 	# Every Location has to be https or start with /, which keeps the
@@ -148,7 +232,7 @@ wget_https() {
 latest_tag() {
 	if command -v curl >/dev/null 2>&1; then
 		# /releases/latest redirects to /releases/tag/<tag>.
-		run curl -fsSLI --proto-redir '=https' -o /dev/null -w '%{url_effective}' \
+		run curl -q -fsSLI --proto-redir '=https' -o /dev/null -w '%{url_effective}' \
 			"$RELEASES/latest" >"$tmp/latest" || die "could not reach $RELEASES"
 		url=$(cat "$tmp/latest")
 		# All of it: a tag can hold a /, and its last part alone could
@@ -297,9 +381,9 @@ main() {
 	*) die "no build for $(uname -m); try: go install github.com/$REPO/cmd/wicket@latest" ;;
 	esac
 
-	child="" starting="" stopping=""
+	child="" starting="" stopping="" copying=""
 	tmp=$(mktemp -d)
-	trap 'rm -rf "$tmp"' EXIT
+	trap cleanup EXIT
 	# A signal trap that only cleaned up would let the script carry on
 	# without $tmp. Stop with the status the shell would give.
 	trap 'stop 129' HUP
@@ -333,8 +417,10 @@ main() {
 	tar -xzf "$tmp/$name.tar.gz" -C "$tmp"
 	mkdir -p "$BINDIR"
 	# Copy next to the target, then rename, so a running wicket is not
-	# overwritten in place and a failed copy leaves the old one.
-	cp "$tmp/$name/wicket" "$BINDIR/.wicket.new"
+	# overwritten in place and a failed copy leaves the old one. Through
+	# run, as a copy to a slow disk is stopped like a download.
+	copying=1
+	run cp "$tmp/$name/wicket" "$BINDIR/.wicket.new"
 	chmod 755 "$BINDIR/.wicket.new"
 	mv -f "$BINDIR/.wicket.new" "$BINDIR/wicket"
 
@@ -396,7 +482,8 @@ freerdp3_probe() {
 		# can be lost.
 		fr_sleep="" fr_held=""
 		trap 'fr_held=1; [ -z "$fr_sleep" ] || { kill -KILL "$fr_sleep"; exit 0; }' TERM
-		sleep 3 &
+		# Off the installer's output, as in stop.
+		sleep 3 >/dev/null 2>&1 &
 		fr_sleep=$!
 		[ -z "$fr_held" ] || { kill -KILL "$fr_sleep"; exit 0; }
 		# After an interrupt $tmp is gone and the marker cannot be
@@ -411,13 +498,15 @@ freerdp3_probe() {
 	fr_starting=""
 	[ -z "$fr_stopping" ] || freerdp3_probe_stop
 	wait "$fr_pid" || :
-	kill "$fr_watch" || :
+	# KILL, as the watcher loses a TERM that comes before its trap is set,
+	# and would then report a timeout for a client that answered.
+	kill_tree KILL "$fr_watch"
 	wait "$fr_watch" || :
 }
 
 freerdp3_probe_stop() {
 	kill_tree KILL "$fr_pid"
-	kill "$fr_watch" 2>/dev/null || :
+	kill_tree KILL "$fr_watch"
 	wait
 	exit 143
 }

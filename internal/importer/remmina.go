@@ -187,11 +187,14 @@ func splitDomainUser(user string) (domain, bare string, ok bool) {
 // shareSet collects the shares an import keeps, by the rules both formats
 // share, and the ones it refuses with the reason, for the summary. A path
 // must be absolute or ~/…, or it is refused; an empty one names nothing and
-// is passed over. A folder holding the whole home folder is refused too: a
-// file sent to the user could otherwise hand a server every file they have,
-// and Wicket offers home only as share_home, which an import does not turn
-// on. Whether the folder exists is left to the time it is used. A repeat of
-// a share already kept or refused goes without a note.
+// is passed over. A folder config.ShareRefusal refuses is refused too, such
+// as one holding the whole home folder, or with a link in it that leads
+// there: a file sent to the user could otherwise hand a server every file
+// they have, and Wicket offers home only as share_home, which an import does
+// not turn on. Save and connect ask it again, so a folder that changes
+// after the import is caught there. Whether the folder exists is left to
+// the time it is used. A repeat of a share already kept or refused goes
+// without a note.
 type shareSet struct {
 	list    []config.Share
 	refused []config.DroppedShare
@@ -241,10 +244,10 @@ func (s *shareSet) first(key string) bool {
 const (
 	refusedNotPath  = "path must be absolute or ~/…"
 	refusedComma    = "path must not contain ','"
-	refusedHome     = "holds the whole home folder; turn on share_home to share it"
-	refusedProc     = "folders under /proc or /dev/fd, or reached through them, are not shared"
 	refusedAllDrive = "only folders are shared, not all drives"
-	refusedNoHome   = "the home folder is unknown (HOME is unset or not absolute), so no folder is shared"
+	refusedHome     = config.RefusedHome
+	refusedProc     = config.RefusedProc
+	refusedNoHome   = config.RefusedNoHome
 )
 
 // shareRefusal is why path cannot be imported as a share, or "".
@@ -255,7 +258,7 @@ func shareRefusal(path string) string {
 	case strings.ContainsRune(path, ','):
 		return refusedComma
 	}
-	return wholeHomeOrRoot(path)
+	return config.ShareRefusal(path)
 }
 
 func isSharePath(path string) bool {

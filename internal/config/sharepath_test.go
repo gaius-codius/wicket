@@ -1,0 +1,286 @@
+package config
+
+import (
+	"os"
+	"os/user"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+// On macOS the home folder answers to other spellings than its own: any
+// case on a case-insensitive volume, and its name under the data volume,
+// through a firmlink, which following symlinks does not undo. Each is
+// refused, for home and for the folder above it. It runs against the real
+// file system, so only on macOS; TestHoldsHome_DataVolume covers the names
+// everywhere.
+func TestShares_HomeAliasesOnDarwin(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS file systems only")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkHomeAliases(t, home)
+}
+
+// TestShares_HomeAliasesOnDarwin's sandboxed home is under /var/folders;
+// this is the account's own, under /Users, the case #100 names. Only stat
+// is used on it. Not parallel: it sets HOME.
+func TestShares_AccountHomeAliasesOnDarwin(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS file systems only")
+	}
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" {
+		t.Skipf("no account home: %v", err)
+	}
+	t.Setenv("HOME", u.HomeDir)
+	checkHomeAliases(t, u.HomeDir)
+}
+
+func checkHomeAliases(t *testing.T, home string) {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var aliases []string
+	if _, err := os.Stat(strings.ToUpper(home)); err == nil {
+		aliases = append(aliases, strings.ToUpper(home), strings.ToLower(filepath.Dir(home)))
+	} else {
+		t.Logf("volume is case-sensitive; case variants not checked: %v", err)
+	}
+	if _, err := os.Stat(dataVolume + resolved); err == nil {
+		aliases = append(aliases, dataVolume+resolved, dataVolume+filepath.Dir(resolved), dataVolume)
+	} else {
+		t.Logf("no data volume alias of %s: %v", resolved, err)
+	}
+	if len(aliases) == 0 {
+		t.Skip("no alias of home on this system")
+	}
+	for _, a := range aliases {
+		if got := ShareRefusal(a); got != RefusedHome {
+			t.Errorf("%s: %q", a, got)
+		}
+	}
+}
+
+// A folder that holds home at the place / does is refused, as / is: in a
+// toolbox /run/host is the host's root. A tree of links stands in for one
+// here, and so does a folder holding home where home's parent does.
+func TestShares_RefusesMirrorOfRoot(t *testing.T) {
+	t.Parallel()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mirror := t.TempDir()
+	at := filepath.Join(mirror, home)
+	if err := os.MkdirAll(filepath.Dir(at), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(home, at); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{mirror, filepath.Dir(at)} {
+		if got := ShareRefusal(p); got != RefusedHome {
+			t.Errorf("%s: %q", p, got)
+		}
+	}
+	// What holds no home at that place is kept.
+	if got := ShareRefusal(filepath.Join(mirror, "tmp-other")); got != "" {
+		t.Errorf("unrelated folder: %q", got)
+	}
+}
+
+// The data volume names of home and the folders above it are refused
+// wherever the check runs as macOS's, though nothing there exists here.
+func TestHoldsHome_DataVolume(t *testing.T) {
+	t.Parallel()
+	names := homeNames("/Users/alice", true)
+	for _, p := range []string{
+		"/Users/alice", "/Users", "/",
+		dataVolume + "/Users/alice", dataVolume + "/Users", dataVolume, "/System/Volumes", "/System",
+	} {
+		if !holdsHome(p, names) {
+			t.Errorf("%s: kept", p)
+		}
+	}
+	for _, p := range []string{"/Users/alice/docs", "/Users/bob", dataVolume + "/Users/bob", dataVolume + "/Users/alice/docs"} {
+		if holdsHome(p, names) {
+			t.Errorf("%s: refused", p)
+		}
+	}
+	if holdsHome(dataVolume, homeNames("/Users/alice", false)) {
+		t.Error("data volume refused off macOS")
+	}
+}
+
+// A link whose target passes through /proc or /dev/fd is refused, though
+// following it to the end leads elsewhere: /proc/self/cwd is the importer's
+// folder when it checks and FreeRDP's when it connects. /dev/fd/N is refused
+// whether or not N is open.
+func TestShares_RefusesLinksThroughProc(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	link := func(name, target string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.Symlink(target, p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	plain := filepath.Join(dir, "plain")
+	if err := os.Mkdir(plain, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	refused := []string{
+		"/dev/fd/0", "/dev/fd/99",
+		link("dev", "/dev") + "/fd/0",
+		link("fd", "/dev/fd") + "/0",
+	}
+	if _, err := os.Stat("/proc/self"); err == nil {
+		up := strings.Repeat("../", strings.Count(dir, "/"))
+		refused = append(refused,
+			link("cwd", "/proc/self/cwd"),
+			link("proc", "/proc")+"/self/cwd",
+			link("rel", up+"proc/self/cwd"),
+			link("via", link("cwd2", "/proc/self/cwd")),
+		)
+	}
+	for _, p := range refused {
+		if got := ShareRefusal(p); got != RefusedProc {
+			t.Errorf("%s: %q", p, got)
+		}
+	}
+	// A link to an ordinary folder, and a folder whose name only starts
+	// like /proc, are kept.
+	for _, p := range []string{link("ok", plain), "/procfs-backup", "/dev/fdx"} {
+		if got := ShareRefusal(p); got != "" {
+			t.Errorf("%s: %q", p, got)
+		}
+	}
+}
+
+// With no home folder to compare against, nothing tells /home from any
+// other folder, so every share is refused, with the reason.
+func TestShares_RefusedWithoutHome(t *testing.T) {
+	for _, home := range []string{"", "relative/home"} {
+		t.Run(home, func(t *testing.T) {
+			t.Setenv("HOME", home)
+			for _, p := range []string{"/home", "/srv/wicket-data"} {
+				if got := ShareRefusal(p); got != RefusedNoHome {
+					t.Errorf("%s: %q", p, got)
+				}
+			}
+		})
+	}
+}
+
+// linkTree makes dir/rel for each rel ending in "/" and a link at each other
+// rel, to its target, under a new folder it returns.
+func linkTree(t *testing.T, links map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for rel, target := range links {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasSuffix(rel, "/") {
+			if err := os.MkdirAll(p, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.Symlink(target, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// FreeRDP follows links inside a share, so a share is refused when a link
+// anywhere in it leads to home, a folder above it, or /, or through /proc
+// or /dev/fd, and the reason names the link. A link to a folder outside the
+// share is read through too, since the server can browse it: a link there
+// that leads to / is as good as one in the share.
+func TestShareRefusal_LinksInside(t *testing.T) {
+	t.Parallel()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := linkTree(t, map[string]string{"z:": "/"})
+	cases := []struct {
+		name  string
+		links map[string]string
+		link  string
+	}{
+		{"home", map[string]string{"h": home}, "h"},
+		{"root", map[string]string{"z:": "/"}, "z:"},
+		{"above home", map[string]string{"up": filepath.Dir(home)}, "up"},
+		{"deep", map[string]string{"drive_c/": "", "dosdevices/z:": "/"}, filepath.Join("dosdevices", "z:")},
+		{"relative", map[string]string{"r": strings.Repeat("../", 40)}, "r"},
+		{"through a link", map[string]string{"out": outside}, filepath.Join("out", "z:")},
+		{"dev fd", map[string]string{"fd": "/dev/fd/0"}, "fd"},
+	}
+	if _, err := os.Stat("/proc/self"); err == nil {
+		cases = append(cases, struct {
+			name  string
+			links map[string]string
+			link  string
+		}{"proc", map[string]string{"cwd": "/proc/self/cwd"}, "cwd"})
+	}
+	for _, tc := range cases {
+		dir := linkTree(t, tc.links)
+		got := ShareRefusal(dir)
+		if got == "" || !strings.Contains(got, "link "+tc.link+" ") {
+			t.Errorf("%s: %q, want a refusal naming %s", tc.name, got, tc.link)
+		}
+	}
+}
+
+// Links that lead to ordinary folders or files, nowhere, or back into the
+// share are kept, and a loop of them ends.
+func TestShareRefusal_HarmlessLinksKept(t *testing.T) {
+	t.Parallel()
+	plain := linkTree(t, map[string]string{"docs/": ""})
+	if err := os.WriteFile(filepath.Join(plain, "file"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := linkTree(t, map[string]string{
+		"sub/":      "",
+		"docs":      filepath.Join(plain, "docs"),
+		"file":      filepath.Join(plain, "file"),
+		"gone":      "/nonexistent/wicket-target",
+		"self":      ".",
+		"sub/up":    "..",
+		"loop/a":    "b",
+		"loop/b":    "a",
+		"plain":     plain,
+		"plain-too": plain,
+	})
+	if got := ShareRefusal(dir); got != "" {
+		t.Errorf("refused: %q", got)
+	}
+}
+
+// A tree too large to read in full is refused, rather than shared with what
+// lies past the limit unchecked; one within it is read to the end.
+func TestLinkOut_Limit(t *testing.T) {
+	t.Parallel()
+	dir := linkTree(t, map[string]string{"a/": "", "b/": "", "a/c/": ""})
+	homes := homeNames("/nonexistent/wicket-home", false)
+	if got := linkOut(dir, homes, 3); got != "" {
+		t.Errorf("within the limit: %q", got)
+	}
+	if got := linkOut(dir, homes, 2); !strings.Contains(got, "more than 2") {
+		t.Errorf("past the limit: %q", got)
+	}
+}

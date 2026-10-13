@@ -1,11 +1,14 @@
 package rdp
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/gaius-codius/wicket/internal/config"
+	"github.com/gaius-codius/wicket/internal/importer"
 )
 
 func TestBuildPlan_DefaultOrder(t *testing.T) {
@@ -96,5 +99,64 @@ func TestBuildPlan_TrimsSize(t *testing.T) {
 	want := "/size:1920x1080"
 	if !slices.Contains(plan.Args, want) {
 		t.Fatalf("args = %v, want %q", plan.Args, want)
+	}
+}
+
+// A share that holds the whole home folder is refused at connect, as at
+// import, though the config was written by hand: share_home is the way to
+// share home.
+func TestBuildPlan_RefusesHomeShare(t *testing.T) {
+	t.Parallel()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"~", home, filepath.Dir(home), "/"} {
+		p := config.Profile{Name: "n", Host: "h", User: "u", Client: "sdl-freerdp3", Scale: 100, Shares: []config.Share{{Path: path, Name: "x"}}}
+		if _, err := BuildPlan(p); err == nil || !strings.Contains(err.Error(), "share_home") {
+			t.Errorf("%s: err = %v, want a refusal pointing at share_home", path, err)
+		}
+	}
+}
+
+// An import keeps a share whose folder does not exist yet. If it becomes a
+// link to home, to /, or through /proc before the connect, or a link inside
+// it does, the plan refuses it rather than hand it to FreeRDP.
+func TestBuildPlan_RefusesShareLinkedAfterImport(t *testing.T) {
+	t.Parallel()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := []string{home, "/", filepath.Dir(home)}
+	if _, err := os.Stat("/proc/self/root"); err == nil {
+		targets = append(targets, "/proc/self/root")
+	}
+	for _, target := range targets {
+		for _, inside := range []bool{false, true} {
+			share := filepath.Join(t.TempDir(), "wicket-share")
+			imp, _, err := importer.ParseRDP([]byte("full address:s:h\nusername:s:u\ndrivestoredirect:s:"+share+"\n"), "x.rdp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(imp.Shares) != 1 {
+				t.Fatalf("import kept %+v, refused %+v", imp.Shares, imp.Refused)
+			}
+			link := share
+			if inside {
+				if err := os.Mkdir(share, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				link = filepath.Join(share, "z:")
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			p := imp.Profile
+			p.Client = "sdl-freerdp3"
+			if _, err := BuildPlan(p); err == nil || !strings.Contains(err.Error(), "home folder") && !strings.Contains(err.Error(), "/proc") {
+				t.Errorf("link to %s (inside %v): err = %v", target, inside, err)
+			}
+		}
 	}
 }

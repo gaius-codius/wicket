@@ -188,11 +188,41 @@ drive=docs,/tmp/ok;bad,/tmp/a,/tmp/b;C:/windows
 	if !reflect.DeepEqual(p.Shares, want) {
 		t.Fatalf("got %+v want %+v", p.Shares, want)
 	}
+	wantRefused := []config.DroppedShare{
+		{Path: "Documents", Reason: refusedNotPath},
+		{Path: "/tmp/a,/tmp/b", Reason: refusedComma},
+		{Path: "C:/windows", Reason: refusedNotPath},
+	}
+	if !reflect.DeepEqual(p.Refused, wantRefused) {
+		t.Fatalf("refused %+v, want %+v", p.Refused, wantRefused)
+	}
+}
+
+// A share holding the home folder is refused with the reason, once however
+// often the file names it, and a repeat of a kept share goes without a note.
+func TestParseRemmina_RefusedHomeShare(t *testing.T) {
+	t.Parallel()
+	data := []byte("[remmina]\nname=h\nprotocol=RDP\nserver=h\nusername=u\n" +
+		"sharefolder=~\ndrive=home,~;/tmp/ok;ok,/tmp/ok;/proc/self/cwd\n")
+	p, _, err := ParseRemmina(data, "h.remmina")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []config.Share{{Path: "/tmp/ok"}, {Path: "/tmp/ok", Name: "ok"}}; !reflect.DeepEqual(p.Shares, want) {
+		t.Fatalf("shares %+v, want %+v", p.Shares, want)
+	}
+	want := []config.DroppedShare{
+		{Path: "~", Reason: refusedHome},
+		{Path: "/proc/self/cwd", Reason: refusedProc},
+	}
+	if !reflect.DeepEqual(p.Refused, want) {
+		t.Fatalf("refused %+v, want %+v", p.Refused, want)
+	}
 }
 
 func TestParseRemmina_NoUserAndUPN(t *testing.T) {
 	t.Parallel()
-	var ps []config.Profile
+	var ps []config.Import
 	for _, name := range []string{"nouser", "upn"} {
 		p, skip, err := ParseRemminaFile(filepath.Join("testdata", name+".remmina"))
 		if err != nil || skip.Reason != "" {
@@ -248,7 +278,7 @@ func TestParseRemmina_NoClipboardNoPassword(t *testing.T) {
 	if got := fmt.Sprintf("%#v", p); strings.Contains(got, "SECRET") {
 		t.Fatalf("password on the profile: %s", got)
 	}
-	assertImports(t, []config.Profile{p})
+	assertImports(t, []config.Import{p})
 }
 
 // A DOMAIN\user beside a domain key is split like the .rdp importer splits
@@ -269,7 +299,7 @@ func TestParseRemmina_DomainUserBesideDomain(t *testing.T) {
 	if r.User != p.User || r.Domain != p.Domain {
 		t.Fatalf(".rdp made %q %q of the same pair", r.User, r.Domain)
 	}
-	assertImports(t, []config.Profile{p})
+	assertImports(t, []config.Import{p})
 }
 
 // Remmina's home or root folder is not imported as a share either.

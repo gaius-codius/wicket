@@ -88,8 +88,9 @@ func TestParseRDP_Clipboard(t *testing.T) {
 }
 
 // drives.rdp names folders in each form FreeRDP reads, among entries that are
-// not one local folder and are skipped: "*", DynamicDrives, "%", a drive
-// letter, a relative path, an empty entry and a path with a comma.
+// not one local folder and are refused with the reason: "*", DynamicDrives,
+// "%", a drive letter, a relative path and a path with a comma. An empty
+// entry names nothing, so it is passed over without a note.
 func TestParseRDP_Drives(t *testing.T) {
 	t.Parallel()
 	p, skip, err := ParseRDPFile(filepath.Join("testdata", "drives.rdp"))
@@ -111,7 +112,18 @@ func TestParseRDP_Drives(t *testing.T) {
 	if !reflect.DeepEqual(p.Shares, want) {
 		t.Fatalf("shares %+v, want %+v", p.Shares, want)
 	}
-	ps := []config.Profile{p}
+	wantRefused := []config.DroppedShare{
+		{Path: "*", Reason: refusedAllDrive},
+		{Path: "DynamicDrives", Reason: refusedAllDrive},
+		{Path: "%", Reason: refusedHome},
+		{Path: `C:\`, Reason: refusedNotPath},
+		{Path: "relative/dir", Reason: refusedNotPath},
+		{Path: "/tmp/a,b", Reason: refusedComma},
+	}
+	if !reflect.DeepEqual(p.Refused, wantRefused) {
+		t.Fatalf("refused %+v, want %+v", p.Refused, wantRefused)
+	}
+	ps := []config.Import{p}
 	assertImports(t, ps)
 }
 
@@ -139,6 +151,11 @@ func TestParseRDP_NoDrives(t *testing.T) {
 		}
 		if len(p.Shares) != 0 || p.ShareHome {
 			t.Errorf("%q: shares %+v share_home %v", v, p.Shares, p.ShareHome)
+		}
+		// Each is named in the summary, but for the empty entry, which
+		// names nothing.
+		if (len(p.Refused) == 0) != (v == "") {
+			t.Errorf("%q: refused %+v", v, p.Refused)
 		}
 	}
 }
@@ -262,7 +279,7 @@ func TestParseRDP_PortFixture(t *testing.T) {
 // ask for, the second keeping the UPN and dropping the domain it repeats.
 func TestParseRDP_NoUserAndUPN(t *testing.T) {
 	t.Parallel()
-	var ps []config.Profile
+	var ps []config.Import
 	for _, name := range []string{"nouser", "upn"} {
 		p, _, err := ParseRDPFile(filepath.Join("testdata", name+".rdp"))
 		if err != nil {
@@ -295,14 +312,17 @@ func TestParseRDP_DegenerateUPNKeepsDomain(t *testing.T) {
 }
 
 // assertImports checks that every profile survives the import plan rather
-// than being skipped.
-func assertImports(t *testing.T, ps []config.Profile) {
+// than being skipped, and that the plan drops no share of its own: the only
+// ones it reports are those the parser refused.
+func assertImports(t *testing.T, ps []config.Import) {
 	t.Helper()
+	refused := 0
 	for i := range ps {
 		ps[i].Client = config.DefaultClient
+		refused += len(ps[i].Refused)
 	}
 	ok, skipped, dropped := config.PlanProfiles(nil, ps, false)
-	if len(skipped) != 0 || len(ok) != len(ps) || len(dropped) != 0 {
+	if len(skipped) != 0 || len(ok) != len(ps) || len(dropped) != refused {
 		t.Fatalf("imported %+v, skipped %+v, dropped %+v", ok, skipped, dropped)
 	}
 }
@@ -338,5 +358,12 @@ func TestParseRDP_DriveSymlinkToHome(t *testing.T) {
 	want := []config.Share{{Path: "/tmp"}}
 	if !reflect.DeepEqual(p.Shares, want) {
 		t.Fatalf("shares %+v, want %+v", p.Shares, want)
+	}
+	wantRefused := []config.DroppedShare{
+		{Path: link, Reason: refusedHome},
+		{Path: filepath.Dir(home), Reason: refusedHome},
+	}
+	if !reflect.DeepEqual(p.Refused, wantRefused) {
+		t.Fatalf("refused %+v, want %+v", p.Refused, wantRefused)
 	}
 }

@@ -87,9 +87,10 @@ files into wicket profiles. Import only — there is no export or sync.
 A turned-off clipboard and shared folders come across. "All drives" (`*`,
 `DynamicDrives` in an `.rdp` file), Windows drive letters, the home folder
 (`%`, `~`) and any folder that holds it, such as `/home` or `/`, do not; turn
-on `share_home` yourself if you want home shared. A folder a config could
-not hold, such as a path with a control character in it, or a second folder
-shared under the same name, is left out, and the summary names it and why.
+on `share_home` yourself if you want home shared. Nor does a relative path,
+or a folder a config could not hold, such as a path with a comma or a
+control character in it, or a second folder shared under the same name.
+The summary names each folder left out and why.
 Passwords are never imported; you enter them on first connect. A file with
 no username imports with none, and the TUI asks for one when you connect;
 `wicket connect` refuses it until one is set. Use

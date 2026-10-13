@@ -32,7 +32,7 @@ func DefaultRemminaDir() string {
 }
 
 // ParseRemminaDir reads every *.remmina file in dir (non-recursive).
-func ParseRemminaDir(dir string) (ok []config.Profile, skipped []Skip, err error) {
+func ParseRemminaDir(dir string) (ok []config.Import, skipped []Skip, err error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, nil, err
@@ -62,23 +62,23 @@ func ParseRemminaDir(dir string) (ok []config.Profile, skipped []Skip, err error
 }
 
 // ParseRemminaFile reads one Remmina connection file.
-func ParseRemminaFile(path string) (config.Profile, Skip, error) {
+func ParseRemminaFile(path string) (config.Import, Skip, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return config.Profile{}, Skip{}, err
+		return config.Import{}, Skip{}, err
 	}
 	return ParseRemmina(data, filepath.Base(path))
 }
 
 // ParseRemmina maps a Remmina INI document to a wicket profile.
 // Only protocol=RDP is accepted. Password-family keys are never stored.
-func ParseRemmina(data []byte, sourceName string) (config.Profile, Skip, error) {
+func ParseRemmina(data []byte, sourceName string) (config.Import, Skip, error) {
 	vals, err := parseINISection(data, "remmina")
 	if err != nil {
-		return config.Profile{}, Skip{}, err
+		return config.Import{}, Skip{}, err
 	}
 	if len(vals) == 0 {
-		return config.Profile{}, Skip{Name: sourceName, Reason: "no [remmina] section"}, nil
+		return config.Import{}, Skip{Name: sourceName, Reason: "no [remmina] section"}, nil
 	}
 	proto := strings.ToUpper(strings.TrimSpace(vals["protocol"]))
 	name := strings.TrimSpace(vals["name"])
@@ -90,7 +90,7 @@ func ParseRemmina(data []byte, sourceName string) (config.Profile, Skip, error) 
 		if proto != "" {
 			reason = "not RDP (" + proto + ")"
 		}
-		return config.Profile{}, Skip{Name: name, Reason: reason}, nil
+		return config.Import{}, Skip{Name: name, Reason: reason}, nil
 	}
 	p := config.DefaultProfile()
 	p.Name = name
@@ -101,8 +101,9 @@ func ParseRemmina(data []byte, sourceName string) (config.Profile, Skip, error) 
 	if off, ok := keyFileBool(vals["disableclipboard"]); ok {
 		p.Clipboard = !off
 	}
-	p.Shares = remminaShares(vals["sharefolder"], vals["drive"])
-	return p, Skip{}, nil
+	var refused []config.DroppedShare
+	p.Shares, refused = remminaShares(vals["sharefolder"], vals["drive"])
+	return config.Import{Profile: p, Refused: refused}, Skip{}, nil
 }
 
 // keyFileBool reads a Remmina flag, which it writes as 0 or 1; GKeyFile's
@@ -184,65 +185,113 @@ func splitDomainUser(user string) (domain, bare string, ok bool) {
 }
 
 // shareSet collects the shares an import keeps, by the rules both formats
-// share. A path must be absolute or ~/…; an empty, relative or malformed one
-// is skipped. So is a folder holding the whole home folder: a file sent to the
-// user could otherwise hand a server every file they have, and Wicket offers
-// home only as share_home, which an import does not turn on. Whether the
-// folder exists is left to the time it is used.
+// share, and the ones it refuses with the reason, for the summary. A path
+// must be absolute or ~/…, or it is refused; an empty one names nothing and
+// is passed over. A folder holding the whole home folder is refused too: a
+// file sent to the user could otherwise hand a server every file they have,
+// and Wicket offers home only as share_home, which an import does not turn
+// on. Whether the folder exists is left to the time it is used. A repeat of
+// a share already kept or refused goes without a note.
 type shareSet struct {
-	list []config.Share
-	seen map[string]bool
+	list    []config.Share
+	refused []config.DroppedShare
+	seen    map[string]bool
 }
 
 func (s *shareSet) add(name, path string) {
 	path = strings.TrimSpace(path)
 	name = strings.TrimSpace(name)
-	if !isSharePath(path) || strings.ContainsRune(path, ',') || wholeHomeOrRoot(path) {
+	if path == "" {
 		return
 	}
-	key := strings.ToLower(path) + "\x00" + strings.ToLower(name)
-	if s.seen[key] {
+	if reason := shareRefusal(path); reason != "" {
+		s.refuse(path, reason)
 		return
+	}
+	if s.first(strings.ToLower(path) + "\x00" + strings.ToLower(name)) {
+		s.list = append(s.list, config.Share{Path: path, Name: name})
+	}
+}
+
+// refuse notes an entry left out, once per path, since the summary names
+// only the path.
+func (s *shareSet) refuse(path, reason string) {
+	// No kept share's key starts with NUL, so the two never meet.
+	if s.first("\x00" + path) {
+		s.refused = append(s.refused, config.DroppedShare{Path: path, Reason: reason})
+	}
+}
+
+// first reports whether key is new to the set, and marks it seen.
+func (s *shareSet) first(key string) bool {
+	if s.seen[key] {
+		return false
 	}
 	if s.seen == nil {
 		s.seen = map[string]bool{}
 	}
 	s.seen[key] = true
-	s.list = append(s.list, config.Share{Path: path, Name: name})
+	return true
 }
 
-// wholeHomeOrRoot reports whether path holds the whole home folder: the
-// root, home itself, or a folder above it such as /home. A symlink is
-// followed when the path exists, so /proc/self/root counts, and anything
-// under /proc is refused outright, since what its links name changes with
-// the process that reads them. A path that cannot be expanded counts as one,
-// so it is skipped rather than guessed at.
-func wholeHomeOrRoot(path string) bool {
+// Reasons a share is refused, in the summary's "share … dropped: …" line.
+const (
+	refusedNotPath  = "path must be absolute or ~/…"
+	refusedComma    = "path must not contain ','"
+	refusedHome     = "holds the whole home folder; turn on share_home to share it"
+	refusedProc     = "folders under /proc are not shared"
+	refusedAllDrive = "only folders are shared, not all drives"
+)
+
+// shareRefusal is why path cannot be imported as a share, or "".
+func shareRefusal(path string) string {
+	switch {
+	case !isSharePath(path):
+		return refusedNotPath
+	case strings.ContainsRune(path, ','):
+		return refusedComma
+	}
+	return wholeHomeOrRoot(path)
+}
+
+// wholeHomeOrRoot is why path cannot be shared when it holds the whole home
+// folder: the root, home itself, or a folder above it such as /home. A
+// symlink is followed when the path exists, so /proc/self/root counts, and
+// anything under /proc is refused outright, since what its links name
+// changes with the process that reads them. A path that cannot be expanded
+// is refused rather than guessed at. "" means it may be shared.
+func wholeHomeOrRoot(path string) string {
 	expanded, err := config.ExpandPath(path)
 	if err != nil {
-		return true
+		return err.Error()
 	}
 	inProc := func(p string) bool { return p == "/proc" || strings.HasPrefix(p, "/proc/") }
 	// Checked before and after the symlinks are followed: /proc/self/cwd
 	// leads out of /proc, and /dev/fd leads into it.
 	if inProc(expanded) {
-		return true
+		return refusedProc
 	}
 	if resolved, err := filepath.EvalSymlinks(expanded); err == nil {
 		expanded = resolved
 	}
-	if expanded == "/" || inProc(expanded) {
-		return true
+	if inProc(expanded) {
+		return refusedProc
+	}
+	if expanded == "/" {
+		return refusedHome
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return false
+		return ""
 	}
 	home = filepath.Clean(home)
 	if resolved, err := filepath.EvalSymlinks(home); err == nil {
 		home = resolved
 	}
-	return strings.HasPrefix(home+"/", expanded+"/")
+	if strings.HasPrefix(home+"/", expanded+"/") {
+		return refusedHome
+	}
+	return ""
 }
 
 func isSharePath(path string) bool {
@@ -250,8 +299,9 @@ func isSharePath(path string) bool {
 }
 
 // remminaShares maps Remmina's sharefolder (one path) and drive
-// (name,path;name,path or a bare path) into wicket shares.
-func remminaShares(sharefolder, drive string) []config.Share {
+// (name,path;name,path or a bare path) into wicket shares, and the entries
+// it refuses.
+func remminaShares(sharefolder, drive string) ([]config.Share, []config.DroppedShare) {
 	var shares shareSet
 	shares.add("", sharefolder)
 	for _, part := range strings.Split(drive, ";") {
@@ -263,9 +313,10 @@ func remminaShares(sharefolder, drive string) []config.Share {
 		}
 		name, path, ok := strings.Cut(part, ",")
 		if !ok {
-			continue
+			// Neither name,path nor a folder: refused as a path.
+			name, path = "", part
 		}
 		shares.add(name, path)
 	}
-	return shares.list
+	return shares.list, shares.refused
 }

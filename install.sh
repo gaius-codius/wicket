@@ -131,7 +131,11 @@ main() {
 
 	name="wicket_${version}_${goos}_${arch}"
 	tmp=$(mktemp -d)
-	trap 'rm -rf "$tmp"' EXIT INT TERM
+	trap 'rm -rf "$tmp"' EXIT
+	# A signal trap that only cleaned up would let the script carry on
+	# without $tmp. Stop with the status the shell would give.
+	trap 'rm -rf "$tmp"; exit 130' INT
+	trap 'rm -rf "$tmp"; exit 143' TERM
 
 	say "downloading wicket $version ($arch)…"
 	fetch "$RELEASES/download/$tag/$name.tar.gz" "$tmp/$name.tar.gz" ||
@@ -194,7 +198,13 @@ freerdp3() {
 			trap 'kill "$fr_sleep" 2>/dev/null; exit 0' TERM
 			sleep 3 &
 			fr_sleep=$!
-			wait "$fr_sleep" && : >"$fr_out.timeout" && kill -KILL "$fr_pid"
+			# After an interrupt $tmp is gone and the marker cannot be
+			# written; the client must still be killed. printf, not :, as
+			# a redirection error on a special builtin exits sh.
+			wait "$fr_sleep" && {
+				printf '' >"$fr_out.timeout" || :
+				kill -KILL "$fr_pid"
+			}
 		) &
 		fr_watch=$!
 		wait "$fr_pid" || :

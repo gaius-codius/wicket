@@ -199,6 +199,9 @@ type shareSet struct {
 	list    []config.Share
 	refused []config.DroppedShare
 	seen    map[string]bool
+	// reasons is shareRefusal's answer for each cleaned path asked so far,
+	// so a file that lists one large folder many times has it read once.
+	reasons map[string]string
 }
 
 func (s *shareSet) add(name, path string) {
@@ -207,7 +210,7 @@ func (s *shareSet) add(name, path string) {
 	if path == "" {
 		return
 	}
-	if reason := shareRefusal(path); reason != "" {
+	if reason := s.refusal(path); reason != "" {
 		s.refuse(path, reason)
 		return
 	}
@@ -217,6 +220,19 @@ func (s *shareSet) add(name, path string) {
 	if s.first(filepath.Clean(path) + "\x00" + name) {
 		s.list = append(s.list, config.Share{Path: path, Name: name})
 	}
+}
+
+// refusal is shareRefusal(path), asked once per cleaned path.
+func (s *shareSet) refusal(path string) string {
+	key := filepath.Clean(path)
+	if reason, ok := s.reasons[key]; ok {
+		return reason
+	}
+	if s.reasons == nil {
+		s.reasons = map[string]string{}
+	}
+	s.reasons[key] = shareRefusal(path)
+	return s.reasons[key]
 }
 
 // refuse notes an entry left out, once per path, since the summary names

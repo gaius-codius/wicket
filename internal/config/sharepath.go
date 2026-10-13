@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -75,67 +77,109 @@ func ShareRefusal(path string) string {
 // ".." in the name, so a link inside a share hands the server whatever it
 // leads to: Wine's dosdevices/z: is /. The tree is read breadth first, into
 // the folders links lead to as well, since the server can browse those
-// too. A link that leads through /proc or /dev/fd is refused, as is one to
-// a folder that holds home, and so is a folder in the tree that is one, as
-// a bind mount of / can be. A link that leads nowhere is passed over, and
-// so is a folder that cannot be read: the server cannot reach through
-// either. A tree of more than limit entries is refused, since what it holds
-// past them is unknown. A dir that does not exist holds nothing, and
-// connect reports it.
+// too. Each folder is read by its path with the links resolved, so how
+// many links led to it does not change what its own links resolve to. A
+// link that leads through /proc or /dev/fd is refused, as is one to a
+// folder that holds home, and so is a folder in the tree that is one, as a
+// bind mount of / can be. A link that leads nowhere is passed over, and so
+// is a folder that cannot be entered: the server cannot reach through
+// either. A folder that can be entered but not listed is refused, since a
+// server that knows a name inside it can still open it. A tree of more
+// than limit entries is refused, since what it holds past them is unknown.
+// A dir that does not exist holds nothing, and connect reports it. Names
+// are quoted in the reason, as a file name may hold anything.
 func linkOut(dir string, homes []string, limit int) string {
-	root, err := os.Stat(dir)
-	if err != nil || !root.IsDir() {
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
 		return ""
 	}
 	holders := homeHolders(homes)
-	// The folders read so far that a link led to, and the share itself, by
-	// identity, so a link back up the tree is read once.
-	followed := []fs.FileInfo{root}
-	queue := []string{dir}
+	type folder struct{ real, rel string }
+	queue := []folder{{real: resolved}}
+	// Every folder queued, by its resolved path, so a link back up the
+	// tree, or to a folder already read, is read once.
+	queued := map[string]bool{resolved: true}
 	read := 0
 	for len(queue) > 0 {
 		d := queue[0]
 		queue = queue[1:]
-		entries, err := os.ReadDir(d)
+		entries, err := readDir(d.real, limit-read+1)
 		if err != nil {
-			continue
+			// Looking up "." in a folder needs leave to enter it, as
+			// FreeRDP's lookups below it would; Join would clean it away.
+			if _, statErr := os.Stat(d.real + string(filepath.Separator) + "."); statErr != nil {
+				continue
+			}
+			if d.rel == "" {
+				return "cannot be listed to check for links that lead out of it"
+			}
+			return fmt.Sprintf("the folder %q in it cannot be listed to check for links that lead out of it", d.rel)
 		}
 		for _, e := range entries {
-			if read++; read > limit {
-				return fmt.Sprintf("holds more than %d files and folders, too many to check for links that lead out of it", limit)
+			read++
+			if read > limit {
+				return fmt.Sprintf("holds more than %d files and folders, with those its links lead to, too many to check for links that lead out of it", limit)
 			}
-			p := filepath.Join(d, e.Name())
-			rel, _ := filepath.Rel(dir, p)
+			p := filepath.Join(d.real, e.Name())
+			rel := filepath.Join(d.rel, e.Name())
 			switch {
 			case e.Type()&fs.ModeSymlink != 0:
 				if viaProc(p) {
-					return fmt.Sprintf("the link %s in it leads through /proc or /dev/fd, and FreeRDP follows links", rel)
+					return fmt.Sprintf("the link %q in it leads through /proc or /dev/fd, and FreeRDP follows links", rel)
 				}
-				info, err := os.Stat(p)
-				if err != nil || !info.IsDir() {
+				target, err := filepath.EvalSymlinks(p)
+				if err != nil {
 					continue
 				}
-				if holdsHome(p, homes) {
-					return fmt.Sprintf("the link %s in it leads to a folder that holds the whole home folder, and FreeRDP follows links", rel)
-				}
-				if slices.ContainsFunc(followed, func(f fs.FileInfo) bool { return os.SameFile(f, info) }) {
+				if info, err := os.Stat(target); err != nil || !info.IsDir() {
 					continue
 				}
-				followed = append(followed, info)
-				queue = append(queue, p)
+				if holdsHome(target, homes) {
+					return fmt.Sprintf("the link %q in it leads to a folder that holds the whole home folder, and FreeRDP follows links", rel)
+				}
+				if !queued[target] {
+					queued[target] = true
+					queue = append(queue, folder{real: target, rel: rel})
+				}
 			case e.IsDir():
 				info, err := e.Info()
 				if err != nil {
 					continue
 				}
 				if slices.ContainsFunc(holders, func(h fs.FileInfo) bool { return os.SameFile(h, info) }) {
-					return fmt.Sprintf("the folder %s in it holds the whole home folder", rel)
+					return fmt.Sprintf("the folder %q in it holds the whole home folder", rel)
 				}
-				queue = append(queue, p)
+				if !queued[p] {
+					queued[p] = true
+					queue = append(queue, folder{real: p, rel: rel})
+				}
 			}
 		}
 	}
 	return ""
+}
+
+// readDir is the entries of the folder at dir, read a batch at a time and
+// no more than n of them, so a folder of millions is not read whole to be
+// refused.
+func readDir(dir string, n int) ([]fs.DirEntry, error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	var out []fs.DirEntry
+	for len(out) < n {
+		batch, err := f.ReadDir(min(1024, n-len(out)))
+		out = append(out, batch...)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // homeHolders is home under each of its names, and every folder above it,

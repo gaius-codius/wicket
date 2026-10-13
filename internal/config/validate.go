@@ -432,7 +432,7 @@ func validateSharesExist(p Profile) error {
 			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %s is not a directory", i+1, expanded)}
 		}
 		if reason := ShareRefusal(s.Path); reason != "" {
-			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %s %s", i+1, expanded, reason)}
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %s: %s", i+1, expanded, reason)}
 		}
 	}
 	return nil

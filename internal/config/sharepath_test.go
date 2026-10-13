@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -240,7 +241,7 @@ func TestShareRefusal_LinksInside(t *testing.T) {
 	for _, tc := range cases {
 		dir := linkTree(t, tc.links)
 		got := ShareRefusal(dir)
-		if got == "" || !strings.Contains(got, "link "+tc.link+" ") {
+		if got == "" || !strings.Contains(got, fmt.Sprintf("link %q ", tc.link)) {
 			t.Errorf("%s: %q, want a refusal naming %s", tc.name, got, tc.link)
 		}
 	}
@@ -282,5 +283,52 @@ func TestLinkOut_Limit(t *testing.T) {
 	}
 	if got := linkOut(dir, homes, 2); !strings.Contains(got, "more than 2") {
 		t.Errorf("past the limit: %q", got)
+	}
+	// A folder larger than one batch is read in several.
+	big := t.TempDir()
+	for i := range 1500 {
+		if err := os.WriteFile(filepath.Join(big, fmt.Sprint(i)), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := linkOut(big, homes, 1500); got != "" {
+		t.Errorf("1500 entries within the limit: %q", got)
+	}
+	if got := linkOut(big, homes, 1499); !strings.Contains(got, "more than 1499") {
+		t.Errorf("1500 entries past the limit: %q", got)
+	}
+}
+
+// A folder the server can enter but Wicket cannot list could hold a link
+// whose name the server knows, so the share is refused. One that cannot be
+// entered at all is passed over, since the server cannot reach through it.
+func TestShareRefusal_UnlistableFolder(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root lists every folder")
+	}
+	closed := filepath.Join(linkTree(t, map[string]string{"closed/z:": "/"}), "closed")
+	hidden := filepath.Join(linkTree(t, map[string]string{"hidden/z:": "/"}), "hidden")
+	for dir, mode := range map[string]os.FileMode{closed: 0, hidden: 0o100} {
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	}
+	if got := ShareRefusal(filepath.Dir(closed)); got != "" {
+		t.Errorf("a folder that cannot be entered: %q", got)
+	}
+	if got := ShareRefusal(filepath.Dir(hidden)); !strings.Contains(got, `folder "hidden" in it cannot be listed`) {
+		t.Errorf("a folder that can be entered but not listed: %q", got)
+	}
+}
+
+// A link's name goes into the reason quoted, so a name holding a terminal
+// escape is printed as text.
+func TestShareRefusal_QuotesNames(t *testing.T) {
+	t.Parallel()
+	dir := linkTree(t, map[string]string{"\x1b]52;c;SGk=\a": "/"})
+	if got := ShareRefusal(dir); got == "" || strings.ContainsAny(got, "\x1b\a") {
+		t.Errorf("%q", got)
 	}
 }

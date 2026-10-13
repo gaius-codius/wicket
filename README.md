@@ -173,8 +173,9 @@ in a config written by hand; use `share_home` to share home. FreeRDP follows
 symlinks inside a shared folder, so a folder with a link anywhere in it that
 leads to one of those is refused too, such as a Wine prefix's `dosdevices`,
 whose `z:` is `/`. Wicket reads at most 100,000 files and folders of a share
-to look for links, and refuses a larger one. A link made while a session is
-running is not seen until the next connect.
+to look for links, and refuses a larger one, or one with a folder it may
+enter but not list. A link made after the check, while Wicket asks for a
+password or during the session, is not seen until the next connect.
 
 Keys left out keep their default, and a save only writes the ones changed.
 

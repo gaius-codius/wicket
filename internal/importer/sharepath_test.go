@@ -2,6 +2,7 @@ package importer
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -36,6 +37,26 @@ func TestShares_HomeAliasesOnDarwin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkHomeAliases(t, home)
+}
+
+// TestShares_HomeAliasesOnDarwin's sandboxed home is under /var/folders;
+// this is the account's own, under /Users, the case #100 names. Only stat
+// is used on it. Not parallel: it sets HOME.
+func TestShares_AccountHomeAliasesOnDarwin(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS file systems only")
+	}
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" {
+		t.Skipf("no account home: %v", err)
+	}
+	t.Setenv("HOME", u.HomeDir)
+	checkHomeAliases(t, u.HomeDir)
+}
+
+func checkHomeAliases(t *testing.T, home string) {
+	t.Helper()
 	resolved, err := filepath.EvalSymlinks(home)
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +68,7 @@ func TestShares_HomeAliasesOnDarwin(t *testing.T) {
 		t.Logf("volume is case-sensitive; case variants not checked: %v", err)
 	}
 	if _, err := os.Stat(dataVolume + resolved); err == nil {
-		aliases = append(aliases, dataVolume+resolved, dataVolume+filepath.Dir(resolved))
+		aliases = append(aliases, dataVolume+resolved, dataVolume+filepath.Dir(resolved), dataVolume)
 	} else {
 		t.Logf("no data volume alias of %s: %v", resolved, err)
 	}
@@ -60,12 +81,34 @@ func TestShares_HomeAliasesOnDarwin(t *testing.T) {
 			t.Errorf("%s: shares %+v, refused %+v", a, shares, refused)
 		}
 	}
-	// /dev/fd is a folder of its own there, and found by any spelling.
-	if _, err := os.Stat("/DEV/FD"); err == nil {
-		shares, refused := rdpRefused(t, "/DEV/FD/0")
-		if len(shares) != 0 || !reflect.DeepEqual(refused, []config.DroppedShare{{Path: "/DEV/FD/0", Reason: refusedProc}}) {
-			t.Errorf("/DEV/FD/0: shares %+v, refused %+v", shares, refused)
+}
+
+// A folder that holds home at the place / does is refused, as / is: in a
+// toolbox /run/host is the host's root. A tree of links stands in for one
+// here, and so does a folder holding home where home's parent does.
+func TestShares_RefusesMirrorOfRoot(t *testing.T) {
+	t.Parallel()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mirror := t.TempDir()
+	at := filepath.Join(mirror, home)
+	if err := os.MkdirAll(filepath.Dir(at), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(home, at); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{mirror, filepath.Dir(at)} {
+		shares, refused := rdpRefused(t, p)
+		if len(shares) != 0 || !reflect.DeepEqual(refused, []config.DroppedShare{{Path: p, Reason: refusedHome}}) {
+			t.Errorf("%s: shares %+v, refused %+v", p, shares, refused)
 		}
+	}
+	// What holds no home at that place is kept.
+	if shares, _ := rdpRefused(t, filepath.Join(mirror, "tmp-other")); len(shares) != 1 {
+		t.Errorf("unrelated folder: shares %+v", shares)
 	}
 }
 
@@ -159,12 +202,15 @@ func TestShares_RefusedWithoutHome(t *testing.T) {
 }
 
 // One folder spelled with and without a trailing slash is one share, in
-// either format.
+// either format, and one refusal.
 func TestShares_TrailingSlashIsOneShare(t *testing.T) {
 	t.Parallel()
 	want := []config.Share{{Path: "/srv/wicket-dup"}}
 	if shares, _ := rdpRefused(t, "/srv/wicket-dup;/srv/wicket-dup/"); !reflect.DeepEqual(shares, want) {
 		t.Errorf("rdp: shares %+v, want %+v", shares, want)
+	}
+	if _, refused := rdpRefused(t, "/proc;/proc/"); !reflect.DeepEqual(refused, []config.DroppedShare{{Path: "/proc", Reason: refusedProc}}) {
+		t.Errorf("rdp: refused %+v", refused)
 	}
 	doc := "[remmina]\nname=r\nprotocol=RDP\nserver=h\nusername=u\nsharefolder=/srv/wicket-dup\ndrive=/srv/wicket-dup/\n"
 	p, _, err := ParseRemmina([]byte(doc), "r.remmina")

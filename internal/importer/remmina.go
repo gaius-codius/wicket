@@ -220,7 +220,7 @@ func (s *shareSet) add(name, path string) {
 // only the path.
 func (s *shareSet) refuse(path, reason string) {
 	// No kept share's key starts with NUL, so the two never meet.
-	if s.first("\x00" + path) {
+	if s.first("\x00" + filepath.Clean(path)) {
 		s.refused = append(s.refused, config.DroppedShare{Path: path, Reason: reason})
 	}
 }
@@ -242,9 +242,9 @@ const (
 	refusedNotPath  = "path must be absolute or ~/…"
 	refusedComma    = "path must not contain ','"
 	refusedHome     = "holds the whole home folder; turn on share_home to share it"
-	refusedProc     = "folders under /proc are not shared"
+	refusedProc     = "folders under /proc or /dev/fd, or reached through them, are not shared"
 	refusedAllDrive = "only folders are shared, not all drives"
-	refusedNoHome   = "the home folder is unknown (HOME is not set), so no folder is shared"
+	refusedNoHome   = "the home folder is unknown (HOME is unset or not absolute), so no folder is shared"
 )
 
 // shareRefusal is why path cannot be imported as a share, or "".

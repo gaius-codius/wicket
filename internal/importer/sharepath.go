@@ -67,16 +67,23 @@ func homeNames(home string, darwin bool) []string {
 }
 
 // holdsHome reports whether path is one of homes or a folder above one,
-// by name, or as the same folder when both exist.
+// by name, or as the same folder when both exist. A folder that holds a
+// home where a folder above it does counts too: in a toolbox /run/host is
+// the host's /, and /run/host/home/alice is home.
 func holdsHome(path string, homes []string) bool {
 	info, statErr := os.Stat(path) //nolint:gosec // G703: the path is checked, not opened; finding what it names is the point
 	for _, home := range homes {
+		homeInfo, homeErr := os.Stat(home)
 		for dir := home; ; dir = filepath.Dir(dir) {
 			if dir == path {
 				return true
 			}
 			if statErr == nil {
 				if d, err := os.Stat(dir); err == nil && os.SameFile(info, d) {
+					return true
+				}
+				below := filepath.Join(path, strings.TrimPrefix(home, dir))
+				if h, err := os.Stat(below); err == nil && homeErr == nil && os.SameFile(h, homeInfo) { //nolint:gosec // G703: the path is checked, not opened; finding what it names is the point
 					return true
 				}
 			}

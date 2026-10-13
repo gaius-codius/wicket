@@ -90,11 +90,13 @@ stop() {
 		st_tree=$(tree_pids "$child")
 		# shellcheck disable=SC2086 # a list of pids
 		kill -TERM $st_tree 2>/dev/null || :
+		# Off the installer's output, or a sleep this leaves behind (with
+		# no pgrep) would hold a pipe the installer writes to open.
 		(
 			sleep 2
 			# shellcheck disable=SC2086
 			kill -KILL $st_tree 2>/dev/null
-		) &
+		) >/dev/null 2>&1 &
 		st_watch=$!
 		wait "$child" 2>/dev/null || :
 		st_n=0
@@ -152,9 +154,11 @@ kill_tree() {
 	kill "-$1" "$2" 2>/dev/null || :
 }
 
+# curl's -q, which has to come first, skips ~/.curlrc, where "insecure"
+# would turn off the certificate check.
 fetch() { # url dest
 	if command -v curl >/dev/null 2>&1; then
-		run curl -fsSL --proto-redir '=https' -o "$2" "$1"
+		run curl -q -fsSL --proto-redir '=https' -o "$2" "$1"
 	elif command -v wget >/dev/null 2>&1; then
 		wget_https "$1" "$2"
 	else
@@ -171,33 +175,42 @@ fetch() { # url dest
 # with no status line means this wget did not print its headers, and an
 # unchecked redirect is not let through.
 #
-# Busybox runs openssl s_client for https, which checks the certificate
-# since 1.33; before that it did not ask openssl to, and said nothing.
-# Without openssl on PATH, or built without that helper, it falls back to TLS
-# of its own that checks nothing, and says so. Either way anyone on the path
-# could serve a tarball with a SHA256SUMS to match, so both are refused, the
-# second failed download or not. Busybox has no --version; it prints its
-# usage, which names its version, instead.
+# Only a wget known to check certificates is used, and --check-certificate
+# overrides a wgetrc that turns the check off. Busybox runs openssl
+# s_client for https, which enforces the check since 1.33 and before that
+# did not, saying nothing. Without openssl on PATH, or built without that
+# helper, it falls back to TLS of its own that checks nothing, and says so.
+# With http_proxy set it sends an https URL to the proxy as a plain GET, with
+# no TLS at all. Any of these would let anyone on the path serve a tarball
+# with a SHA256SUMS to match, so all are refused, a failed download or not.
+# Busybox has no --version; it prints its usage, which names its version.
 wget_https() {
 	: >"$tmp/wget-version"
 	run wget --version >"$tmp/wget-version" 2>&1 || :
-	if grep -q 'BusyBox' "$tmp/wget-version"; then
+	if grep -q 'Wget2' "$tmp/wget-version"; then
+		rm -f "$2"
+		run wget -q --https-only --check-certificate -O "$2" "$1" || return
+		[ -e "$2" ] ||
+			die "wget2 wrote nothing for $1; it skips a redirect away from https"
+		return
+	elif grep -q 'BusyBox' "$tmp/wget-version"; then
 		bb_version=$(sed -n 's/.*BusyBox v\([0-9]*\.[0-9]*\).*/\1/p' "$tmp/wget-version" | head -n 1)
 		case "$bb_version" in
 		"" | 0.* | 1.[0-9] | 1.[12][0-9] | 1.3[0-2])
 			die "busybox wget ${bb_version:-of unknown version} does not check TLS certificates; install curl, or busybox 1.33 or newer with openssl"
 			;;
 		esac
-	fi
-	if grep -q 'Wget2' "$tmp/wget-version"; then
-		rm -f "$2"
-		run wget -q --https-only -O "$2" "$1" || return
-		[ -e "$2" ] ||
-			die "wget2 wrote nothing for $1; it skips a redirect away from https"
-		return
+		[ -z "${http_proxy:-}" ] ||
+			die "busybox wget sends https through http_proxy unencrypted; install curl, or unset http_proxy"
+		wg_check=""
+	elif grep -q 'GNU Wget 1\.' "$tmp/wget-version"; then
+		wg_check=--check-certificate
+	else
+		die "this wget is not GNU Wget, Wget2 or busybox, so whether it checks TLS certificates is unknown; install curl"
 	fi
 	wg_status=0
-	run wget -S -O "$2" "$1" 2>"$tmp/wget.log" || wg_status=$?
+	# shellcheck disable=SC2086 # no option for busybox
+	run wget -S $wg_check -O "$2" "$1" 2>"$tmp/wget.log" || wg_status=$?
 	if grep -q 'TLS certificate validation not implemented' "$tmp/wget.log"; then
 		die "this wget (busybox without openssl) does not check TLS certificates; install curl, or openssl for busybox to use"
 	fi
@@ -218,7 +231,7 @@ wget_https() {
 latest_tag() {
 	if command -v curl >/dev/null 2>&1; then
 		# /releases/latest redirects to /releases/tag/<tag>.
-		run curl -fsSLI --proto-redir '=https' -o /dev/null -w '%{url_effective}' \
+		run curl -q -fsSLI --proto-redir '=https' -o /dev/null -w '%{url_effective}' \
 			"$RELEASES/latest" >"$tmp/latest" || die "could not reach $RELEASES"
 		url=$(cat "$tmp/latest")
 		# All of it: a tag can hold a /, and its last part alone could
@@ -468,7 +481,8 @@ freerdp3_probe() {
 		# can be lost.
 		fr_sleep="" fr_held=""
 		trap 'fr_held=1; [ -z "$fr_sleep" ] || { kill -KILL "$fr_sleep"; exit 0; }' TERM
-		sleep 3 &
+		# Off the installer's output, as in stop.
+		sleep 3 >/dev/null 2>&1 &
 		fr_sleep=$!
 		[ -z "$fr_held" ] || { kill -KILL "$fr_sleep"; exit 0; }
 		# After an interrupt $tmp is gone and the marker cannot be

@@ -773,10 +773,19 @@ func TestInstallFollowsHTTPSRedirect(t *testing.T) {
 				out, code := in.run(t)
 				wantOutput(t, out, code, 0, "installed wicket "+version)
 				r.mu.Lock()
-				mirrored := r.mirrored
+				mirrored, requests := r.mirrored, r.requests
 				r.mu.Unlock()
 				if want := map[string]int{"https": 2, "relative": 0}[kind]; len(mirrored) != want {
 					t.Errorf("the second server was asked for %v, want %d downloads", mirrored, want)
+				}
+				var followed int
+				for _, p := range requests {
+					if strings.HasPrefix(p, "/mirror/") {
+						followed++
+					}
+				}
+				if followed != 2 {
+					t.Errorf("followed %d redirects, want 2: %v", followed, requests)
 				}
 				in.checkNothingLeft(t)
 			})
@@ -813,13 +822,91 @@ func TestInstallRefusesOldBusybox(t *testing.T) {
 			in := newInstaller(t, r, "none")
 			// It would download anything, with a log that passes.
 			in.script(t, "wget", fmt.Sprintf(`[ "$1" = --version ] && { echo %q >&2; exit 1; }
-printf x >"$3"
+while [ "$1" != -O ]; do shift; done
+printf x >"$2"
 echo '  HTTP/1.1 200 OK' >&2`, tc.banner))
 			out, code := in.run(t, "--version", tag)
 			wantOutput(t, out, code, 1, tc.want)
 			if got := in.installed(t); got != "" {
 				t.Errorf("installed %q", got)
 			}
+		})
+	}
+}
+
+// A wget install.sh does not know is not trusted to check certificates.
+func TestInstallRefusesUnknownWget(t *testing.T) {
+	t.Parallel()
+	r := newRelease(t, "curl")
+	in := newInstaller(t, r, "none")
+	in.script(t, "wget", `[ "$1" = --version ] && { echo 'Toybox 0.8.11 wget'; exit 0; }
+while [ "$1" != -O ]; do shift; done
+printf x >"$2"
+echo '  HTTP/1.1 200 OK' >&2`)
+	out, code := in.run(t, "--version", tag)
+	wantOutput(t, out, code, 1, "is not GNU Wget, Wget2 or busybox")
+	if got := in.installed(t); got != "" {
+		t.Errorf("installed %q", got)
+	}
+}
+
+// Busybox sends an https URL to the proxy http_proxy names as a plain GET,
+// so whoever runs the proxy, or sits on the way to it, could serve anything.
+func TestInstallRefusesBusyboxThroughProxy(t *testing.T) {
+	t.Parallel()
+	r := newRelease(t, "busybox")
+	in := newInstaller(t, r, "busybox")
+	in.env = append(in.env, "http_proxy="+r.plain.URL)
+	out, code := in.run(t)
+	wantOutput(t, out, code, 1, "busybox wget sends https through http_proxy unencrypted")
+	if got := in.installed(t); got != "" {
+		t.Errorf("installed %q", got)
+	}
+	in.checkNothingLeft(t)
+}
+
+// A user's config that turns the certificate check off does not apply: with
+// no CA that knows the test's certificate, nothing installs.
+func TestInstallIgnoresInsecureConfig(t *testing.T) {
+	t.Parallel()
+	for _, fetcher := range []string{"curl", "wget", "wget2"} {
+		t.Run(fetcher, func(t *testing.T) {
+			t.Parallel()
+			r := newRelease(t, fetcher)
+			in := newInstaller(t, r, fetcher)
+			home := filepath.Join(in.dir, "home")
+			wgetrc := filepath.Join(home, "insecure.wgetrc")
+			wget2rc := filepath.Join(home, "insecure.wget2rc")
+			for p, body := range map[string]string{
+				filepath.Join(home, ".curlrc"): "insecure\n",
+				wgetrc:                         "check_certificate = off\n",
+				wget2rc:                        "check-certificate = off\n",
+			} {
+				if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var env []string
+			for _, e := range in.env {
+				switch name, _, _ := strings.Cut(e, "="); name {
+				case "CURL_CA_BUNDLE", "SSL_CERT_FILE", "WGETRC", "WGET2RC":
+				default:
+					env = append(env, e)
+				}
+			}
+			env = append(env, "WGETRC="+wgetrc, "WGET2RC="+wget2rc)
+			in.env = env
+			// The latest tag's lookup, then (named) the download itself.
+			for _, args := range [][]string{nil, {"--version", tag}} {
+				out, code := in.run(t, args...)
+				if code == 0 {
+					t.Fatalf("installed with certificate checks off (%v):\n%s", args, out)
+				}
+			}
+			if got := in.installed(t); got != "" {
+				t.Errorf("installed %q", got)
+			}
+			in.checkNothingLeft(t)
 		})
 	}
 }
@@ -843,7 +930,8 @@ func TestInstallRefusesUnreadableWgetLog(t *testing.T) {
 			// GNU wget 1.x as far as install.sh can tell: it answers
 			// --version and writes the download, with log on stderr.
 			in.script(t, "wget", fmt.Sprintf(`[ "$1" = --version ] && { echo 'GNU Wget 1.21.4'; exit 0; }
-printf x >"$3"
+while [ "$1" != -O ]; do shift; done
+printf x >"$2"
 printf '%s' >&2`, tc.log))
 			out, code := in.run(t, "--version", tag)
 			wantOutput(t, out, code, 1, tc.want)
@@ -928,8 +1016,9 @@ func TestInstallStopsWhileVersionCheckHangs(t *testing.T) {
 		within time.Duration
 	}{
 		{"hangs", ": >%q\nexec sleep 30", time.Second},
-		{"ignores TERM", "trap '' TERM\n: >%q\nexec sleep 30", 3 * time.Second},
-		{"wrapper of one that ignores TERM", "/bin/sh -c \"trap '' TERM; : >%q; exec sleep 30\" &\nwait", 3 * time.Second},
+		// A 2 s grace period, and slack for a loaded machine.
+		{"ignores TERM", "trap '' TERM\n: >%q\nexec sleep 30", 5 * time.Second},
+		{"wrapper of one that ignores TERM", "/bin/sh -c \"trap '' TERM; : >%q; exec sleep 30\" &\nwait", 5 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

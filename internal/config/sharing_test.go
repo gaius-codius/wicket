@@ -206,42 +206,57 @@ user = "u"
 	}
 }
 
+// Each entry is refused with its own reason: these are the notes an import
+// summary prints, and a row that only checked for some refusal would pass
+// with the check it names gone. The folders exist, so the refusal is not
+// that one is missing.
 func TestShares_RejectsBadEntries(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
+	comma := filepath.Join(dir, "a,b")
+	if err := os.Mkdir(comma, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	withShare := func(s Share) func() Profile {
+		return func() Profile {
+			p := validProfile()
+			p.Shares = []Share{s}
+			return p
+		}
+	}
 	cases := []struct {
 		name string
 		p    func() Profile
+		msg  string
 	}{
-		{"relative", func() Profile {
-			p := validProfile()
-			p.Shares = []Share{{Path: "relative/path"}}
-			return p
-		}},
-		{"missing dir", func() Profile {
-			p := validProfile()
-			p.Shares = []Share{{Path: filepath.Join(dir, "nope")}}
-			return p
-		}},
+		{"empty path", withShare(Share{Path: " "}), "path must not be empty"},
+		{"comma in path", withShare(Share{Path: comma}), "path must not contain ','"},
+		{"control in path", withShare(Share{Path: dir + "\x01"}), "path must not contain control characters"},
+		{"slash in name", withShare(Share{Path: dir, Name: "a/b"}), "name must not contain ',' or '/'"},
+		{"comma in name", withShare(Share{Path: dir, Name: "a,b"}), "name must not contain ',' or '/'"},
+		{"control in name", withShare(Share{Path: dir, Name: "a\x01"}), "name must not contain control characters"},
+		{"name out of set", withShare(Share{Path: dir, Name: "a b"}), "name must be letters, digits, '_' or '-'"},
+		{"relative", withShare(Share{Path: "relative/path"}), "path must be absolute or ~/…"},
+		{"missing dir", withShare(Share{Path: filepath.Join(dir, "nope")}), "is not a directory"},
 		{"duplicate name", func() Profile {
 			p := validProfile()
 			p.Shares = []Share{{Path: dir, Name: "a"}, {Path: dir, Name: "a"}}
 			return p
-		}},
+		}, `duplicate share name "a"`},
 		{"home clash", func() Profile {
 			p := validProfile()
 			p.ShareHome = true
 			p.Shares = []Share{{Path: dir, Name: "home"}}
 			return p
-		}},
+		}, `name "home" clashes with share_home`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			err := ValidateProfileInUse(tc.p())
 			var fe *FieldError
-			if !errors.As(err, &fe) || fe.Field != "shares" {
-				t.Fatalf("err %v", err)
+			if !errors.As(err, &fe) || fe.Field != "shares" || !strings.Contains(fe.Msg, tc.msg) {
+				t.Fatalf("err %v, want %q", err, tc.msg)
 			}
 		})
 	}

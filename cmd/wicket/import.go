@@ -96,13 +96,21 @@ func parseImportFlags(args []string) (dryRun, rename bool, rest []string, err er
 	return dryRun, rename, rest, nil
 }
 
+// lookPath and freerdpMajor find the installed clients and ask them their
+// version, to pick the imported profiles' client. Tests replace them, so
+// that no test runs whatever FreeRDP the machine has.
+var (
+	lookPath     = exec.LookPath
+	freerdpMajor = rdp.FreeRDPMajor
+)
+
 func doImport(stdout, stderr io.Writer, dryRun, rename bool, parse func() ([]config.Import, []importer.Skip, error)) int {
 	profiles, parseSkipped, err := parse()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	client := rdp.PreferredClient(rdp.InstalledClients(exec.LookPath, rdp.FreeRDPMajor))
+	client := rdp.PreferredClient(rdp.InstalledClients(lookPath, freerdpMajor))
 	for i := range profiles {
 		profiles[i].Client = client
 	}

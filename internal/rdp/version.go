@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -42,7 +44,7 @@ func ParseFreeRDPMajor(out []byte) (major int, ok bool) {
 }
 
 // FreeRDPMajor runs the client at path with --version and returns the major
-// version it reports. ok is false when it cannot be run, does not finish
+// version it reports. ok is false when it cannot be run, does not exit
 // within versionTimeout, or prints no version line. Its exit status is not
 // read: a build may report its version and still exit non-zero.
 func FreeRDPMajor(path string) (major int, ok bool) {
@@ -55,11 +57,44 @@ func probeMajor(path string, timeout time.Duration) (int, bool) {
 	cmd := exec.CommandContext(ctx, path, "--version")
 	out := &cappedBuffer{limit: versionOutputLimit}
 	cmd.Stdout, cmd.Stderr = out, out
-	// A child the client leaves behind could hold the pipe open after the
-	// client is killed; WaitDelay stops Run waiting on it.
+	// In a group of its own, the client goes together with whatever it
+	// starts: a wrapper script that runs FreeRDP without exec, or a helper.
+	// Killing only the client left those running.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var (
+		mu     sync.Mutex
+		reaped bool
+	)
+	stop := func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		// Once the client is collected the group id may be reused, so the
+		// group is signalled only before then.
+		if !reaped {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
+	cmd.Cancel = stop
+	// A child that left the group could still hold the output open after
+	// the client exits; WaitDelay stops Wait waiting on it.
 	cmd.WaitDelay = time.Second
-	_ = cmd.Run()
-	if ctx.Err() != nil {
+	if err := cmd.Start(); err != nil {
+		return 0, false
+	}
+	if waitExited(cmd.Process.Pid) {
+		// Anything left in the group is a helper; it goes with the client,
+		// while the group id is still ours, and stops holding the output.
+		_ = stop()
+		mu.Lock()
+		reaped = true
+		mu.Unlock()
+	}
+	_ = cmd.Wait()
+	// A client ended by SIGKILL is taken to be the one the deadline stopped.
+	// A client that exited on its own is read, even near the deadline, and
+	// even if a helper it left behind kept the output open after it.
+	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL {
 		return 0, false
 	}
 	return ParseFreeRDPMajor(out.buf.Bytes())

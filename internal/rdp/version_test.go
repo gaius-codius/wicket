@@ -3,6 +3,9 @@ package rdp
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -90,4 +93,60 @@ func TestFreeRDPMajor_CapsOutput(t *testing.T) {
 	if major, ok := FreeRDPMajor(path); major != 3 || !ok {
 		t.Fatalf("%d %v", major, ok)
 	}
+}
+
+// groupGone waits for the process group pgid to empty. Killed helpers are
+// collected by whoever adopts them, so the group can take a moment to go.
+func groupGone(t *testing.T, pgid int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for syscall.Kill(-pgid, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("process group %d still has members", pgid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// readPID reads the pid a fake client wrote to path.
+func readPID(t *testing.T, path string) int {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pid
+}
+
+// A wrapper that runs the client without exec, and hangs, is stopped at the
+// deadline together with everything it started.
+func TestFreeRDPMajor_TimeoutStopsTheGroup(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	path := fakeClient(t, `echo $$ > `+pidFile+`
+echo "This is FreeRDP version 3.31.1 (63b948ca5c)"
+sh -c 'sleep 30' &
+sleep 30`)
+	if _, ok := probeMajor(path, time.Second); ok {
+		t.Fatal("a client that timed out qualified")
+	}
+	groupGone(t, readPID(t, pidFile))
+}
+
+// A client that answers and exits on its own is read, though a helper it
+// leaves behind holds the output open past the deadline; the helper is
+// stopped.
+func TestFreeRDPMajor_HelperHoldsOutput(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	path := fakeClient(t, `echo $$ > `+pidFile+`
+echo "This is FreeRDP version 3.31.1 (63b948ca5c)"
+sleep 30 &
+exit 0`)
+	if major, ok := probeMajor(path, 300*time.Millisecond); major != 3 || !ok {
+		t.Fatalf("%d %v, want 3 true", major, ok)
+	}
+	groupGone(t, readPID(t, pidFile))
 }

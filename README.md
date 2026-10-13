@@ -36,11 +36,11 @@ This installs the latest release for amd64 or arm64 into `~/.local/bin` (set
 ```
 
 Releases after v0.3.1 carry a signed build provenance attestation. When the
-[GitHub CLI](https://cli.github.com/) is installed and logged in, the installer
-checks it with `gh attestation verify` and refuses a download the release
-workflow did not build, or one it could not check because GitHub was
-unreachable. When `gh` is missing, older than 2.49 or logged out, it says the
-check was skipped and installs anyway. v0.1.0 to v0.3.1 predate attestations;
+[GitHub CLI](https://cli.github.com/) 2.68 or newer is installed, logged in or
+not, the installer checks it with `gh attestation verify` and refuses a
+download the release workflow did not build, or one it could not check because
+GitHub was unreachable or rate limited. When `gh` is missing or older, it says
+the check was skipped and installs anyway. v0.1.0 to v0.3.1 predate attestations;
 the installer checks those against digests it carries itself. To check a
 download yourself:
 

@@ -44,7 +44,7 @@ Usage: install.sh [--version vX.Y.Z] [--uninstall]
 
 Installs the latest wicket release into ~/.local/bin (override with
 WICKET_BINDIR), or updates an existing install. Checks the download against
-the release's SHA256SUMS and, when gh is installed and logged in, checks that
+the release's SHA256SUMS and, when gh 2.68 or newer is installed, checks that
 the release workflow built it (releases up to v0.3.1: against digests kept in
 this script).
 
@@ -161,9 +161,8 @@ sha256() {
 # from $tag. SHA256SUMS comes from the same place as the tarball, so it
 # shows the download is whole, not who made it. A release from before the
 # workflow attested its builds is checked against UNATTESTED_SUMS. Any other
-# is checked with gh: when gh cannot check (not installed, too old, not
-# logged in) this says so and the install carries on; a check that runs and
-# fails stops it. A release that is meant to be attested and is not fails
+# is checked with gh: when gh cannot check (not installed, too old) this
+# says so and the install carries on; a check that runs and fails stops it. A release that is meant to be attested and is not fails
 # like a forged one, as the two look the same.
 provenance() {
 	case " $UNATTESTED " in
@@ -180,27 +179,29 @@ provenance() {
 		say "note: provenance not checked; install gh to check it"
 		return
 	fi
-	# gh has had attestation verify, with --cert-identity, since 2.49.
+	# gh before 2.66 crashes on the bundles GitHub's API now returns, and
+	# 2.68 is the first whose help shows it is new enough (--source-ref).
 	: >"$tmp/gh-help"
 	run gh attestation verify --help >"$tmp/gh-help" 2>/dev/null || :
-	if ! grep -q -- '--cert-identity ' "$tmp/gh-help"; then
+	if ! grep -q -- '--source-ref' "$tmp/gh-help"; then
 		say "note: provenance not checked; this gh is too old to check it"
 		return
 	fi
 	# The certificate names the workflow and the ref it ran on, so an exact
 	# match ties the tarball to release.yml and to $tag. GH_HOST, or gh
-	# would look on whichever host it defaults to.
+	# would look on whichever host it defaults to; with it, gh also checks
+	# without a login, as the attestations of a public repo are public.
 	pv_status=0
 	run env GH_HOST=github.com gh attestation verify "$1" --repo "$REPO" \
 		--cert-identity "https://github.com/$REPO/.github/workflows/release.yml@refs/tags/$tag" \
 		>"$tmp/provenance" 2>&1 || pv_status=$?
 	case "$pv_status" in
 	0) say "verified provenance: built by $REPO's release workflow from $tag" ;;
-	# gh's exit status when it needs to be logged in.
+	# gh's exit status when it wants a login, should a version ask again.
 	4) say "note: provenance not checked; gh is not logged in (gh auth login)" ;;
 	*)
 		cat "$tmp/provenance" >&2
-		say "If gh could not reach GitHub, fix that and run this again." >&2
+		say "If gh could not reach GitHub, or was rate limited (set GH_TOKEN), fix that and run this again." >&2
 		die "provenance check failed for $name.tar.gz; not installing it"
 		;;
 	esac

@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -139,10 +138,9 @@ func TestParseRDP_NoDrives(t *testing.T) {
 		"", "*", "DynamicDrives", "%", "C:\\;D:\\", "docs(relative)", "(x)(y)",
 		"~", "~/", "~/.", "home(~)", "~(home)", "/", "/..", "/(root)", "//", home, home + "/", "h(" + home + ")",
 		"~/..", "a(~/..)", filepath.Dir(home), "/proc", "/proc/self/root", "/proc/self/cwd",
-	}
-	if runtime.GOOS == "linux" {
-		// A symlink into /proc there; on macOS a folder of its own.
-		drives = append(drives, "/dev/fd")
+		// A symlink into /proc on Linux; on macOS a folder of its own, as
+		// changeable.
+		"/dev/fd", "/dev/fd/0",
 	}
 	for _, v := range drives {
 		p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:"+v+"\n"), "x")
@@ -351,11 +349,11 @@ func TestParseRDP_DriveSymlinkToHome(t *testing.T) {
 	if err := os.Symlink(home, link); err != nil {
 		t.Fatal(err)
 	}
-	p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:"+link+";/tmp("+filepath.Dir(home)+")\n"), "x")
+	p, _, err := ParseRDP([]byte("full address:s:h\ndrivestoredirect:s:"+link+";/srv/wicket-kept("+filepath.Dir(home)+")\n"), "x")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []config.Share{{Path: "/tmp"}}
+	want := []config.Share{{Path: "/srv/wicket-kept"}}
 	if !reflect.DeepEqual(p.Shares, want) {
 		t.Fatalf("shares %+v, want %+v", p.Shares, want)
 	}

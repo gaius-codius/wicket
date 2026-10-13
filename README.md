@@ -37,7 +37,10 @@ release workflow did not build. Without `gh` it says the check was skipped. To
 check a download yourself:
 
 ```
-gh attestation verify wicket_<version>_<os>_<arch>.tar.gz --repo gaius-codius/wicket
+gh attestation verify wicket_<version>_<os>_<arch>.tar.gz \
+  --repo gaius-codius/wicket --hostname github.com \
+  --signer-workflow gaius-codius/wicket/.github/workflows/release.yml \
+  --source-ref refs/tags/v<version>
 ```
 
 ```

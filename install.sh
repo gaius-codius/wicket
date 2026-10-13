@@ -99,10 +99,11 @@ wget_https() {
 	run wget -S -O "$2" "$1" 2>"$tmp/wget.log" || return
 	grep -q 'HTTP/' "$tmp/wget.log" ||
 		die "wget did not show its redirects, so they could not be checked; install curl"
-	# A Location with a scheme other than https. One without a scheme is
-	# relative and keeps https.
-	if grep -i '^ *location: *[a-z][a-z0-9+.-]*:' "$tmp/wget.log" |
-		grep -iqv '^ *location: *https:'; then
+	# Every Location has to be https or start with /, which keeps the
+	# scheme. Anything else is refused, including a value the log shows in
+	# a form this cannot read, such as one after a tab wget escaped.
+	if grep -i '^[[:space:]]*location:' "$tmp/wget.log" |
+		grep -iEqv '^[[:space:]]*location:[[:space:]]*(https://|/)'; then
 		die "refused a redirect away from https while fetching $1"
 	fi
 }
@@ -162,7 +163,8 @@ provenance() {
 		return
 	fi
 	pv_status=0
-	run gh attestation verify "$1" --repo "$REPO" \
+	# --hostname, or gh would look on the host GH_HOST names.
+	run gh attestation verify "$1" --repo "$REPO" --hostname github.com \
 		--signer-workflow "$REPO/.github/workflows/release.yml" \
 		--source-ref "refs/tags/$tag" >"$tmp/provenance" 2>&1 || pv_status=$?
 	case "$pv_status" in

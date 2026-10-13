@@ -178,13 +178,15 @@ protocol=RDP
 server=share.example
 username=bob
 sharefolder=Documents
-drive=docs,/tmp/ok;bad,/tmp/a,/tmp/b;C:/windows
+drive=docs,/tmp/ok;bad,/tmp/a,/tmp/b;C:/windows;my,dir;/srv/Data;/srv/data
 `)
 	p, skip, err := ParseRemmina(data, "shares.remmina")
 	if err != nil || skip.Reason != "" {
 		t.Fatalf("err %v skip %#v", err, skip)
 	}
-	want := []config.Share{{Path: "/tmp/ok", Name: "docs"}}
+	// Folders that differ only in case are two folders; the plan reports
+	// the drive name they share.
+	want := []config.Share{{Path: "/tmp/ok", Name: "docs"}, {Path: "/srv/Data"}, {Path: "/srv/data"}}
 	if !reflect.DeepEqual(p.Shares, want) {
 		t.Fatalf("got %+v want %+v", p.Shares, want)
 	}
@@ -192,6 +194,7 @@ drive=docs,/tmp/ok;bad,/tmp/a,/tmp/b;C:/windows
 		{Path: "Documents", Reason: refusedNotPath},
 		{Path: "/tmp/a,/tmp/b", Reason: refusedComma},
 		{Path: "C:/windows", Reason: refusedNotPath},
+		{Path: "my,dir", Reason: refusedNotPath},
 	}
 	if !reflect.DeepEqual(p.Refused, wantRefused) {
 		t.Fatalf("refused %+v, want %+v", p.Refused, wantRefused)

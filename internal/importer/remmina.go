@@ -208,7 +208,9 @@ func (s *shareSet) add(name, path string) {
 		s.refuse(path, reason)
 		return
 	}
-	if s.first(strings.ToLower(path) + "\x00" + strings.ToLower(name)) {
+	// Exact, not folded: /srv/Data and /srv/data are two folders, and the
+	// plan reports the drive name they then share.
+	if s.first(path + "\x00" + name) {
 		s.list = append(s.list, config.Share{Path: path, Name: name})
 	}
 }
@@ -312,8 +314,9 @@ func remminaShares(sharefolder, drive string) ([]config.Share, []config.DroppedS
 			continue
 		}
 		name, path, ok := strings.Cut(part, ",")
-		if !ok {
-			// Neither name,path nor a folder: refused as a path.
+		if !ok || !isSharePath(strings.TrimSpace(path)) {
+			// Neither name,path nor a folder: refused whole, so a relative
+			// my,dir is named as written, not as "dir".
 			name, path = "", part
 		}
 		shares.add(name, path)

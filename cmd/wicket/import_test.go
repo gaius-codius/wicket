@@ -260,6 +260,69 @@ func TestImportRemmina_DroppedShareReported(t *testing.T) {
 	}
 }
 
+// A share the parser refuses is named in the summary with its reason, under
+// the name the profile is imported as, the same in a dry run as in the
+// import, which keeps the valid share.
+func TestImport_RefusedShareReported(t *testing.T) {
+	for _, tc := range []struct {
+		name, file, doc, source string
+		notes                   []string
+	}{
+		{
+			name: "remmina", file: "files.remmina", source: "remmina",
+			doc: "[remmina]\nname=files\nprotocol=RDP\nserver=h\nusername=u\n" +
+				"sharefolder=Documents\ndrive=docs,/tmp/wicket-docs;home,~\n",
+			notes: []string{
+				`files-2: share "Documents" dropped: path must be absolute or ~/…`,
+				`files-2: share "~" dropped: holds the whole home folder; turn on share_home to share it`,
+			},
+		},
+		{
+			name: "rdp", file: "files.rdp", source: "rdp",
+			doc: "full address:s:h\nusername:s:u\ndrivestoredirect:s:docs(/tmp/wicket-docs);relative/dir;%\n",
+			notes: []string{
+				`files-2: share "relative/dir" dropped: path must be absolute or ~/…`,
+				`files-2: share "%" dropped: holds the whole home folder; turn on share_home to share it`,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfgPath := filepath.Join(t.TempDir(), "config.toml")
+			t.Setenv("WICKET_CONFIG", cfgPath)
+			t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+			// A profile named files already, so the import is renamed.
+			if err := os.WriteFile(cfgPath, []byte("[[profiles]]\nname = \"files\"\nhost = \"h\"\nuser = \"u\"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			path := filepath.Join(dir, tc.file)
+			if err := os.WriteFile(path, []byte(tc.doc), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			arg := dir
+			if tc.source == "rdp" {
+				arg = path
+			}
+			dry := runCLI(t, []string{"import", tc.source, "--dry-run", "--rename", arg})
+			if dry.code != 0 || !strings.Contains(dry.stdout, strings.Join(tc.notes, "\n")+"\n") {
+				t.Fatalf("dry-run exit %d stdout %q stderr %q", dry.code, dry.stdout, dry.stderr)
+			}
+			got := runCLI(t, []string{"import", tc.source, "--rename", arg})
+			if got.code != 0 || got.stdout != dry.stdout {
+				t.Fatalf("import exit %d stdout %q, dry run said %q", got.code, got.stdout, dry.stdout)
+			}
+			c, err := config.Open(cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, ok := c.Profile("files-2")
+			if !ok || len(p.Shares) != 1 || p.Shares[0].Path != "/tmp/wicket-docs" || p.Shares[0].Name != "docs" {
+				t.Fatalf("profile %+v", p)
+			}
+		})
+	}
+}
+
 // Imported profiles take the preferred FreeRDP 3 client: an unsuffixed
 // xfreerdp counts only when its --version says 3, exit status aside.
 func TestImport_ClientNeedsFreeRDP3(t *testing.T) {

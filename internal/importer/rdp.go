@@ -15,7 +15,7 @@ import (
 )
 
 // ParseRDPFiles reads each path as a Microsoft .rdp file.
-func ParseRDPFiles(paths []string) (ok []config.Profile, skipped []Skip, err error) {
+func ParseRDPFiles(paths []string) (ok []config.Import, skipped []Skip, err error) {
 	if len(paths) == 0 {
 		return nil, nil, fmt.Errorf("no .rdp files given")
 	}
@@ -40,10 +40,10 @@ func ParseRDPFiles(paths []string) (ok []config.Profile, skipped []Skip, err err
 }
 
 // ParseRDPFile reads one Microsoft .rdp connection file.
-func ParseRDPFile(path string) (config.Profile, Skip, error) {
+func ParseRDPFile(path string) (config.Import, Skip, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return config.Profile{}, Skip{}, err
+		return config.Import{}, Skip{}, err
 	}
 	base := filepath.Base(path)
 	name := strings.TrimSuffix(base, filepath.Ext(base))
@@ -52,10 +52,10 @@ func ParseRDPFile(path string) (config.Profile, Skip, error) {
 
 // ParseRDP maps a Microsoft .rdp document to a wicket profile.
 // The password 51:b: blob is never stored.
-func ParseRDP(data []byte, name string) (config.Profile, Skip, error) {
+func ParseRDP(data []byte, name string) (config.Import, Skip, error) {
 	vals, err := parseRDP(data)
 	if err != nil {
-		return config.Profile{}, Skip{}, err
+		return config.Import{}, Skip{}, err
 	}
 	p := config.DefaultProfile()
 	p.Name = name
@@ -80,8 +80,9 @@ func ParseRDP(data []byte, name string) (config.Profile, Skip, error) {
 	if on, ok := rdpClipboard(vals["redirectclipboard"]); ok {
 		p.Clipboard = on
 	}
-	p.Shares = rdpDrives(vals["drivestoredirect"])
-	return p, Skip{}, nil
+	var refused []config.DroppedShare
+	p.Shares, refused = rdpDrives(vals["drivestoredirect"])
+	return config.Import{Profile: p, Refused: refused}, Skip{}, nil
 }
 
 // rdpClipboard reads redirectclipboard: 0 is off and any other number on,
@@ -94,16 +95,24 @@ func rdpClipboard(v string) (on, ok bool) {
 	return n != 0, true
 }
 
-// rdpDrives maps drivestoredirect onto shares. It is a ';' list with no
-// escaping, and FreeRDP reads each entry as a path, label(path) or
-// path(label), or path(path) for two folders. The entries that are not one
-// local folder are skipped by the share path rules: "*" and DynamicDrives
-// (every drive, and drives plugged in later), Windows drive letters, and "%",
-// the whole home folder (see shareSet).
-func rdpDrives(v string) []config.Share {
+// rdpDrives maps drivestoredirect onto shares, and the entries it refuses.
+// It is a ';' list with no escaping, and FreeRDP reads each entry as a path,
+// label(path) or path(label), or path(path) for two folders. The entries
+// that are not one local folder are refused by the share path rules: "*" and
+// DynamicDrives (every drive, and drives plugged in later), Windows drive
+// letters, and "%", the whole home folder (see shareSet).
+func rdpDrives(v string) ([]config.Share, []config.DroppedShare) {
 	var shares shareSet
 	for _, part := range strings.Split(v, ";") {
 		part = strings.TrimSpace(part)
+		switch {
+		case part == "*" || strings.EqualFold(part, "DynamicDrives"):
+			shares.refuse(part, refusedAllDrive)
+			continue
+		case part == "%":
+			shares.refuse(part, refusedHome)
+			continue
+		}
 		name, path := "", part
 		if open := strings.IndexByte(part, '('); open >= 0 && strings.HasSuffix(part, ")") {
 			outer := strings.TrimSpace(part[:open])
@@ -117,13 +126,13 @@ func rdpDrives(v string) []config.Share {
 				name, path = outer, inner
 			case isSharePath(outer):
 				name, path = inner, outer
-			default:
-				continue
 			}
+			// Otherwise neither is a folder, and the whole entry is
+			// refused as a path.
 		}
 		shares.add(name, path)
 	}
-	return shares.list
+	return shares.list, shares.refused
 }
 
 // withPort adds the separate "server port" the Windows client writes to a

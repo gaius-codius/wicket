@@ -58,6 +58,11 @@ type item struct {
 	value    []byte
 	created  int64
 	modified int64
+	// locked keeps this item locked whatever SetLocked says, as an item in
+	// a second collection that has its own lock.
+	locked bool
+	// stuck keeps it locked through an accepted Unlock as well.
+	stuck bool
 }
 
 // Server is an in-process Secret Service on a private bus.
@@ -122,6 +127,43 @@ func (s *Server) SetLocked(locked bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.locked = locked
+}
+
+// LockItem puts one item behind a lock of its own, as if it lived in a second
+// collection that is locked while the default one is not. Only an accepted
+// Unlock opens it.
+func (s *Server) LockItem(p dbus.ObjectPath) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if it, ok := s.items[p]; ok {
+		it.locked = true
+	}
+}
+
+// KeepLocked makes an accepted Unlock leave one item locked, as a backend
+// that lets the user open some items and not others does.
+func (s *Server) KeepLocked(p dbus.ObjectPath) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if it, ok := s.items[p]; ok {
+		it.locked = true
+		it.stuck = true
+	}
+}
+
+// isLocked reports whether an item yields no secret yet. Callers hold s.mu.
+func (s *Server) isLocked(it *item) bool {
+	return s.locked || it.locked
+}
+
+// unlock opens the collection and the given items. Callers hold s.mu.
+func (s *Server) unlock(paths []dbus.ObjectPath) {
+	s.locked = false
+	for _, p := range paths {
+		if it, ok := s.items[p]; ok && !it.stuck {
+			it.locked = false
+		}
+	}
 }
 
 // Dismissed reports how many times a prompt was dismissed by the client,
@@ -327,7 +369,7 @@ func (s *Server) SearchItems(attributes map[string]string) ([]dbus.ObjectPath, [
 		if !match(it.attrs, attributes) {
 			continue
 		}
-		if s.locked {
+		if s.isLocked(it) {
 			locked = append(locked, it.path)
 			continue
 		}
@@ -343,10 +385,10 @@ func (s *Server) Unlock(paths []dbus.ObjectPath) ([]dbus.ObjectPath, dbus.Object
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.prompt != PromptNone {
-		s.pending = func() { s.locked = false }
+		s.pending = func() { s.unlock(paths) }
 		return nil, promptPath, nil
 	}
-	s.locked = false
+	s.unlock(paths)
 	return paths, "/", nil
 }
 
@@ -356,7 +398,7 @@ func (s *Server) GetSecrets(items []dbus.ObjectPath, session dbus.ObjectPath) (m
 	out := map[dbus.ObjectPath]secretBlob{}
 	for _, p := range items {
 		it, ok := s.items[p]
-		if !ok || s.locked {
+		if !ok || s.isLocked(it) {
 			continue
 		}
 		out[p] = secretBlob{Session: session, Value: it.value, ContentType: "text/plain"}
@@ -460,7 +502,7 @@ func (o *itemObj) Get(iface, prop string) (dbus.Variant, *dbus.Error) {
 	case "Label":
 		return dbus.MakeVariant(it.label), nil
 	case "Locked":
-		return dbus.MakeVariant(o.s.locked), nil
+		return dbus.MakeVariant(o.s.isLocked(it)), nil
 	}
 	return dbus.MakeVariant(""), dbus.NewError("org.freedesktop.DBus.Error.UnknownProperty", nil)
 }

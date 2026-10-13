@@ -332,3 +332,51 @@ func TestShareRefusal_QuotesNames(t *testing.T) {
 		t.Errorf("%q", got)
 	}
 }
+
+// A share reached by a short path can hold folders whose resolved path is
+// too long to look up, though FreeRDP, given the short one, reaches them.
+// What the walk cannot look up is refused, not passed over, whether that is
+// the share itself or a folder below it. The tree is built through links,
+// each a short name for the folder below the last.
+func TestShareRefusal_PathTooLong(t *testing.T) {
+	t.Parallel()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("d", 200)
+	// aliases[i] is a short name for base and i+1 long folders below it.
+	var aliases []string
+	prev := base
+	for i := 0; len(base)+i*(len(long)+1) < 4600; i++ {
+		dir := filepath.Join(prev, long)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		alias := filepath.Join(base, fmt.Sprint("s", i))
+		if err := os.Symlink(dir, alias); err != nil {
+			t.Fatal(err)
+		}
+		aliases = append(aliases, alias)
+		prev = alias
+	}
+	if err := os.Symlink("/", filepath.Join(prev, "z")); err != nil {
+		t.Fatal(err)
+	}
+	// The deepest share whose own path can still be looked up holds
+	// folders whose paths cannot; the last cannot be looked up itself.
+	var fits string
+	for _, a := range aliases {
+		if _, err := filepath.EvalSymlinks(a); err == nil {
+			fits = a
+		}
+	}
+	if fits == "" || fits == prev {
+		t.Fatalf("no share at the limit: deepest that resolves is %q", fits)
+	}
+	for _, share := range []string{fits, prev} {
+		if got := ShareRefusal(share); !strings.Contains(got, "too long") {
+			t.Errorf("%s: %q, want a refusal for a path too long", filepath.Base(share), got)
+		}
+	}
+}

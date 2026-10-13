@@ -64,3 +64,13 @@ func TestShares_TrailingSlashIsOneShare(t *testing.T) {
 		t.Errorf("remmina: shares %+v, want %+v", p.Shares, want)
 	}
 }
+
+// A path refused for how it is spelled does not refuse another that cleans
+// to the same folder.
+func TestShares_SpellingRefusalIsPerEntry(t *testing.T) {
+	t.Parallel()
+	shares, refused := rdpRefused(t, "/srv/wicket-data/bad,/..;/srv/wicket-data")
+	if !reflect.DeepEqual(shares, []config.Share{{Path: "/srv/wicket-data"}}) || len(refused) != 1 {
+		t.Errorf("shares %+v, refused %+v", shares, refused)
+	}
+}

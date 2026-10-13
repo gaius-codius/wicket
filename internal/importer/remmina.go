@@ -222,8 +222,13 @@ func (s *shareSet) add(name, path string) {
 	}
 }
 
-// refusal is shareRefusal(path), asked once per cleaned path.
+// refusal is shareRefusal(path), with what config.ShareRefusal finds on
+// disk asked once per cleaned path. The path's own spelling is checked each
+// time, since /srv/a,/.. cleans to /srv but /srv may be shared.
 func (s *shareSet) refusal(path string) string {
+	if reason := shareSpelling(path); reason != "" {
+		return reason
+	}
 	key := filepath.Clean(path)
 	if reason, ok := s.reasons[key]; ok {
 		return reason
@@ -231,7 +236,7 @@ func (s *shareSet) refusal(path string) string {
 	if s.reasons == nil {
 		s.reasons = map[string]string{}
 	}
-	s.reasons[key] = shareRefusal(path)
+	s.reasons[key] = config.ShareRefusal(path)
 	return s.reasons[key]
 }
 
@@ -268,13 +273,22 @@ const (
 
 // shareRefusal is why path cannot be imported as a share, or "".
 func shareRefusal(path string) string {
+	if reason := shareSpelling(path); reason != "" {
+		return reason
+	}
+	return config.ShareRefusal(path)
+}
+
+// shareSpelling is why path, as written, cannot be imported as a share, or
+// "", without looking at the file system.
+func shareSpelling(path string) string {
 	switch {
 	case !isSharePath(path):
 		return refusedNotPath
 	case strings.ContainsRune(path, ','):
 		return refusedComma
 	}
-	return config.ShareRefusal(path)
+	return ""
 }
 
 func isSharePath(path string) bool {

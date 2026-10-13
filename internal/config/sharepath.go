@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // maxLinks bounds the symlinks viaProc follows for one path, as the kernel
@@ -84,12 +85,16 @@ func ShareRefusal(path string) string {
 // bind mount of / can be. A link that leads nowhere is passed over, and so
 // is a folder that cannot be entered: the server cannot reach through
 // either. A folder that can be entered but not listed is refused, since a
-// server that knows a name inside it can still open it. A tree of more
+// server that knows a name inside it can still open it, and so is a path
+// too long to look up; see tooLong. A tree of more
 // than limit entries is refused, since what it holds past them is unknown.
 // A dir that does not exist holds nothing, and connect reports it. Names
 // are quoted in the reason, as a file name may hold anything.
 func linkOut(dir string, homes []string, limit int) string {
 	resolved, err := filepath.EvalSymlinks(dir)
+	if tooLong(err) {
+		return tooLongReason("")
+	}
 	if err != nil {
 		return ""
 	}
@@ -107,7 +112,11 @@ func linkOut(dir string, homes []string, limit int) string {
 		if err != nil {
 			// Looking up "." in a folder needs leave to enter it, as
 			// FreeRDP's lookups below it would; Join would clean it away.
-			if _, statErr := os.Stat(d.real + string(filepath.Separator) + "."); statErr != nil {
+			_, statErr := os.Stat(d.real + string(filepath.Separator) + ".")
+			if tooLong(err) || tooLong(statErr) {
+				return tooLongReason(d.rel)
+			}
+			if statErr != nil {
 				continue
 			}
 			if d.rel == "" {
@@ -128,10 +137,17 @@ func linkOut(dir string, homes []string, limit int) string {
 					return fmt.Sprintf("the link %q in it leads through /proc or /dev/fd, and FreeRDP follows links", rel)
 				}
 				target, err := filepath.EvalSymlinks(p)
+				if tooLong(err) {
+					return tooLongReason(rel)
+				}
 				if err != nil {
 					continue
 				}
-				if info, err := os.Stat(target); err != nil || !info.IsDir() {
+				info, err := os.Stat(target)
+				if tooLong(err) {
+					return tooLongReason(rel)
+				}
+				if err != nil || !info.IsDir() {
 					continue
 				}
 				if holdsHome(target, homes) {
@@ -143,6 +159,9 @@ func linkOut(dir string, homes []string, limit int) string {
 				}
 			case e.IsDir():
 				info, err := e.Info()
+				if tooLong(err) {
+					return tooLongReason(rel)
+				}
 				if err != nil {
 					continue
 				}
@@ -157,6 +176,23 @@ func linkOut(dir string, homes []string, limit int) string {
 		}
 	}
 	return ""
+}
+
+// tooLong reports whether err is a path too long for the system to look
+// up. The walk names a folder by its resolved path, which can be too long
+// where the shorter path FreeRDP is given below the share is not, so what
+// it cannot look up is refused rather than passed over.
+func tooLong(err error) bool {
+	return errors.Is(err, syscall.ENAMETOOLONG)
+}
+
+// tooLongReason is the refusal for a path below the share, rel, that the
+// walk could not look up.
+func tooLongReason(rel string) string {
+	if rel == "" {
+		return "has a path too long to check for links that lead out of it"
+	}
+	return fmt.Sprintf("the path %q in it is too long to check for links that lead out of it", rel)
 }
 
 // readDir is the entries of the folder at dir, read a batch at a time and

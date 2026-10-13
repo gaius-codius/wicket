@@ -78,15 +78,15 @@ func InstalledClients(lookPath func(string) (string, error), major func(path str
 		}
 		if c.Unversioned {
 			// Names that are links to one binary share its answer.
-			real, err := filepath.EvalSymlinks(path)
+			target, err := filepath.EvalSymlinks(path)
 			if err != nil {
-				real = path
+				target = path
 			}
-			ok, seen := supported[real]
+			ok, seen := supported[target]
 			if !seen {
 				v, found := major(path)
 				ok = found && v == 3
-				supported[real] = ok
+				supported[target] = ok
 			}
 			if !ok {
 				continue

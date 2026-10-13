@@ -82,8 +82,7 @@ func run(args []string, stdout, stderr io.Writer, runTUI func() error) int {
 		if err := runTUI(); err != nil {
 			// SIGTERM or SIGHUP ended the TUI: exit as wicket connect does,
 			// without calling it an error.
-			var stopped *tui.StoppedError
-			if errors.As(err, &stopped) {
+			if stopped, ok := errors.AsType[*tui.StoppedError](err); ok {
 				return stopped.ExitStatus()
 			}
 			fmt.Fprintln(stderr, err)

@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"

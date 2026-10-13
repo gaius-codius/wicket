@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -89,7 +90,7 @@ func (d *DBus) Presence(ctx context.Context, id Identity) (Presence, error) {
 	if err != nil {
 		return NotSaved, unavailable(ctx, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	svc := conn.Object(ssBus, ssServicePath)
 	var unlocked, locked []dbus.ObjectPath
 	if err := svc.CallWithContext(ctx, ssServiceIface+".SearchItems", 0, id.Attrs()).Store(&unlocked, &locked); err != nil {
@@ -108,7 +109,7 @@ func unavailable(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("%w: %w", ErrUnavailable, ctxErr)
 	}
-	return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	return fmt.Errorf("%w: %w", ErrUnavailable, err)
 }
 
 // dial connects to the session bus for one operation on ctx's behalf. Every
@@ -116,8 +117,8 @@ func unavailable(ctx context.Context, err error) error {
 // caller gives up. The connection lasts dismissGrace longer, so a prompt can
 // still be dismissed on the way out, and is then closed whatever it is doing:
 // a wedged daemon cannot keep the goroutine behind a cancelled operation, or
-// its socket, alive. close must be called when the operation is over.
-func (d *DBus) dial(ctx context.Context) (conn *dbus.Conn, close func(), err error) {
+// its socket, alive. done must be called when the operation is over.
+func (d *DBus) dial(ctx context.Context) (conn *dbus.Conn, done func(), err error) {
 	connCtx, closeConn := context.WithCancel(context.Background())
 	stop := context.AfterFunc(ctx, func() { time.AfterFunc(dismissGrace, closeConn) })
 	conn, err = d.connect(dbus.WithContext(connCtx))
@@ -264,7 +265,7 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 	if err := svc.CallWithContext(ctx, ssServiceIface+".SearchItems", 0, id.Attrs()).Store(&unlocked, &locked); err != nil {
 		return unavailable(ctx, err)
 	}
-	items := append(unlocked, locked...)
+	items := slices.Concat(unlocked, locked)
 	if len(items) == 0 {
 		return ErrNotFound
 	}

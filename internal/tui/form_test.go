@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/BurntSushi/toml"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
@@ -541,9 +542,11 @@ func TestForm_ErrorAttachesToItsFieldByKey(t *testing.T) {
 // Tab walks the fields in the order the sections show them.
 func TestForm_TabFollowsTheSections(t *testing.T) {
 	m := sized(t, fixtureTOML("work", "h", "u"), 80, 36, "e")
-	want := []int{fieldName, fieldHost, fieldUser, fieldDomain, fieldSize, fieldFullscreen,
+	want := []int{
+		fieldName, fieldHost, fieldUser, fieldDomain, fieldSize, fieldFullscreen,
 		fieldMultimon, fieldDynamic, fieldScale, fieldClipboard, fieldShareHome, fieldShareAdd,
-		fieldPassword, fieldForget, fieldClient}
+		fieldPassword, fieldForget, fieldClient,
+	}
 	for i, id := range want {
 		if m.form.field != id {
 			t.Fatalf("tab stop %d is %q, want %q", i, formLabels[m.form.field], formLabels[id])
@@ -557,10 +560,12 @@ func TestForm_TabFollowsTheSections(t *testing.T) {
 	// The screen shows them in the same order, under their headings.
 	out := stripANSI(m.render())
 	at := -1
-	for _, s := range []string{"CONNECTION", "name:", "host:", "user:", "domain:", "DISPLAY", "size:",
+	for _, s := range []string{
+		"CONNECTION", "name:", "host:", "user:", "domain:", "DISPLAY", "size:",
 		"fullscreen:", "all monitors:", "dynamic resolution:", "scale:", "SHARING", "clipboard:",
 		"home folder:", "add folder:", "PASSWORD", "  password:", "forget password:",
-		"ADVANCED", "client:"} {
+		"ADVANCED", "client:",
+	} {
 		i := strings.Index(out, s)
 		if i <= at {
 			t.Fatalf("%q is out of order:\n%s", s, out)
@@ -650,7 +655,7 @@ func TestForm_ScaleFallsBackWhenNarrow(t *testing.T) {
 	scaleRow := func(w int) string {
 		m := sized(t, fixtureTOML("work", "h", "u"), w, 30, "e")
 		m = focusField(t, m, fieldScale)
-		for _, ln := range strings.Split(stripANSI(m.render()), "\n") {
+		for ln := range strings.SplitSeq(stripANSI(m.render()), "\n") {
 			if strings.Contains(ln, "scale:") {
 				return ln
 			}
@@ -670,7 +675,7 @@ func TestForm_ScaleFallsBackWhenNarrow(t *testing.T) {
 // name when the two do not both fit.
 func TestForm_HeaderMarksUnsavedChanges(t *testing.T) {
 	header := func(m Model) string {
-		for _, ln := range strings.Split(stripANSI(m.render()), "\n") {
+		for ln := range strings.SplitSeq(stripANSI(m.render()), "\n") {
 			if strings.Contains(ln, brandMark) {
 				return ln
 			}

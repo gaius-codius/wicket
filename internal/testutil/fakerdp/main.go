@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -117,7 +118,7 @@ func spawnHelper() {
 	if err != nil {
 		os.Exit(3)
 	}
-	cmd := exec.Command(self)
+	cmd := exec.CommandContext(context.Background(), self)
 	cmd.Env = append(os.Environ(), "FAKERDP_ROLE=helper")
 	// The helper shares the client's output, as a real one would, so it
 	// can hold the pipe open after the client has gone.
@@ -181,6 +182,6 @@ func logSignal(path, role string, sig os.Signal) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	fmt.Fprintf(f, "%s:%s\n", role, sig)
 }

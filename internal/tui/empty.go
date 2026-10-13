@@ -5,6 +5,7 @@ import (
 	"unicode"
 
 	"charm.land/lipgloss/v2"
+
 	"github.com/gaius-codius/wicket/internal/theme"
 )
 
@@ -32,7 +33,8 @@ func (m Model) viewEmpty(lo layout) string {
 	labelW := len("config")
 	detail := func(rank int, label, value string) {
 		items = append(items, emptyItem{rank: rank, group: 2, lines: []string{
-			st.muted.Render(padRight(label, labelW)) + "  " + st.primary.Render(value)}})
+			st.muted.Render(padRight(label, labelW)) + "  " + st.primary.Render(value),
+		}})
 	}
 	valueW := max(lo.Inner-labelW-2, 1)
 	if path := m.configPath(); path != "" {
@@ -41,7 +43,8 @@ func (m Model) viewEmpty(lo layout) string {
 	detail(5, "theme", truncate(themeLine(m.theme.Mode, m.look), valueW))
 	items = append(items, emptyItem{rank: 6, group: 2, lines: []string{
 		st.muted.Render(truncate("from a shell or launcher: ", lo.Inner)) +
-			st.primary.Render(truncate("wicket connect <profile>", max(lo.Inner-26, 0)))}})
+			st.primary.Render(truncate("wicket connect <profile>", max(lo.Inner-26, 0))),
+	}})
 	return strings.Join(layoutEmpty(items, lo.Budget), "\n")
 }
 

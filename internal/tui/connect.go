@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
@@ -130,8 +131,10 @@ func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce b
 		}
 		held, _ := cred.(secret.Password)
 		hp := held
-		m.retry = retryState{profile: p, held: &hp, useOnce: keepUseOnce, status: cr.Status, class: cr.Class, outcome: cr.Outcome,
-			note: clientNote(cr.Output, cred)}
+		m.retry = retryState{
+			profile: p, held: &hp, useOnce: keepUseOnce, status: cr.Status, class: cr.Class, outcome: cr.Outcome,
+			note: clientNote(cr.Output, cred),
+		}
 		m.retry.fullscreen, m.retry.fullscreenWhy = m.app.fullscreenHint(p, cr.Outcome)
 		m.view = viewRetry
 		// The overlay carries the session's own message; only the other

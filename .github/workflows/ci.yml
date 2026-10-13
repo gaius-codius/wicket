@@ -12,42 +12,15 @@ permissions:
 
 jobs:
   verify:
-    name: test-vet-fmt
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    uses: gaius-codius/go-ci/.github/workflows/go.yml@25c4a99358e56e3ca2967d783de6dec46c0661de # v1.0.1
+    with:
+      runs-on: '["ubuntu-latest"]'
+      mise-cache: true
+      build: ./cmd/wicket/
+      fuzz: |
+        ./internal/config FuzzSave
 
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Check gofmt
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "gofmt needed on:"
-            echo "$unformatted"
-            exit 1
-          fi
-
-      - name: Run go vet
-        run: go vet ./...
-
-      - name: Run staticcheck
-        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
-
-      - name: Run tests
-        run: go test ./...
-
-      - name: Run race detector on secret, rdp and cmd
-        run: go test -race ./internal/secret ./internal/rdp ./cmd/wicket
-
-      - name: Build CLI
-        run: go build -o /tmp/wicket ./cmd/wicket
-
+  # go-ci is Linux-only; this job runs the Keychain backend's tests.
   verify-macos:
     name: test-vet-fmt-macos
     runs-on: macos-latest

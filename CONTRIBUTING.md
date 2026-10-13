@@ -32,7 +32,13 @@ blocked-by links, then put it on the board. The commands are in
 
 ## What you need
 
-- Go 1.26.9 or newer.
+- [mise](https://mise.jdx.dev). `mise.toml` pins Go (1.27.2, matching the
+  `toolchain` line in `go.mod`), golangci-lint, govulncheck and lefthook. Run
+  `mise install` after cloning and whenever `mise.toml` changes, then
+  `lefthook install` once to set up the git hooks: on commit they format and
+  lint the staged packages, on push they run the tests. Put hooks of your own
+  in `lefthook-local.yml`, which git ignores. Building needs Go 1.26.9 or
+  newer; the pins are what CI runs.
 - Linux or macOS. Linux uses the Secret Service keyring; macOS uses Keychain
   (cgo). The BSDs still compile against the D-Bus store but have no session
   bus integration tests.
@@ -45,13 +51,25 @@ blocked-by links, then put it on the board. The commands are in
 
 ## Before you push
 
+In a mise-activated shell, or with each line prefixed by `mise exec --`:
+
 ```
-gofmt -l .        # must print nothing
-go vet ./...
-go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 go test ./...
-go test -race ./internal/secret ./internal/rdp ./cmd/wicket
+go test -race ./...
+go vet ./...
+golangci-lint run ./...      # formatting (gofumpt, goimports) included
+./scripts/govulncheck.sh
+go build ./cmd/wicket/
 ```
+
+CI runs the same on Linux through the shared
+[go-ci](https://github.com/gaius-codius/go-ci) workflow, plus a short
+`FuzzSave` run, and the tests with the Keychain backend on macOS.
+`.golangci.yml` is go-ci's baseline with wicket's exclusions, each with its
+reason; suppress a single finding only with `//nolint:<linter> // reason`. A
+reachable vulnerability fails `govulncheck.sh` unless
+`scripts/govulncheck-allow.txt` lists it with a reason and the issue that
+removes it.
 
 ## Tests
 

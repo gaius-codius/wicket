@@ -53,8 +53,7 @@ func TestOpenOrCreate_DoesNotOverwriteInvalid(t *testing.T) {
 	if err == nil {
 		t.Fatal("want load error")
 	}
-	var le *LoadError
-	if !errors.As(err, &le) {
+	if _, ok := errors.AsType[*LoadError](err); !ok {
 		t.Fatalf("err type %T", err)
 	}
 	got, err := os.ReadFile(path)
@@ -84,8 +83,7 @@ user = "u2"
 	if err == nil {
 		t.Fatal("want duplicate error")
 	}
-	var le *LoadError
-	if !errors.As(err, &le) {
+	if _, ok := errors.AsType[*LoadError](err); !ok {
 		t.Fatalf("err type %T: %v", err, err)
 	}
 	got, _ := os.ReadFile(path)
@@ -143,8 +141,7 @@ func TestOpen_Unreadable(t *testing.T) {
 	if err == nil {
 		t.Fatal("want unreadable error")
 	}
-	var le *LoadError
-	if !errors.As(err, &le) {
+	if _, ok := errors.AsType[*LoadError](err); !ok {
 		t.Fatalf("err type %T: %v", err, err)
 	}
 	if err := os.Chmod(path, 0o600); err != nil {

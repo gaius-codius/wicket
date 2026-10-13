@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
 	"github.com/gaius-codius/wicket/internal/testutil"
@@ -37,7 +39,7 @@ func buildWicket(t *testing.T) string {
 			return
 		}
 		wicketBin = filepath.Join(dir, "wicket")
-		out, err := exec.Command("go", "build", "-o", wicketBin, "github.com/gaius-codius/wicket/cmd/wicket").CombinedOutput()
+		out, err := exec.CommandContext(context.Background(), "go", "build", "-o", wicketBin, "github.com/gaius-codius/wicket/cmd/wicket").CombinedOutput()
 		if err != nil {
 			wicketErr = errors.New(string(out))
 		}
@@ -122,7 +124,7 @@ func TestConnect_SignalStopsTheClientGroup(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			cmd := exec.Command(bin, "connect", "work")
+			cmd := exec.CommandContext(context.Background(), bin, "connect", "work")
 			if tc.tty {
 				master, slave, err := pty.Open()
 				if err != nil {

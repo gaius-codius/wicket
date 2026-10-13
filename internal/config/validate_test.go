@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 )
@@ -281,5 +282,23 @@ size = "70000x1080"
 	p.User = "other"
 	if err := cfg.Upsert(p, "work"); err == nil {
 		t.Fatal("oversized size saved")
+	}
+}
+
+// A uint64 past the int range used to wrap to a negative int instead of
+// failing as a field error.
+func TestAssignInt_RejectsOverflow(t *testing.T) {
+	t.Parallel()
+	n := 7
+	err := assignInt(map[string]any{"scale": uint64(math.MaxUint64)}, "scale", &n)
+	fe, ok := errors.AsType[*FieldError](err)
+	if !ok || fe.Field != "scale" {
+		t.Fatalf("got %v, want a FieldError for scale", err)
+	}
+	if n != 7 {
+		t.Errorf("n = %d, want it untouched", n)
+	}
+	if err := assignInt(map[string]any{"scale": uint64(150)}, "scale", &n); err != nil || n != 150 {
+		t.Errorf("uint64(150): n = %d, err = %v", n, err)
 	}
 }

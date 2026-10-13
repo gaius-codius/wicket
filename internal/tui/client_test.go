@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
@@ -48,7 +49,7 @@ func freerdp2Harness(t *testing.T, cfg string, runs *int, installed ...string) *
 // clientRow is the client row of m's form as drawn, colour removed.
 func clientRow(t *testing.T, m Model) string {
 	t.Helper()
-	for _, ln := range strings.Split(screen(m), "\n") {
+	for ln := range strings.SplitSeq(screen(m), "\n") {
 		if strings.Contains(ln, "client:") {
 			return ln
 		}
@@ -391,7 +392,7 @@ func TestFormClient_RowFitsEverywhere(t *testing.T) {
 				}
 				lo := m.panelLayout()
 				m.fitChrome(&lo)
-				for _, ln := range strings.Split(m.viewForm(lo), "\n") {
+				for ln := range strings.SplitSeq(m.viewForm(lo), "\n") {
 					if lipgloss.Width(ln) > lo.Inner {
 						t.Fatalf("%dx%d: %d cells in a %d-cell panel:\n%s", w, ht, lipgloss.Width(ln), lo.Inner, stripANSI(m.render()))
 					}
@@ -432,8 +433,10 @@ func TestFormClient_HelpDescribesTheChoice(t *testing.T) {
 // failed ends a session with code, as sdl-freerdp3 does with 136 when it
 // misreads a scaled monitor under /f.
 func failed(client string, code int) ConnectResult {
-	return ConnectResult{Class: rdp.ClassFailed, Status: "FreeRDP failed: could not start connecting",
-		Outcome: rdp.Outcome{Client: client, ExitCode: code, Duration: 300 * time.Millisecond}}
+	return ConnectResult{
+		Class: rdp.ClassFailed, Status: "FreeRDP failed: could not start connecting",
+		Outcome: rdp.Outcome{Client: client, ExitCode: code, Duration: 300 * time.Millisecond},
+	}
 }
 
 // The fullscreen hint shows for an SDL client (sdl-freerdp3 or the Homebrew

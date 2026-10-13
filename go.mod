@@ -2,6 +2,8 @@ module github.com/gaius-codius/wicket
 
 go 1.26.9
 
+toolchain go1.27.2
+
 require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.1.0

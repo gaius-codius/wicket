@@ -1,6 +1,7 @@
 package fakesecret
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -182,8 +183,10 @@ func (s *Server) Seed(attrs map[string]string, value string, modified int64) dbu
 	defer s.mu.Unlock()
 	s.next++
 	p := dbus.ObjectPath(fmt.Sprintf("%s/%d", collectionPath, s.next))
-	s.items[p] = &item{path: p, label: "wicket", attrs: attrs,
-		value: []byte(value), created: modified, modified: modified}
+	s.items[p] = &item{
+		path: p, label: "wicket", attrs: attrs,
+		value: []byte(value), created: modified, modified: modified,
+	}
 	return p
 }
 
@@ -210,7 +213,7 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "bus")
 	addr = "unix:path=" + sock
-	cmd := exec.Command("dbus-daemon", "--session", "--nofork", "--nopidfile", "--address="+addr)
+	cmd := exec.CommandContext(context.Background(), "dbus-daemon", "--session", "--nofork", "--nopidfile", "--address="+addr)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("dbus-daemon: %v", err)
 	}
@@ -221,7 +224,7 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	os.Setenv("DBUS_SESSION_BUS_ADDRESS", addr)
+	_ = os.Setenv("DBUS_SESSION_BUS_ADDRESS", addr)
 	t.Cleanup(func() {
 		if userAddr == "" {
 			_ = os.Unsetenv("DBUS_SESSION_BUS_ADDRESS")
@@ -283,13 +286,16 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 	return addr, srv, cleanup
 }
 
-type serviceObj struct{ s *Server }
-type collectionObj struct{ s *Server }
+type (
+	serviceObj    struct{ s *Server }
+	collectionObj struct{ s *Server }
+)
 
 func (o *serviceObj) OpenSession(algorithm string, input dbus.Variant) (dbus.Variant, dbus.ObjectPath, *dbus.Error) {
 	o.s.record("OpenSession")
 	return o.s.OpenSession(algorithm, input)
 }
+
 func (o *serviceObj) SearchItems(attributes map[string]string) ([]dbus.ObjectPath, []dbus.ObjectPath, *dbus.Error) {
 	o.s.record("SearchItems")
 	o.s.mu.Lock()
@@ -300,18 +306,22 @@ func (o *serviceObj) SearchItems(attributes map[string]string) ([]dbus.ObjectPat
 	}
 	return o.s.SearchItems(attributes)
 }
+
 func (o *serviceObj) GetSecrets(items []dbus.ObjectPath, session dbus.ObjectPath) (map[dbus.ObjectPath]secretBlob, *dbus.Error) {
 	o.s.record("GetSecrets")
 	return o.s.GetSecrets(items, session)
 }
+
 func (o *serviceObj) ReadAlias(name string) (dbus.ObjectPath, *dbus.Error) {
 	o.s.record("ReadAlias")
 	return o.s.ReadAlias(name)
 }
+
 func (o *serviceObj) Unlock(paths []dbus.ObjectPath) ([]dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
 	o.s.record("Unlock")
 	return o.s.Unlock(paths)
 }
+
 func (o *collectionObj) CreateItem(properties map[string]dbus.Variant, secret secretBlob, replace bool) (dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
 	o.s.record("CreateItem")
 	return o.s.CreateItem(properties, secret, replace)

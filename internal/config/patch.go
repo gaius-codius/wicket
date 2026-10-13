@@ -226,7 +226,7 @@ func (d *document) patch() ([]byte, error) {
 			l++
 		}
 		at = stmts[l].end
-		if l+1 < len(stmts) && !(stmts[l+1].kind == stmtTrivia && !stmts[l+1].comment) {
+		if l+1 < len(stmts) && (stmts[l+1].kind != stmtTrivia || stmts[l+1].comment) {
 			after = nl
 		}
 	}

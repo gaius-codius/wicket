@@ -2,6 +2,7 @@ package theme
 
 import (
 	"image/color"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -19,7 +20,7 @@ func TestWicketPalettes_TextReadsOnCommonBackgrounds(t *testing.T) {
 		{"dark", wicketDark(), []string{"#000000", "#1E1E2E", "#282C34", "#2E3440"}},
 		{"light", wicketLight(), []string{"#FFFFFF", "#FAFAFA", "#EEE8D5"}},
 	} {
-		bgs := append(tc.bgs, tc.pal["surface"], tc.pal["selection"])
+		bgs := append(slices.Clone(tc.bgs), tc.pal["surface"], tc.pal["selection"])
 		for _, role := range textRoles {
 			for _, bg := range bgs {
 				if c := contrast(tc.pal[role], bg); c < minTextContrast {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
@@ -298,7 +300,7 @@ func TestSession_StartErrorOffersRetry(t *testing.T) {
 type brokenRunner struct{ rdp.OSRunner }
 
 func (brokenRunner) Command(string, ...string) *exec.Cmd {
-	return exec.Command(filepath.Join(os.TempDir(), "wicket-no-such-client"))
+	return exec.CommandContext(context.Background(), filepath.Join(os.TempDir(), "wicket-no-such-client"))
 }
 
 // A client that fails goes to the retry offer, and shows what it said.
@@ -430,7 +432,7 @@ func TestRun_QuitStopsTheSessionAndKeepsItsOutput(t *testing.T) {
 	_ = h.store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
 
 	inR, inW := io.Pipe()
-	defer inW.Close()
+	defer func() { _ = inW.Close() }()
 	var out lockedBuffer
 	done := make(chan error, 1)
 	go func() {

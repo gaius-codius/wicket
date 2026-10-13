@@ -14,6 +14,8 @@ set -eu
 
 REPO="gaius-codius/wicket"
 RELEASES="${WICKET_RELEASES_URL:-https://github.com/$REPO/releases}"
+# Where the wget path reads the latest tag; curl reads it from $RELEASES.
+API="${WICKET_API_URL:-https://api.github.com/repos/$REPO}"
 BINDIR="${WICKET_BINDIR:-$HOME/.local/bin}"
 # Releases published before the release workflow attested its builds, and
 # the SHA-256 of each of their tarballs. Their SHA256SUMS sits next to the
@@ -80,11 +82,25 @@ stop() {
 		return
 	fi
 	if [ -n "$child" ]; then
-		kill "$child" 2>/dev/null || :
+		kill_tree TERM "$child"
 		wait "$child" 2>/dev/null || :
 	fi
 	rm -rf "$tmp"
 	exit "$1"
+}
+
+# kill_tree sends signal $1 to process $2 and everything under it, the
+# deepest first, so none is handed to init before it is found. Without job
+# control there is no process group to signal, and set -m in sh can take the
+# terminal from the script, so this walks the tree with pgrep. Busybox wget
+# hands https to a forked helper that would hold the connection until the
+# server drops it, and a FreeRDP client can be a wrapper around the real
+# binary. Where there is no pgrep only $2 itself is signalled.
+kill_tree() {
+	for kt_child in $(pgrep -P "$2" 2>/dev/null); do
+		kill_tree "$1" "$kt_child"
+	done
+	kill "-$1" "$2" 2>/dev/null || :
 }
 
 fetch() { # url dest
@@ -135,14 +151,21 @@ latest_tag() {
 		run curl -fsSLI --proto-redir '=https' -o /dev/null -w '%{url_effective}' \
 			"$RELEASES/latest" >"$tmp/latest" || die "could not reach $RELEASES"
 		url=$(cat "$tmp/latest")
-		tag=${url##*/}
+		# All of it: a tag can hold a /, and its last part alone could
+		# name another release.
+		case "$url" in
+		*/releases/tag/*) tag=${url#*/releases/tag/} ;;
+		*) tag="" ;;
+		esac
 	else
 		: >"$tmp/latest"
-		wget_https "https://api.github.com/repos/$REPO/releases/latest" "$tmp/latest" || :
+		wget_https "$API/releases/latest" "$tmp/latest" || :
 		tag=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmp/latest" | head -n 1)
 	fi
+	# Only a plain vX.Y.Z, as the tag goes into a path and a URL.
 	case "$tag" in
-	v[0-9]*) ;;
+	v*[!0-9.]* | v*..* | v*. | v*.*.*.*) die "no release found at $RELEASES" ;;
+	v[0-9]*.[0-9]*.[0-9]*) ;;
 	*) die "no release found at $RELEASES" ;;
 	esac
 }
@@ -207,9 +230,14 @@ provenance() {
 	esac
 }
 
+# installed_version sets $current to the installed wicket's version, or to
+# nothing. Through run and a file, as in latest_tag: a trapped signal would
+# wait for a binary that hangs.
 installed_version() {
+	current=""
 	[ -x "$BINDIR/wicket" ] || return 0
-	"$BINDIR/wicket" --version 2>/dev/null | cut -d ' ' -f 2
+	run "$BINDIR/wicket" --version >"$tmp/installed" 2>/dev/null || :
+	current=$(cut -d ' ' -f 2 "$tmp/installed")
 }
 
 uninstall() {
@@ -252,6 +280,10 @@ main() {
 	https://*) ;;
 	*) die "WICKET_RELEASES_URL must be an https URL: $RELEASES" ;;
 	esac
+	case "$API" in
+	https://*) ;;
+	*) die "WICKET_API_URL must be an https URL: $API" ;;
+	esac
 
 	os=$(uname -s)
 	case "$os" in
@@ -270,6 +302,7 @@ main() {
 	trap 'rm -rf "$tmp"' EXIT
 	# A signal trap that only cleaned up would let the script carry on
 	# without $tmp. Stop with the status the shell would give.
+	trap 'stop 129' HUP
 	trap 'stop 130' INT
 	trap 'stop 131' QUIT
 	trap 'stop 143' TERM
@@ -278,7 +311,7 @@ main() {
 	case "$tag" in v*) ;; *) tag="v$tag" ;; esac
 	version=${tag#v}
 
-	current=$(installed_version)
+	installed_version
 	if [ "$current" = "$version" ]; then
 		say "wicket $version is already installed at $BINDIR/wicket"
 		return
@@ -347,7 +380,10 @@ freerdp3() {
 }
 
 # freerdp3_probe runs "$1 --version" into $fr_out, killing it after 3 s. When
-# stop kills the probe, it takes the client and the watcher with it.
+# stop kills the probe, it takes the client (with kill_tree, any process it
+# started) and the watcher with it. A process the client starts and leaves
+# behind when it exits on its own is not stopped: by then it belongs to init
+# and nothing ties it to the client.
 # A TERM that arrives while the client and watcher are being started is held
 # until both pids are known, as in run.
 freerdp3_probe() {
@@ -368,7 +404,7 @@ freerdp3_probe() {
 		# a redirection error on a special builtin exits sh.
 		wait "$fr_sleep" && {
 			printf '' >"$fr_out.timeout" || :
-			kill -KILL "$fr_pid"
+			kill_tree KILL "$fr_pid"
 		}
 	) &
 	fr_watch=$!
@@ -380,7 +416,7 @@ freerdp3_probe() {
 }
 
 freerdp3_probe_stop() {
-	kill -KILL "$fr_pid" 2>/dev/null || :
+	kill_tree KILL "$fr_pid"
 	kill "$fr_watch" 2>/dev/null || :
 	wait
 	exit 143

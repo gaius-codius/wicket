@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -42,24 +44,87 @@ func ParseFreeRDPMajor(out []byte) (major int, ok bool) {
 }
 
 // FreeRDPMajor runs the client at path with --version and returns the major
-// version it reports. ok is false when it cannot be run, does not finish
+// version it reports. ok is false when it cannot be run, does not exit
 // within versionTimeout, or prints no version line. Its exit status is not
 // read: a build may report its version and still exit non-zero.
 func FreeRDPMajor(path string) (major int, ok bool) {
-	return probeMajor(path, versionTimeout)
+	return FreeRDPMajorContext(context.Background(), path)
 }
 
-func probeMajor(path string, timeout time.Duration) (int, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+// FreeRDPMajorContext is FreeRDPMajor, also stopped, with everything the
+// client started, when ctx is done. The client runs in a process group of
+// its own, out of reach of a Ctrl+C typed at the terminal, so a caller with
+// no handler of its own cancels ctx on the signal instead.
+func FreeRDPMajorContext(ctx context.Context, path string) (major int, ok bool) {
+	return probeMajor(ctx, path, versionTimeout)
+}
+
+// probeWaitExited is waitExited; a test stands in for a system where it
+// fails.
+var probeWaitExited = waitExited
+
+func probeMajor(ctx context.Context, path string, timeout time.Duration) (int, bool) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, "--version")
 	out := &cappedBuffer{limit: versionOutputLimit}
 	cmd.Stdout, cmd.Stderr = out, out
-	// A child the client leaves behind could hold the pipe open after the
-	// client is killed; WaitDelay stops Run waiting on it.
+	// In a group of its own, the client goes together with whatever it
+	// starts: a wrapper script that runs FreeRDP without exec, or a helper.
+	// Killing only the client left those running.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var (
+		mu sync.Mutex
+		// reaped is set just before Wait collects the client.
+		reaped bool
+		// owned is true while nothing can collect the client unseen, so its
+		// pid, and with it the group id, is not free for reuse.
+		owned = true
+	)
+	stop := func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case reaped:
+		case owned:
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		default:
+			// Wait may already have collected the client, and a group id
+			// may be reused once it has. Process.Kill knows when its
+			// process is gone, so the client at least is stopped.
+			_ = cmd.Process.Kill()
+		}
+		return nil
+	}
+	cmd.Cancel = stop
+	// A child that left the group could still hold the output open after
+	// the client exits; WaitDelay stops Wait waiting on it.
 	cmd.WaitDelay = time.Second
-	_ = cmd.Run()
-	if ctx.Err() != nil {
+	if err := cmd.Start(); err != nil {
+		return 0, false
+	}
+	exited := probeWaitExited(cmd.Process.Pid)
+	mu.Lock()
+	if exited {
+		// Anything left in the group is a helper; it goes with the client,
+		// while the group id is still ours, and stops holding the output.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		reaped = true
+	} else {
+		// Without the wait, nothing says when Wait collects the client:
+		// from here the deadline stops the client alone.
+		owned = false
+	}
+	mu.Unlock()
+	_ = cmd.Wait()
+	if cmd.ProcessState == nil {
+		// Wait could not collect the client, so nothing says how it ended.
+		return 0, false
+	}
+	// A client ended by SIGKILL is taken to be the one the deadline stopped.
+	// A client that exited on its own is read, even past the deadline, when
+	// a helper that left its group kept the output open after it.
+	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL {
 		return 0, false
 	}
 	return ParseFreeRDPMajor(out.buf.Bytes())

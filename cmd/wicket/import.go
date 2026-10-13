@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/importer"
@@ -96,13 +100,50 @@ func parseImportFlags(args []string) (dryRun, rename bool, rest []string, err er
 	return dryRun, rename, rest, nil
 }
 
+// lookPath finds the installed clients, to pick the imported profiles'
+// client. Tests replace it, so that no test runs whatever FreeRDP the
+// machine has.
+var lookPath = exec.LookPath
+
+// importClient picks the client for the imported profiles, asking each
+// unversioned one its version. The probes run each client in a process group
+// of its own, which a Ctrl+C at the terminal does not reach, so a signal
+// while they run stops them here; sig is that signal, and import then ends
+// as connect does when one stops it.
+func importClient() (client string, sig syscall.Signal) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigs)
+	ctx, cancel := context.WithCancel(context.Background())
+	done, caught := make(chan struct{}), make(chan syscall.Signal, 1)
+	go func() {
+		select {
+		case s := <-sigs:
+			cancel()
+			caught <- s.(syscall.Signal)
+		case <-done:
+			caught <- 0
+		}
+	}()
+	client = rdp.PreferredClient(rdp.InstalledClients(lookPath, func(path string) (int, bool) {
+		return rdp.FreeRDPMajorContext(ctx, path)
+	}))
+	close(done)
+	sig = <-caught
+	cancel()
+	return client, sig
+}
+
 func doImport(stdout, stderr io.Writer, dryRun, rename bool, parse func() ([]config.Import, []importer.Skip, error)) int {
 	profiles, parseSkipped, err := parse()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	client := rdp.PreferredClient(rdp.InstalledClients(exec.LookPath, rdp.FreeRDPMajor))
+	client, sig := importClient()
+	if sig != 0 {
+		return 128 + int(sig)
+	}
 	for i := range profiles {
 		profiles[i].Client = client
 	}

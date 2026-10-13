@@ -6,8 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
@@ -401,4 +404,56 @@ func TestImport_RunsNoHostClient(t *testing.T) {
 	if p, _ := c.Profile("upn"); p.Client != config.DefaultClient {
 		t.Fatalf("client %q, want %q", p.Client, config.DefaultClient)
 	}
+}
+
+// A signal while import asks a hanging client its version stops the client,
+// and everything it started, and ends the import as the signal would,
+// writing nothing. The client is in a group of its own, so a Ctrl+C at the
+// terminal would not reach it.
+func TestImport_SignalStopsTheProbe(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	t.Setenv("WICKET_CONFIG", cfgPath)
+	t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+	bin, pidFile := t.TempDir(), filepath.Join(t.TempDir(), "pid")
+	script := "#!/bin/sh\necho $$ > " + pidFile + "\nsh -c 'sleep 30' &\nsleep 30\n"
+	if err := os.WriteFile(filepath.Join(bin, "xfreerdp"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The stand-in needs sh and sleep from PATH, so import alone is kept to
+	// bin.
+	useLookPath(t, func(name string) (string, error) {
+		return exec.LookPath(filepath.Join(bin, name))
+	})
+	go func() {
+		// The client writes its pid once import is waiting on it, by when
+		// import's handler is in place to catch the signal.
+		for {
+			if b, err := os.ReadFile(pidFile); err == nil && len(b) > 0 {
+				_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	file := filepath.Join("..", "..", "internal", "importer", "testdata", "upn.rdp")
+	start := time.Now()
+	got := runCLI(t, []string{"import", "rdp", file})
+	if want := 128 + int(syscall.SIGINT); got.code != want {
+		t.Fatalf("import exit %d, want %d; stderr %q", got.code, want, got.stderr)
+	}
+	if d := time.Since(start); d >= 3*time.Second {
+		t.Fatalf("import took %v, the probe ran to its timeout", d)
+	}
+	if _, err := os.Stat(cfgPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("config written: %v", err)
+	}
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pgid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.WaitGroupGone(t, pgid)
 }

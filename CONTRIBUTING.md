@@ -63,8 +63,9 @@ go build ./cmd/wicket/
 ```
 
 CI runs the same on Linux through the shared
-[go-ci](https://github.com/gaius-codius/go-ci) workflow, plus a short
-`FuzzSave` run, and the tests with the Keychain backend on macOS.
+[go-ci](https://github.com/gaius-codius/go-ci) workflow, plus short runs
+of `FuzzSave` and the importer's `FuzzParseRDP` and `FuzzParseRemmina`, and
+the tests with the Keychain backend on macOS.
 `.golangci.yml` is go-ci's baseline with wicket's exclusions, each with its
 reason; suppress a single finding only with `//nolint:<linter> // reason`. A
 reachable vulnerability fails `govulncheck.sh` unless

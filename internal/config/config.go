@@ -238,6 +238,15 @@ type DroppedShare struct {
 	Reason  string
 }
 
+// Import is a profile an import read, with the shares its parser refused
+// before the plan saw it. The plan reports them beside the ones it drops
+// itself, under the name the profile is imported as, which only the plan
+// knows once a collision is renamed.
+type Import struct {
+	Profile
+	Refused []DroppedShare
+}
+
 // errNoSave tells mutate the edit made no change, so the file must not be written.
 var errNoSave = errors.New("config: no save needed")
 
@@ -245,7 +254,7 @@ var errNoSave = errors.New("config: no save needed")
 // single locked reload/save, by the rules of PlanProfiles against the
 // reloaded config. An empty input, or an input that yields nothing to write,
 // does not touch the file.
-func (c *Config) AddProfiles(profiles []Profile, rename bool) (added []Profile, skipped []Skip, dropped []DroppedShare, err error) {
+func (c *Config) AddProfiles(profiles []Import, rename bool) (added []Profile, skipped []Skip, dropped []DroppedShare, err error) {
 	if len(profiles) == 0 {
 		return nil, nil, nil, nil
 	}
@@ -269,15 +278,19 @@ func (c *Config) AddProfiles(profiles []Profile, rename bool) (added []Profile, 
 // A share that would not load (relative path, bad name) is dropped, and
 // reported in dropped when its profile is accepted, so the summary does not
 // claim every folder came across; a folder that is only missing on disk is
-// kept. A name collision is skipped unless rename is set, in which case
-// "-2", "-3", … are tried until free. AddProfiles and a dry run share it.
-func PlanProfiles(existing, profiles []Profile, rename bool) (accepted []Profile, skipped []Skip, dropped []DroppedShare) {
+// kept. A share the parser refused is reported the same way, first. A name
+// collision is skipped unless rename is set, in which case "-2", "-3", … are
+// tried until free. AddProfiles and a dry run share it.
+func PlanProfiles(existing []Profile, profiles []Import, rename bool) (accepted []Profile, skipped []Skip, dropped []DroppedShare) {
 	taken := make(map[string]bool, len(existing)+len(profiles))
 	for _, p := range existing {
 		taken[p.Name] = true
 	}
-	for _, p := range profiles {
-		p, lost := dropUnimportableShares(p)
+	for _, in := range profiles {
+		p, lost := dropUnimportableShares(in.Profile)
+		// A new list: appending to Refused itself could write past its end
+		// into the caller's array.
+		lost = append(append([]DroppedShare(nil), in.Refused...), lost...)
 		if err := validateImported(p); err != nil {
 			skipped = append(skipped, Skip{Name: skipName(p), Reason: err.Error()})
 			continue

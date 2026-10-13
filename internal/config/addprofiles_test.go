@@ -7,6 +7,16 @@ import (
 	"testing"
 )
 
+// imports wraps profiles a test builds as an import's input, with nothing
+// refused.
+func imports(ps ...Profile) []Import {
+	in := make([]Import, len(ps))
+	for i, p := range ps {
+		in[i] = Import{Profile: p}
+	}
+	return in
+}
+
 func TestAddProfiles_OneWrite(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.toml")
@@ -18,7 +28,7 @@ func TestAddProfiles_OneWrite(t *testing.T) {
 	a.Name, a.Host, a.User = "a", "h1", "u1"
 	b := DefaultProfile()
 	b.Name, b.Host, b.User = "b", "h2", "u2"
-	added, skipped, _, err := c.AddProfiles([]Profile{a, b}, false)
+	added, skipped, _, err := c.AddProfiles(imports(a, b), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +61,7 @@ user = "u"
 	other := DefaultProfile()
 	other.Name, other.Host, other.User = "lab", "h3", "u3"
 
-	added, skipped, _, err := c.AddProfiles([]Profile{dup, other}, false)
+	added, skipped, _, err := c.AddProfiles(imports(dup, other), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +72,7 @@ user = "u"
 		t.Fatalf("skipped %+v", skipped)
 	}
 
-	added, skipped, _, err = c.AddProfiles([]Profile{dup}, true)
+	added, skipped, _, err = c.AddProfiles(imports(dup), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +93,7 @@ func TestAddProfiles_InvalidSkippedNoWrite(t *testing.T) {
 	}
 	bad := DefaultProfile()
 	bad.Name, bad.Host, bad.User = "bad", "bad host", "u"
-	added, skipped, _, err := c.AddProfiles([]Profile{bad}, false)
+	added, skipped, _, err := c.AddProfiles(imports(bad), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +138,7 @@ user = "u"
 		p.Name, p.Host, p.User = name, host, "u"
 		return p
 	}
-	in := []Profile{mk("work", "h2"), mk("work", "h3"), mk("bad", "bad host"), mk("lab", "h4")}
+	in := imports(mk("work", "h2"), mk("work", "h3"), mk("bad", "bad host"), mk("lab", "h4"))
 	in[1].Shares = []Share{{Path: "/tmp/a\nb"}, {Path: "/tmp/ok"}}
 	planned, planSkipped, planDropped := PlanProfiles(c.Profiles(), in, true)
 	added, skipped, dropped, err := c.AddProfiles(in, true)
@@ -175,7 +185,7 @@ func TestAddProfiles_KeepsMissingShareDirDropsBadShare(t *testing.T) {
 		{Path: "relative/nope"},
 		{Path: dir, Name: "My Docs"},
 	}
-	added, skipped, dropped, err := c.AddProfiles([]Profile{p}, false)
+	added, skipped, dropped, err := c.AddProfiles(imports(p), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +223,7 @@ func TestPlanProfiles_ReportsDroppedShares(t *testing.T) {
 		return p
 	}
 	existing := []Profile{mk("work", "h")}
-	in := []Profile{
+	in := imports(
 		mk("work", "h2",
 			Share{Path: "/tmp/docs"},
 			Share{Path: "/tmp/a\nb"},
@@ -222,7 +232,11 @@ func TestPlanProfiles_ReportsDroppedShares(t *testing.T) {
 		),
 		mk("bad", "bad host", Share{Path: "relative"}),
 		mk("lab", "h3", Share{Path: "/tmp/lab"}),
-	}
+	)
+	// The parser's refusals come first, under the renamed profile; the
+	// skipped profile's go with it.
+	in[0].Refused = []DroppedShare{{Path: "docs", Reason: "path must be absolute or ~/…"}}
+	in[1].Refused = []DroppedShare{{Path: "/", Reason: "holds home"}}
 	accepted, skipped, dropped := PlanProfiles(existing, in, true)
 	if len(accepted) != 2 || len(skipped) != 1 {
 		t.Fatalf("accepted %+v skipped %+v", accepted, skipped)
@@ -231,6 +245,7 @@ func TestPlanProfiles_ReportsDroppedShares(t *testing.T) {
 		t.Fatalf("kept shares %+v", got)
 	}
 	want := []DroppedShare{
+		{Profile: "work-2", Path: "docs", Reason: "path must be absolute or ~/…"},
 		{Profile: "work-2", Path: "/tmp/a\nb", Reason: "path must not contain control characters"},
 		{Profile: "work-2", Path: "/srv/docs", Reason: `duplicate share name "docs"`},
 	}

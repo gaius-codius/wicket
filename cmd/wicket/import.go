@@ -55,7 +55,7 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "cannot resolve Remmina directory: no home")
 			return 2
 		}
-		return doImport(stdout, stderr, dryRun, rename, func() ([]config.Profile, []importer.Skip, error) {
+		return doImport(stdout, stderr, dryRun, rename, func() ([]config.Import, []importer.Skip, error) {
 			return importer.ParseRemminaDir(dir)
 		})
 	case "rdp":
@@ -64,7 +64,7 @@ func runImport(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "usage: wicket import rdp FILE...")
 			return 2
 		}
-		return doImport(stdout, stderr, dryRun, rename, func() ([]config.Profile, []importer.Skip, error) {
+		return doImport(stdout, stderr, dryRun, rename, func() ([]config.Import, []importer.Skip, error) {
 			return importer.ParseRDPFiles(files)
 		})
 	default:
@@ -96,7 +96,7 @@ func parseImportFlags(args []string) (dryRun, rename bool, rest []string, err er
 	return dryRun, rename, rest, nil
 }
 
-func doImport(stdout, stderr io.Writer, dryRun, rename bool, parse func() ([]config.Profile, []importer.Skip, error)) int {
+func doImport(stdout, stderr io.Writer, dryRun, rename bool, parse func() ([]config.Import, []importer.Skip, error)) int {
 	profiles, parseSkipped, err := parse()
 	if err != nil {
 		fmt.Fprintln(stderr, err)

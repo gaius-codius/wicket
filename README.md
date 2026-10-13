@@ -30,22 +30,23 @@ This installs the latest release for amd64 or arm64 into `~/.local/bin` (set
 `WICKET_BINDIR` to change it) after checking it against the release's
 `SHA256SUMS`. Run the same command again to update.
 
-Releases after v0.3.1 carry a signed build provenance attestation. When the
-[GitHub CLI](https://cli.github.com/) is installed and logged in, the installer
-checks it with `gh attestation verify`, and refuses a download that the
-release workflow did not build. Without `gh` it says the check was skipped. To
-check a download yourself:
-
-```
-gh attestation verify wicket_<version>_<os>_<arch>.tar.gz \
-  --repo gaius-codius/wicket --hostname github.com \
-  --signer-workflow gaius-codius/wicket/.github/workflows/release.yml \
-  --source-ref refs/tags/v<version>
-```
-
 ```
 ... | sh -s -- --version v0.1.0   # a given release
 ... | sh -s -- --uninstall        # remove the binary
+```
+
+Releases after v0.3.1 carry a signed build provenance attestation. When the
+[GitHub CLI](https://cli.github.com/) is installed and logged in, the installer
+checks it with `gh attestation verify` and refuses a download the release
+workflow did not build, or one it could not check because GitHub was
+unreachable. When `gh` is missing, older than 2.49 or logged out, it says the
+check was skipped and installs anyway. v0.1.0 to v0.3.1 predate attestations;
+the installer checks those against digests it carries itself. To check a
+download yourself:
+
+```
+gh attestation verify wicket_<version>_<os>_<arch>.tar.gz --repo gaius-codius/wicket \
+  --cert-identity https://github.com/gaius-codius/wicket/.github/workflows/release.yml@refs/tags/v<version>
 ```
 
 Config, state, and keyring entries are never touched. Or, with Go:

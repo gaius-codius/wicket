@@ -30,6 +30,16 @@ This installs the latest release for amd64 or arm64 into `~/.local/bin` (set
 `WICKET_BINDIR` to change it) after checking it against the release's
 `SHA256SUMS`. Run the same command again to update.
 
+Releases after v0.3.1 carry a signed build provenance attestation. When the
+[GitHub CLI](https://cli.github.com/) is installed and logged in, the installer
+checks it with `gh attestation verify`, and refuses a download that the
+release workflow did not build. Without `gh` it says the check was skipped. To
+check a download yourself:
+
+```
+gh attestation verify wicket_<version>_<os>_<arch>.tar.gz --repo gaius-codius/wicket
+```
+
 ```
 ... | sh -s -- --version v0.1.0   # a given release
 ... | sh -s -- --uninstall        # remove the binary

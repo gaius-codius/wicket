@@ -15,6 +15,8 @@ set -eu
 REPO="gaius-codius/wicket"
 RELEASES="${WICKET_RELEASES_URL:-https://github.com/$REPO/releases}"
 BINDIR="${WICKET_BINDIR:-$HOME/.local/bin}"
+# Releases published before the release workflow attested its builds.
+UNATTESTED="v0.1.0 v0.1.1 v0.2.0 v0.3.0 v0.3.1"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'wicket install: %s\n' "$*" >&2; exit 1; }
@@ -25,7 +27,8 @@ Usage: install.sh [--version vX.Y.Z] [--uninstall]
 
 Installs the latest wicket release into ~/.local/bin (override with
 WICKET_BINDIR), or updates an existing install. Checks the download against
-the release's SHA256SUMS.
+the release's SHA256SUMS and, when gh is installed and logged in, checks that
+the release workflow built it.
 
   --version vX.Y.Z   install that release instead of the latest
   --uninstall        remove the binary; config, state and keyring stay
@@ -70,9 +73,37 @@ fetch() { # url dest
 	if command -v curl >/dev/null 2>&1; then
 		run curl -fsSL --proto-redir '=https' -o "$2" "$1"
 	elif command -v wget >/dev/null 2>&1; then
-		run wget -q -O "$2" "$1"
+		wget_https "$1" "$2"
 	else
 		die "need curl or wget"
+	fi
+}
+
+# wget_https fetches $1 into $2 with wget, and refuses the result if wget
+# followed a redirect to anything but https. Wget2 (Fedora's wget) has
+# --https-only for that, but skips such a redirect, writes nothing and exits
+# 0. GNU wget 1.x only applies --https-only to recursive downloads, and
+# busybox has no such option, so for them this reads the Location headers
+# printed for -S; a download that came over plain http is never used. A log
+# with no status line means this wget did not print its headers, and an
+# unchecked redirect is not let through.
+wget_https() {
+	: >"$tmp/wget-version"
+	run wget --version >"$tmp/wget-version" 2>/dev/null || :
+	if grep -q 'Wget2' "$tmp/wget-version"; then
+		rm -f "$2"
+		run wget -q --https-only -O "$2" "$1" || return
+		[ -e "$2" ] || die "refused a redirect away from https while fetching $1"
+		return
+	fi
+	run wget -S -O "$2" "$1" 2>"$tmp/wget.log" || return
+	grep -q 'HTTP/' "$tmp/wget.log" ||
+		die "wget did not show its redirects, so they could not be checked; install curl"
+	# A Location with a scheme other than https. One without a scheme is
+	# relative and keeps https.
+	if grep -i '^ *location: *[a-z][a-z0-9+.-]*:' "$tmp/wget.log" |
+		grep -iqv '^ *location: *https:'; then
+		die "refused a redirect away from https while fetching $1"
 	fi
 }
 
@@ -87,7 +118,7 @@ latest_tag() {
 		tag=${url##*/}
 	else
 		: >"$tmp/latest"
-		run wget -qO "$tmp/latest" "https://api.github.com/repos/$REPO/releases/latest" || :
+		wget_https "https://api.github.com/repos/$REPO/releases/latest" "$tmp/latest" || :
 		tag=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmp/latest" | head -n 1)
 	fi
 	case "$tag" in
@@ -104,6 +135,45 @@ sha256() {
 	else
 		die "need sha256sum or shasum to check the download"
 	fi
+}
+
+# provenance checks, with gh, that the release workflow built tarball $1 from
+# $tag. SHA256SUMS comes from the same place as the tarball, so it shows the
+# download is whole, not who made it. When gh cannot check (not installed,
+# too old, not logged in) this says so and the install carries on; a check
+# that runs and fails stops it. A release that is meant to be attested and
+# is not fails like a forged one, as the two look the same.
+provenance() {
+	case " $UNATTESTED " in
+	*" $tag "*)
+		say "note: $tag predates build attestations; provenance not checked"
+		return
+		;;
+	esac
+	if ! command -v gh >/dev/null 2>&1; then
+		say "note: provenance not checked; install gh to check it"
+		return
+	fi
+	# gh has had attestation verify since 2.49, and --source-ref since later.
+	: >"$tmp/gh-help"
+	run gh attestation verify --help >"$tmp/gh-help" 2>/dev/null || :
+	if ! grep -q -- '--source-ref' "$tmp/gh-help"; then
+		say "note: provenance not checked; this gh is too old to check it"
+		return
+	fi
+	pv_status=0
+	run gh attestation verify "$1" --repo "$REPO" \
+		--signer-workflow "$REPO/.github/workflows/release.yml" \
+		--source-ref "refs/tags/$tag" >"$tmp/provenance" 2>&1 || pv_status=$?
+	case "$pv_status" in
+	0) say "verified provenance: built by $REPO's release workflow from $tag" ;;
+	# gh's exit status when it needs to be logged in.
+	4) say "note: provenance not checked; gh is not logged in (gh auth login)" ;;
+	*)
+		cat "$tmp/provenance" >&2
+		die "provenance check failed for $name.tar.gz; not installing it"
+		;;
+	esac
 }
 
 installed_version() {
@@ -144,6 +214,13 @@ main() {
 			;;
 		esac
 	done
+
+	# curl keeps redirects on https (--proto-redir), and wget_https checks
+	# them; the first request has to be https as well.
+	case "$RELEASES" in
+	https://*) ;;
+	*) die "WICKET_RELEASES_URL must be an https URL: $RELEASES" ;;
+	esac
 
 	os=$(uname -s)
 	case "$os" in
@@ -187,6 +264,7 @@ main() {
 	want=$(awk -v f="$name.tar.gz" '$2 == f { print $1 }' "$tmp/SHA256SUMS")
 	[ -n "$want" ] || die "$name.tar.gz is not listed in SHA256SUMS"
 	[ "$(sha256 "$tmp/$name.tar.gz")" = "$want" ] || die "checksum mismatch for $name.tar.gz"
+	provenance "$tmp/$name.tar.gz"
 
 	tar -xzf "$tmp/$name.tar.gz" -C "$tmp"
 	mkdir -p "$BINDIR"

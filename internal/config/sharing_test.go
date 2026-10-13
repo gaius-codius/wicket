@@ -262,6 +262,19 @@ func TestShares_RejectsBadEntries(t *testing.T) {
 	}
 }
 
+// A share under ~ is refused with the reason when there is no home folder to
+// expand it with. Not parallel: it unsets HOME.
+func TestShares_RejectsTildeWithoutHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	p := validProfile()
+	p.Shares = []Share{{Path: "~/docs"}}
+	err := ValidateProfile(p)
+	var fe *FieldError
+	if !errors.As(err, &fe) || fe.Field != "shares" || !strings.Contains(fe.Msg, "$HOME is not defined") {
+		t.Fatalf("err %v", err)
+	}
+}
+
 func TestShares_LoadSkipsMissingDir(t *testing.T) {
 	t.Parallel()
 	// A share whose folder has gone must still load; only save/connect refuse.

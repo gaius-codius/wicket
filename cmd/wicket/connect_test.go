@@ -17,6 +17,7 @@ import (
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
 	"github.com/gaius-codius/wicket/internal/testutil"
+	"github.com/gaius-codius/wicket/internal/testutil/fakesecret"
 )
 
 // bg is the context tests hand the keyring.
@@ -399,5 +400,83 @@ func TestConnect_NoSessionBus(t *testing.T) {
 	}
 	if !strings.Contains(got.stderr, "keyring") || strings.Contains(got.stderr, "TUI") {
 		t.Fatalf("stderr %q", got.stderr)
+	}
+}
+
+// A stored password behind a locked keyring, with the unlock prompt refused,
+// once read as "no stored password": connect told a script to go and save
+// one, and offered a terminal user a save into the same locked keyring
+// (issue #64). This runs against the D-Bus store and a fake Secret Service,
+// so the error connect sees is the one the store really returns.
+func TestConnect_DismissedUnlock(t *testing.T) {
+	// The subtest names end up in the fake bus's socket path, so they keep
+	// to characters a D-Bus address does not need escaped.
+	for name, tty := range map[string]bool{"pipe": false, "terminal": true} {
+		t.Run(name, func(t *testing.T) {
+			_, srv, cleanup := fakesecret.Start(t)
+			defer cleanup()
+			cfgPath := writeConnectConfig(t, validTOML())
+			t.Setenv("WICKET_CONFIG", cfgPath)
+			t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+			testutil.PrependPATH(t, testutil.FakeRDPDir(t))
+			rec := filepath.Join(t.TempDir(), "rec.json")
+			t.Setenv("FAKERDP_RECORD", rec)
+
+			cfg, err := config.Open(cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, _ := cfg.Profile("work")
+			pw, _ := secret.NewPassword("s3cret")
+			if err := secret.NewDBus().Upsert(bg, secret.IdentityFor(cfg.Path(), p), pw); err != nil {
+				t.Fatal(err)
+			}
+			srv.SetLocked(true)
+			srv.SetPrompt(fakesecret.PromptDismiss)
+
+			// Stdin already holds a "y", so a save offer that should not
+			// have been made is answered.
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = r.Close() })
+			if _, err := w.Write([]byte("y\n")); err != nil {
+				t.Fatal(err)
+			}
+			_ = w.Close()
+
+			oldStore, oldTTY, oldRead, oldIn := openStore, isTerminal, readPassword, stdinFile
+			openStore = func() secret.Store { return secret.NewDBus() }
+			isTerminal = func(int) bool { return tty }
+			readPassword = func(int) ([]byte, error) { return []byte("typed"), nil }
+			stdinFile = func() *os.File { return r }
+			t.Cleanup(func() {
+				openStore, isTerminal, readPassword, stdinFile = oldStore, oldTTY, oldRead, oldIn
+			})
+
+			got := runCLI(t, []string{"connect", "work"})
+			if strings.Contains(got.stderr, "no stored password") {
+				t.Fatalf("stderr %q claims no password is stored", got.stderr)
+			}
+			if !strings.Contains(got.stderr, "keyring is locked") {
+				t.Errorf("stderr %q does not say the keyring is locked", got.stderr)
+			}
+			if strings.Contains(got.stderr, "Save password") {
+				t.Errorf("stderr %q offers a save into the locked keyring", got.stderr)
+			}
+			if !tty {
+				if got.code != 2 {
+					t.Fatalf("exit %d stderr %q, want 2", got.code, got.stderr)
+				}
+				return
+			}
+			if got.code != 0 {
+				t.Fatalf("exit %d stderr %q", got.code, got.stderr)
+			}
+			if rr := testutil.ReadRecord(t, rec); rr.Stdin != "typed\n" {
+				t.Errorf("client stdin %q, want the typed password", rr.Stdin)
+			}
+		})
 	}
 }

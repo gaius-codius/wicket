@@ -231,6 +231,15 @@ func TestKeyringProblem_IsShort(t *testing.T) {
 	}
 }
 
+func TestKeyringProblem_Locked(t *testing.T) {
+	// An Unlock call that failed outright carries no prompt sentinel; the
+	// phrase still says what is wrong rather than "unavailable".
+	err := fmt.Errorf("%w (%w: %v)", secret.ErrLocked, secret.ErrUnavailable, errors.New("org.freedesktop.DBus.Error.Failed"))
+	if got := keyringProblem(err); got != "the keyring is locked" {
+		t.Errorf("keyringProblem(%v) = %q", err, got)
+	}
+}
+
 // A saved password Wicket cannot use was read without trouble, so it is not
 // reported as a keyring fault, and the phrase says what is wrong with it.
 func TestKeyringProblem_SavedPasswordUnusable(t *testing.T) {

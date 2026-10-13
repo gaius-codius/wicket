@@ -34,6 +34,9 @@ func (p Presence) String() string {
 // Every method takes a context, and gives up with an error wrapping
 // ErrUnavailable once it is done. Lookup, Upsert and Delete may wait on a
 // person answering a keyring prompt, so they can take minutes; see OpTimeout.
+// Lookup returns ErrNotFound only when nothing is stored. A stored password
+// behind a keyring that stayed locked is ErrLocked, which also wraps
+// ErrUnavailable.
 type Store interface {
 	Lookup(context.Context, Identity) (LookupResult, error)
 	Upsert(context.Context, Identity, Password) error

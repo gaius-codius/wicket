@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,8 +118,9 @@ func TestDBus_WritesWaitForTheKeyringPrompt(t *testing.T) {
 
 // Reading from a locked keyring goes through Unlock, which answers with a
 // prompt of its own. Until this was exercised, nothing proved that Wicket
-// waits for it -- or that a refused prompt reads as "no password" rather than
-// as an error the user cannot act on.
+// waits for it. A refused prompt leaves a stored password unreadable, which
+// is not the same as having none: "not found" sent connect off to offer a
+// save into the same locked keyring (issue #64).
 func TestDBus_LookupUnlocksALockedKeyring(t *testing.T) {
 	_, srv, cleanup := fakesecret.Start(t)
 	defer cleanup()
@@ -135,8 +137,23 @@ func TestDBus_LookupUnlocksALockedKeyring(t *testing.T) {
 
 	srv.SetLocked(true)
 	srv.SetPrompt(fakesecret.PromptDismiss)
-	if _, err := store.Lookup(bg, id); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("dismissed unlock: err = %v, want ErrNotFound", err)
+	_, err = store.Lookup(bg, id)
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("dismissed unlock: err = %v, which says nothing is stored", err)
+	}
+	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrPromptDismissed) || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("dismissed unlock: err = %v, want ErrLocked wrapping the dismissal", err)
+	}
+
+	// Locked, but nothing stored for this profile: that is still "not
+	// found", and no prompt should be raised to find it out.
+	other := IdentityFor("/tmp/a.toml", config.Profile{ID: "11111111-2222-4333-8444-555555555555", Name: "home", Host: "h2", User: "u"})
+	before := len(srv.Calls())
+	if _, err := store.Lookup(bg, other); !errors.Is(err, ErrNotFound) || errors.Is(err, ErrLocked) {
+		t.Fatalf("locked, no match: err = %v, want ErrNotFound", err)
+	}
+	if slices.Contains(srv.Calls()[before:], "Unlock") {
+		t.Fatal("locked, no match: Lookup asked to unlock the keyring")
 	}
 
 	srv.SetPrompt(fakesecret.PromptAccept)
@@ -150,6 +167,36 @@ func TestDBus_LookupUnlocksALockedKeyring(t *testing.T) {
 	}
 	if buf.String() != "s3cret\n" {
 		t.Fatalf("lookup %q", buf.String())
+	}
+}
+
+// An unlock prompt nobody answers leaves the password just as unreadable as
+// a refused one, and must not read as "not found" either.
+func TestDBus_LookupWithAnUnansweredUnlockIsLocked(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	old := promptTimeout
+	promptTimeout = 150 * time.Millisecond
+	defer func() { promptTimeout = old }()
+
+	store := NewDBus()
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Upsert(bg, id, pw); err != nil {
+		t.Fatal(err)
+	}
+	srv.SetLocked(true)
+	srv.SetPrompt(fakesecret.PromptStall)
+	_, err = store.Lookup(bg, id)
+	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrPromptTimeout) || errors.Is(err, ErrNotFound) {
+		t.Fatalf("unanswered unlock: err = %v, want ErrLocked wrapping the timeout", err)
+	}
+	if n := srv.Dismissed(); n != 1 {
+		t.Fatalf("prompt dismissed %d times, want 1", n)
 	}
 }
 

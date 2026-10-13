@@ -49,6 +49,10 @@ var (
 	ErrPromptDismissed = errors.New("the keyring prompt was dismissed")
 	// ErrPromptTimeout means nobody answered a keyring prompt in time.
 	ErrPromptTimeout = errors.New("timed out waiting for the keyring prompt")
+	// ErrLocked means a lookup found a stored password but could not read
+	// it because the keyring stayed locked. It wraps why the unlock failed,
+	// usually ErrPromptDismissed, and that cause wraps ErrUnavailable.
+	ErrLocked = errors.New("the keyring is locked")
 )
 
 type ssSecret struct {
@@ -146,22 +150,38 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 	if err != nil {
 		return LookupResult{}, err
 	}
+	// A locked keyring answers Unlock with a prompt path. Items that stay
+	// locked simply yield no secret below, so a failed or dismissed prompt
+	// is not fatal here -- unless the caller gave up, which is not the same
+	// as the user saying no. It is kept, though: if nothing could be read,
+	// a password is stored behind it, and "not found" would send the user
+	// off to save one into the same locked keyring.
+	var unlockErr error
 	if len(locked) > 0 {
 		var opened []dbus.ObjectPath
 		var prompt dbus.ObjectPath
-		if err := svc.CallWithContext(ctx, ssServiceIface+".Unlock", 0, locked).Store(&opened, &prompt); err == nil {
-			// A locked keyring answers with a prompt path. Items that stay
-			// locked simply yield no secret below, so a failed or dismissed
-			// prompt is not fatal here -- unless the caller gave up, which
-			// is not the same as the user saying no.
-			if err := runPrompt(ctx, conn, prompt); err != nil && ctx.Err() != nil {
+		if err := svc.CallWithContext(ctx, ssServiceIface+".Unlock", 0, locked).Store(&opened, &prompt); err != nil {
+			unlockErr = unavailable(ctx, err)
+		} else if err := runPrompt(ctx, conn, prompt); err != nil {
+			if ctx.Err() != nil {
 				return LookupResult{}, err
 			}
+			unlockErr = err
 		}
 	}
+	// After a refused unlock only the unlocked matches can be read. Asking
+	// for the locked ones too would leave the outcome to the backend: some
+	// skip them, others fail the whole call, and a failure here would hide
+	// that the keyring is locked behind a generic "unavailable".
+	readable := items
+	if unlockErr != nil {
+		readable = unlocked
+	}
 	secrets := map[dbus.ObjectPath]ssSecret{}
-	if err := svc.CallWithContext(ctx, ssServiceIface+".GetSecrets", 0, items, session).Store(&secrets); err != nil {
-		return LookupResult{}, unavailable(ctx, err)
+	if len(readable) > 0 {
+		if err := svc.CallWithContext(ctx, ssServiceIface+".GetSecrets", 0, readable, session).Store(&secrets); err != nil {
+			return LookupResult{}, unavailable(ctx, err)
+		}
 	}
 	// A match whose password Wicket cannot use stays in the running: the
 	// newest item is the one the user saved last, and falling back to an
@@ -184,6 +204,9 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 		hits = append(hits, hit{pw: pw, err: err, mod: mod})
 	}
 	if len(hits) == 0 {
+		if unlockErr != nil {
+			return LookupResult{}, fmt.Errorf("%w (%w)", ErrLocked, unlockErr)
+		}
 		return LookupResult{}, ErrNotFound
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].mod > hits[j].mod })

@@ -39,6 +39,9 @@ func (m Model) handleModalKey(msg tea.Msg, key string) (tea.Model, tea.Cmd) {
 	case "ctrl+s":
 		if !md.canSave() {
 			md.err = "the keyring is not answering, so the password cannot be saved; enter connects once"
+			if errors.Is(md.lookupErr, secret.ErrLocked) {
+				md.err = "the keyring is locked, so the password cannot be saved; enter connects once"
+			}
 			break
 		}
 		return m.modalConnect(true)
@@ -133,8 +136,8 @@ func unusableSaved(err error) bool {
 	return errors.Is(err, secret.ErrTooLong) || errors.Is(err, secret.ErrCRLF)
 }
 
-// subtitle explains why the dialog is asking. Each of the three ways
-// in says only what Wicket knows: a keyring that could not be read is not
+// subtitle explains why the dialog is asking. Each way in says only what
+// Wicket knows: a keyring that could not be read is not
 // the same as one with no password in it.
 func (md modalState) subtitle() string {
 	switch {
@@ -146,6 +149,10 @@ func (md modalState) subtitle() string {
 		// The client would cut it short, or take only its first line, and
 		// fail the login with no reason given, so it is not used at all.
 		return "The saved password cannot be used (" + md.lookupErr.Error() + "). Type a new one; ctrl+s saves it over the old one."
+	case errors.Is(md.lookupErr, secret.ErrLocked):
+		// A password is stored; the user just would not unlock the keyring
+		// to read it. Saying there is none would invite a save that fails.
+		return "A password is saved, but the keyring is locked. Type it to connect once."
 	case md.lookupErr != nil:
 		return "The keyring is unavailable, so Wicket cannot tell whether a password is saved."
 	case md.replacing:

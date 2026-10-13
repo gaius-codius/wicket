@@ -892,6 +892,7 @@ func TestInstallStopsOnSignal(t *testing.T) {
 			{sig: syscall.SIGINT, code: 130},
 			{sig: syscall.SIGINT, code: 130, group: true},
 			{sig: syscall.SIGQUIT, code: 131},
+			{sig: syscall.SIGQUIT, code: 131, group: true},
 			{sig: syscall.SIGTERM, code: 143},
 		} {
 			t.Run(fmt.Sprintf("%s/%v/group=%v", fetcher, sig.sig, sig.group), func(t *testing.T) {
@@ -917,24 +918,26 @@ func TestInstallStopsOnSignal(t *testing.T) {
 
 // A TERM while the installed wicket's --version hangs stops the script at
 // once rather than when that returns. One that ignores TERM is killed after
-// a grace period.
+// a grace period, and so is one that a wrapper started, which TERM leaves
+// behind when the wrapper goes.
 func TestInstallStopsWhileVersionCheckHangs(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
-		trap   string
+		body   string // %q is the file to create once it runs
 		within time.Duration
 	}{
-		{"hangs", "", time.Second},
-		{"ignores TERM", `trap "" TERM`, 3 * time.Second},
+		{"hangs", ": >%q\nexec sleep 30", time.Second},
+		{"ignores TERM", "trap '' TERM\n: >%q\nexec sleep 30", 3 * time.Second},
+		{"wrapper of one that ignores TERM", "/bin/sh -c \"trap '' TERM; : >%q; exec sleep 30\" &\nwait", 3 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			needPgrep(t)
 			r := newRelease(t, "curl")
 			in := newInstaller(t, r, "curl")
 			started := filepath.Join(in.dir, "version-started")
-			writeScript(t, filepath.Join(in.bindir, "wicket"),
-				fmt.Sprintf("%s\n: >%q\nexec sleep 30", tc.trap, started))
+			writeScript(t, filepath.Join(in.bindir, "wicket"), fmt.Sprintf(tc.body, started))
 			in.signalDuring(t, appears(t, started), signal{sig: syscall.SIGTERM, code: 143, within: tc.within})
 			in.checkNothingLeft(t)
 		})

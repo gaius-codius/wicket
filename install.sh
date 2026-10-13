@@ -75,27 +75,60 @@ run() {
 
 # stop kills the running command, cleans up and exits with $1. Background
 # commands ignore INT and QUIT, so it has to kill them for Ctrl-C and Ctrl-\
-# too. A command that ignores TERM as well gets 2 s and then KILL, from a
-# watcher: kill -0 cannot tell, as a child that has exited stays a zombie
-# until it is waited for.
+# too. Whatever ignores TERM as well gets 2 s and then KILL. The tree is
+# listed first, as a process that ignores TERM outlives the parent that
+# would lead to it. The command itself is timed by a watcher: kill -0 cannot
+# tell when it has gone, as a child that has exited stays a zombie until it
+# is waited for. What it started belongs to init by then, so kill -0 can;
+# under an init that does not reap, that costs the 2 s and no more.
 stop() {
 	if [ -n "$starting" ]; then
 		stopping=$1
 		return
 	fi
 	if [ -n "$child" ]; then
-		kill_tree TERM "$child"
+		st_tree=$(tree_pids "$child")
+		# shellcheck disable=SC2086 # a list of pids
+		kill -TERM $st_tree 2>/dev/null || :
 		(
 			sleep 2
-			kill_tree KILL "$child"
+			# shellcheck disable=SC2086
+			kill -KILL $st_tree 2>/dev/null
 		) &
 		st_watch=$!
 		wait "$child" 2>/dev/null || :
+		st_n=0
+		# shellcheck disable=SC2086
+		while st_left=$(alive_pids "$child" $st_tree) && [ -n "$st_left" ] && [ "$st_n" -lt 20 ]; do
+			sleep 0.1
+			st_n=$((st_n + 1))
+		done
+		# shellcheck disable=SC2086
+		[ -z "$st_left" ] || kill -KILL $st_left 2>/dev/null || :
 		kill_tree KILL "$st_watch"
 		wait "$st_watch" 2>/dev/null || :
 	fi
 	cleanup
 	exit "$1"
+}
+
+# tree_pids prints process $1 and everything under it, the deepest first.
+# Without pgrep, only $1.
+tree_pids() {
+	for tp_child in $(pgrep -P "$1" 2>/dev/null); do
+		tree_pids "$tp_child"
+	done
+	echo "$1"
+}
+
+# alive_pids prints those of the pids after $1 that are still running, but
+# never $1.
+alive_pids() {
+	ap_skip=$1
+	shift
+	for ap_pid; do
+		[ "$ap_pid" = "$ap_skip" ] || ! kill -0 "$ap_pid" 2>/dev/null || echo "$ap_pid"
+	done
 }
 
 # cleanup removes the temp dir and, once the copy into $BINDIR has started,

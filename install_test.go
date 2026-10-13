@@ -264,6 +264,9 @@ func newInstaller(t *testing.T, r *release, fetcher string) *installer {
 		"SSL_CERT_FILE=" + r.certFile,
 		"FAKERDP_SANDBOX=" + in.leakTag,
 	}
+	// checkNothingLeft reports leaks; this stops them even when a test
+	// fails before it gets there.
+	t.Cleanup(func() { testutil.StopLeakedClients(in.leakTag, 0) })
 	return in
 }
 
@@ -514,7 +517,7 @@ func TestInstallRefusesOddLatestTag(t *testing.T) {
 	t.Parallel()
 	for _, fetcher := range fetchers {
 		for _, latest := range []string{
-			"v1.2.3/../x", "v1.2.3%2F..%2Fx", "v1.2.3-rc1", "v1.2", "v1.2.3.4", "v1..2.3", "v1.2.3.", "1.2.3",
+			"v1.2.3/../x", "x/v1.2.3", "v1.2.3%2F..%2Fx", "v1.2.3-rc1", "v1.2", "v1.2.3.4", "v1..2.3", "v1.2.3.", "1.2.3",
 		} {
 			t.Run(fetcher+"/"+latest, func(t *testing.T) {
 				t.Parallel()

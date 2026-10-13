@@ -151,15 +151,18 @@ latest_tag() {
 		run curl -fsSLI --proto-redir '=https' -o /dev/null -w '%{url_effective}' \
 			"$RELEASES/latest" >"$tmp/latest" || die "could not reach $RELEASES"
 		url=$(cat "$tmp/latest")
-		tag=${url##*/}
+		# All of it: a tag can hold a /, and its last part alone could
+		# name another release.
+		case "$url" in
+		*/releases/tag/*) tag=${url#*/releases/tag/} ;;
+		*) tag="" ;;
+		esac
 	else
 		: >"$tmp/latest"
 		wget_https "$API/releases/latest" "$tmp/latest" || :
 		tag=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmp/latest" | head -n 1)
 	fi
-	# Only a plain vX.Y.Z, as the tag goes into a path and a URL. The curl
-	# path keeps what follows the last /, but the API's tag_name can hold
-	# anything.
+	# Only a plain vX.Y.Z, as the tag goes into a path and a URL.
 	case "$tag" in
 	v*[!0-9.]* | v*..* | v*. | v*.*.*.*) die "no release found at $RELEASES" ;;
 	v[0-9]*.[0-9]*.[0-9]*) ;;
@@ -378,7 +381,9 @@ freerdp3() {
 
 # freerdp3_probe runs "$1 --version" into $fr_out, killing it after 3 s. When
 # stop kills the probe, it takes the client (with kill_tree, any process it
-# started) and the watcher with it.
+# started) and the watcher with it. A process the client starts and leaves
+# behind when it exits on its own is not stopped: by then it belongs to init
+# and nothing ties it to the client.
 # A TERM that arrives while the client and watcher are being started is held
 # until both pids are known, as in run.
 freerdp3_probe() {

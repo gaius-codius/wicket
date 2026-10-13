@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -628,7 +629,9 @@ func TestDBus_LostBusDuringAPromptIsUnavailable(t *testing.T) {
 	for name, mode := range map[string]fakesecret.PromptMode{"Lookup": fakesecret.PromptStall, "Upsert": fakesecret.PromptStall, "LookupMidCall": fakesecret.PromptHang} {
 		op := strings.TrimSuffix(name, "MidCall")
 		t.Run(name, func(t *testing.T) {
-			_, srv, cleanup := fakesecret.Start(t)
+			_, srv, stop := fakesecret.Start(t)
+			cleanup := sync.OnceFunc(stop)
+			defer cleanup()
 			id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
 			pw, err := NewPassword("s3cret")
 			if err != nil {
@@ -694,6 +697,24 @@ func TestDBus_PromptIgnoresACompletedFromAnotherSender(t *testing.T) {
 	if err := forger.Emit("/org/freedesktop/secrets/prompt/p1", ssPromptIface+".Completed", false, dbus.MakeVariant("")); err != nil {
 		t.Fatal(err)
 	}
+	// The bus delivers a signal addressed to a connection whatever its match
+	// rules say, so the forger also sends one straight to every other client.
+	var names []string
+	if err := forger.BusObject().Call("org.freedesktop.DBus.ListNames", 0).Store(&names); err != nil {
+		t.Fatal(err)
+	}
+	var keyring string
+	if err := forger.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, "org.freedesktop.secrets").Store(&keyring); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if !strings.HasPrefix(name, ":") || name == keyring || name == forger.Names()[0] {
+			continue
+		}
+		if err := forger.Send(forgedCompleted(name), nil).Err; err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := <-errc; !errors.Is(err, ErrPromptTimeout) {
 		t.Fatalf("err = %v, want the prompt to time out: another sender's Completed must not count", err)
 	}
@@ -755,5 +776,47 @@ func TestDBus_DeleteThatLeavesAMatchBehindFails(t *testing.T) {
 	}
 	if n := srv.Stored(); n != 1 {
 		t.Fatalf("%d items stored, want the locked one left", n)
+	}
+}
+
+// forgedCompleted is a prompt's Completed signal, saying it was accepted,
+// addressed to dest alone.
+func forgedCompleted(dest string) *dbus.Message {
+	body := []any{false, dbus.MakeVariant("")}
+	return &dbus.Message{
+		Type: dbus.TypeSignal,
+		Headers: map[dbus.HeaderField]dbus.Variant{
+			dbus.FieldPath:        dbus.MakeVariant(dbus.ObjectPath("/org/freedesktop/secrets/prompt/p1")),
+			dbus.FieldInterface:   dbus.MakeVariant(ssPromptIface),
+			dbus.FieldMember:      dbus.MakeVariant("Completed"),
+			dbus.FieldDestination: dbus.MakeVariant(dest),
+			dbus.FieldSignature:   dbus.MakeVariant(dbus.SignatureOf(body...)),
+		},
+		Body: body,
+	}
+}
+
+// A user who refuses the unlock is asked once, not once per duplicate
+// entry: a restored backup can leave several items with the same details.
+func TestDBus_DeleteAsksToUnlockOnce(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+	srv.RefuseLockedWrites()
+	srv.SetPrompt(fakesecret.PromptDismiss)
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	for i := range 3 {
+		srv.Seed(id.Attrs(), "s3cret", int64(100+i))
+	}
+	srv.SetLocked(true)
+
+	if err := NewDBus().Delete(bg, id); !errors.Is(err, ErrLocked) || !errors.Is(err, ErrPromptDismissed) {
+		t.Fatalf("err = %v, want ErrLocked wrapping the dismissal", err)
+	}
+	if n := countCalls(srv, "Prompt"); n != 1 {
+		t.Fatalf("%d unlock prompts, want 1", n)
+	}
+	if n := srv.Stored(); n != 3 {
+		t.Fatalf("%d items stored, want all 3 left", n)
 	}
 }

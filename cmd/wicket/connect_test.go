@@ -510,7 +510,9 @@ func TestConnect_DismissedUnlock(t *testing.T) {
 // refuses it, say the keyring is locked: it used to say the Secret Service
 // was unavailable, and never showed a dialog at all (issue #101).
 func TestConnect_SaveIntoALockedKeyring(t *testing.T) {
-	for name, mode := range map[string]fakesecret.PromptMode{"refused": fakesecret.PromptDismiss, "accepted": fakesecret.PromptAccept} {
+	// prompted is KeePassXC, which answers the write itself with a prompt
+	// rather than refusing it; the dismissal is still not "unavailable".
+	for name, mode := range map[string]fakesecret.PromptMode{"refused": fakesecret.PromptDismiss, "accepted": fakesecret.PromptAccept, "prompted": fakesecret.PromptDismiss} {
 		t.Run(name, func(t *testing.T) {
 			_, srv, cleanup := fakesecret.Start(t)
 			defer cleanup()
@@ -519,7 +521,9 @@ func TestConnect_SaveIntoALockedKeyring(t *testing.T) {
 			t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
 			testutil.PrependPATH(t, testutil.FakeRDPDir(t))
 			t.Setenv("FAKERDP_RECORD", filepath.Join(t.TempDir(), "rec.json"))
-			srv.RefuseLockedWrites()
+			if name != "prompted" {
+				srv.RefuseLockedWrites()
+			}
 			srv.SetLocked(true)
 			srv.SetPrompt(mode)
 
@@ -546,6 +550,12 @@ func TestConnect_SaveIntoALockedKeyring(t *testing.T) {
 			if got.code != 0 {
 				t.Fatalf("exit %d stderr %q", got.code, got.stderr)
 			}
+			if name == "prompted" {
+				if !strings.Contains(got.stderr, "could not save password: the keyring prompt was dismissed") || strings.Contains(got.stderr, "unavailable") || srv.Stored() != 0 {
+					t.Fatalf("stderr %q, %d items stored, want the dismissal and nothing saved", got.stderr, srv.Stored())
+				}
+				return
+			}
 			if !slices.Contains(srv.Calls(), "Unlock") {
 				t.Fatalf("calls %v: the save never asked to unlock the keyring", srv.Calls())
 			}
@@ -555,7 +565,7 @@ func TestConnect_SaveIntoALockedKeyring(t *testing.T) {
 				}
 				return
 			}
-			if !strings.Contains(got.stderr, "could not save password: the keyring is locked") || strings.Contains(got.stderr, "unavailable") {
+			if !strings.Contains(got.stderr, "could not save password: the keyring is locked; its unlock prompt was dismissed") || strings.Contains(got.stderr, "unavailable") {
 				t.Fatalf("stderr %q, want it to say the keyring is locked", got.stderr)
 			}
 			if n := srv.Stored(); n != 0 {

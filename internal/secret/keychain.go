@@ -401,6 +401,7 @@ func readStatusErr(ctx context.Context, status C.OSStatus) error {
 const (
 	statusUserCanceled = C.errSecUserCanceled
 	statusAuthFailed   = C.errSecAuthFailed
+	statusNoUI         = C.errSecInteractionNotAllowed
 	statusParam        = C.errSecParam
 )
 

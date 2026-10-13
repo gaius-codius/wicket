@@ -178,14 +178,30 @@ func resolveCLICredential(store secret.Store, cfg *config.Config, p config.Profi
 		ctx, cancel := context.WithTimeout(context.Background(), secret.OpTimeout)
 		defer cancel()
 		if err := store.Upsert(ctx, id, pw); err != nil {
-			if errors.Is(err, secret.ErrLocked) {
-				// The user would not unlock the keyring. The error goes on
-				// to say "unavailable", which is not what happened.
-				fmt.Fprintln(stderr, "warning: could not save password: the keyring is locked")
-			} else {
-				fmt.Fprintln(stderr, "warning: could not save password:", err)
-			}
+			fmt.Fprintln(stderr, "warning: could not save password:", saveProblem(err))
 		}
 	}
 	return pw, nil
+}
+
+// saveProblem says why a save failed when the user answered, or ignored, a
+// keyring prompt. The error itself goes on to say "secret service
+// unavailable", which is not what happened: the keyring was there and stayed
+// locked. Any other failure is shown as it is.
+func saveProblem(err error) string {
+	dismissed := errors.Is(err, secret.ErrPromptDismissed)
+	timedOut := errors.Is(err, secret.ErrPromptTimeout)
+	switch {
+	case errors.Is(err, secret.ErrLocked) && dismissed:
+		return "the keyring is locked; its unlock prompt was dismissed"
+	case errors.Is(err, secret.ErrLocked) && timedOut:
+		return "the keyring is locked; nobody answered its unlock prompt"
+	case errors.Is(err, secret.ErrLocked):
+		return "the keyring is locked"
+	case dismissed:
+		return "the keyring prompt was dismissed"
+	case timedOut:
+		return "nobody answered the keyring prompt"
+	}
+	return err.Error()
 }

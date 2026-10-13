@@ -51,10 +51,11 @@ var (
 	ErrPromptDismissed = errors.New("the keyring prompt was dismissed")
 	// ErrPromptTimeout means nobody answered a keyring prompt in time.
 	ErrPromptTimeout = errors.New("timed out waiting for the keyring prompt")
-	// ErrLocked means a lookup found a stored password it could not read
-	// because the keyring stayed locked. Another match may have been
-	// readable, but the locked one may be newer, so none is returned. It
-	// wraps why the unlock failed, usually ErrPromptDismissed, and that
+	// ErrLocked means the keyring stayed locked: a lookup found a stored
+	// password it could not read, or a write or delete the keyring refused
+	// while locked could not unlock it. On a lookup another match may have
+	// been readable, but the locked one may be newer, so none is returned.
+	// It wraps why the unlock failed, usually ErrPromptDismissed, and that
 	// cause wraps ErrUnavailable.
 	ErrLocked = errors.New("the keyring is locked")
 
@@ -329,7 +330,7 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 	// Every match must go. One left behind -- its unlock refused while
 	// another was open -- is still a stored password, and reporting success
 	// would have the TUI say it was forgotten.
-	var last error
+	var last, refused error
 	for _, p := range items {
 		del := func() (prompt dbus.ObjectPath, err error) {
 			err = conn.Object(ssBus, p).CallWithContext(ctx, ssItemIface+".Delete", 0).Store(&prompt)
@@ -337,9 +338,17 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 		}
 		prompt, err := del()
 		// gnome-keyring refuses to delete a locked item rather than
-		// prompting: unlock it and ask again, as Upsert does.
+		// prompting: unlock it and ask again, as Upsert does. A user who
+		// refused one unlock is not asked again for each duplicate.
 		if isLockedErr(err) {
+			if refused != nil {
+				last = refused
+				continue
+			}
 			if err := unlock(ctx, conn, svc, []dbus.ObjectPath{p}); err != nil {
+				if errors.Is(err, ErrLocked) {
+					refused = err
+				}
 				last = err
 				continue
 			}

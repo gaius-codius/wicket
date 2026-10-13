@@ -356,7 +356,7 @@ func TestAccountAttr_FoldsConfig(t *testing.T) {
 // same statuses from anywhere else stay plain ErrUnavailable, and a caller
 // that gave up is told so instead.
 func TestKeychain_RefusedReadOfAFoundItemIsLocked(t *testing.T) {
-	for _, err := range []error{readStatusErr(bg, statusUserCanceled), readStatusErr(bg, statusAuthFailed)} {
+	for _, err := range []error{readStatusErr(bg, statusUserCanceled), readStatusErr(bg, statusAuthFailed), readStatusErr(bg, statusNoUI)} {
 		if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrUnavailable) {
 			t.Errorf("err = %v, want ErrLocked wrapping ErrUnavailable", err)
 		}

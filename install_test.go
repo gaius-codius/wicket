@@ -1,0 +1,723 @@
+package install_test
+
+// These tests run install.sh against a fake release served over TLS on
+// localhost, with a PATH that holds only the tools the script needs and one
+// fetcher, so the curl, GNU wget, busybox and wget2 paths are each taken.
+// Nothing reaches the network or the real ~/.local/bin: HOME, TMPDIR and
+// WICKET_BINDIR all point into the test's temp dir.
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/hex"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/gaius-codius/wicket/internal/testutil"
+)
+
+func TestMain(m *testing.M) { os.Exit(testutil.Sandbox(m)) }
+
+// With WICKET_INSTALL_TESTS=all a missing fetcher fails the test instead of
+// skipping it, so CI cannot pass without covering every path.
+var requireAll = os.Getenv("WICKET_INSTALL_TESTS") == "all"
+
+const (
+	version = "1.2.3"
+	tag     = "v" + version
+	asset   = "wicket_" + version + "_linux_amd64"
+)
+
+// fetchers are the download paths install.sh can take.
+var fetchers = []string{"curl", "wget", "busybox", "wget2"}
+
+// release is a fake GitHub release site. Downloads it is told to redirect go
+// to a plain-http twin, and one it is told to stall blocks until the client
+// hangs up.
+type release struct {
+	tls, plain *httptest.Server
+	certFile   string
+
+	mu       sync.Mutex
+	latest   string
+	files    map[string][]byte // by path under /releases/download/
+	toHTTP   map[string]bool
+	stall    string
+	stalled  chan struct{} // closed once the stalled request arrives
+	hungUp   chan struct{} // closed once its client has gone
+	requests []string
+}
+
+// newRelease starts a release site for fetcher to download from.
+func newRelease(t *testing.T, fetcher string) *release {
+	t.Helper()
+	r := &release{
+		latest:  tag,
+		files:   map[string][]byte{},
+		toHTTP:  map[string]bool{},
+		stalled: make(chan struct{}),
+		hungUp:  make(chan struct{}),
+	}
+	r.addTarball(t, version, tarball(t, version))
+	r.tls = httptest.NewUnstartedServer(http.HandlerFunc(r.serve))
+	if fetcher == "busybox" {
+		// Busybox's own TLS fails against Go's AES-GCM (bad record MAC)
+		// and P-256 key exchange (invalid ClientKeyExchange); this is the
+		// suite the two agree on.
+		r.tls.TLS = &tls.Config{
+			MaxVersion:       tls.VersionTLS12,
+			CurvePreferences: []tls.CurveID{tls.X25519},
+			CipherSuites:     []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256},
+		}
+	}
+	r.tls.StartTLS()
+	r.plain = httptest.NewServer(http.HandlerFunc(r.serve))
+	t.Cleanup(r.tls.Close)
+	t.Cleanup(r.plain.Close)
+
+	r.certFile = filepath.Join(t.TempDir(), "cert.pem")
+	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: r.tls.Certificate().Raw})
+	if err := os.WriteFile(r.certFile, block, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// addTarball publishes tgz as version's linux/amd64 tarball, with a
+// SHA256SUMS that vouches for it.
+func (r *release) addTarball(t *testing.T, version string, tgz []byte) {
+	t.Helper()
+	name := "wicket_" + version + "_linux_amd64.tar.gz"
+	sum := sha256.Sum256(tgz)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.files["v"+version+"/"+name] = tgz
+	r.files["v"+version+"/SHA256SUMS"] = fmt.Appendf(nil, "%s  %s\n", hex.EncodeToString(sum[:]), name)
+}
+
+func (r *release) serve(w http.ResponseWriter, req *http.Request) {
+	r.mu.Lock()
+	r.requests = append(r.requests, req.URL.Path)
+	latest, stall := r.latest, r.stall
+	r.mu.Unlock()
+
+	switch p := req.URL.Path; {
+	case p == "/releases/latest":
+		// As GitHub does: an absolute redirect to the tag's page.
+		w.Header().Set("Location", r.tls.URL+"/releases/tag/"+latest)
+		w.WriteHeader(http.StatusFound)
+	case strings.HasPrefix(p, "/releases/tag/"):
+		fmt.Fprintln(w, "release page")
+	case p == "/api/releases/latest":
+		fmt.Fprintf(w, "{\n  \"url\": \"x\",\n  \"tag_name\": %q,\n  \"name\": \"x\"\n}\n", latest)
+	case strings.HasPrefix(p, "/releases/download/"):
+		key := strings.TrimPrefix(p, "/releases/download/")
+		r.mu.Lock()
+		body, ok := r.files[key]
+		redirect := r.toHTTP[key] && req.TLS != nil
+		r.mu.Unlock()
+		switch {
+		case key == stall:
+			close(r.stalled)
+			<-req.Context().Done()
+			close(r.hungUp)
+		case redirect:
+			http.Redirect(w, req, r.plain.URL+p, http.StatusFound)
+		case ok:
+			_, _ = w.Write(body)
+		default:
+			http.NotFound(w, req)
+		}
+	default:
+		http.NotFound(w, req)
+	}
+}
+
+// set changes what the server does, under its lock.
+func (r *release) set(change func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	change()
+}
+
+func (r *release) downloads() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var d []string
+	for _, p := range r.requests {
+		if strings.HasPrefix(p, "/releases/download/") {
+			d = append(d, p)
+		}
+	}
+	return d
+}
+
+// tarball builds a release tarball whose wicket prints "wicket <version>".
+func tarball(t *testing.T, version string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	dir := "wicket_" + version + "_linux_amd64/"
+	body := fmt.Sprintf("#!/bin/sh\necho 'wicket %s'\n", version)
+	for _, h := range []*tar.Header{
+		{Name: dir, Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: dir + "wicket", Typeflag: tar.TypeReg, Mode: 0o755, Size: int64(len(body))},
+	} {
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tw.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// installer is one sandbox to run install.sh in.
+type installer struct {
+	dir, bin, bindir, tmp string
+	env                   []string
+	// leakTag marks every process the script starts, so the test can find
+	// any left running (see testutil.StopLeakedClients).
+	leakTag string
+}
+
+// tools are what install.sh and its stubs run besides the fetcher and gh.
+var tools = []string{
+	"awk", "cat", "chmod", "cp", "cut", "env", "grep", "gzip", "head",
+	"mkdir", "mktemp", "mv", "rm", "sed", "sleep", "tar",
+}
+
+func newInstaller(t *testing.T, r *release, fetcher string) *installer {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		// The leak checks read /proc, and the fetchers under test are the
+		// ones Linux distributions ship.
+		t.Skip("install.sh tests run on Linux")
+	}
+	dir := t.TempDir()
+	in := &installer{
+		dir:     dir,
+		bin:     filepath.Join(dir, "bin"),
+		bindir:  filepath.Join(dir, "home", ".local", "bin"),
+		tmp:     filepath.Join(dir, "tmp"),
+		leakTag: filepath.Join(dir, "leak"),
+	}
+	home := filepath.Join(dir, "home")
+	for _, d := range []string{in.bin, home, in.tmp} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tool := range append(tools, sha256Tool(t)) {
+		in.link(t, tool, mustLookPath(t, tool))
+	}
+	in.linkFetcher(t, fetcher)
+	// Optional: without it install.sh can stop only the commands it ran
+	// itself, not what they started (see kill_tree).
+	if p, err := exec.LookPath("pgrep"); err == nil {
+		in.link(t, "pgrep", p)
+	}
+	in.script(t, "uname", `case "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac`)
+
+	wgetrc := filepath.Join(home, ".wgetrc")
+	if err := os.WriteFile(wgetrc, []byte("ca_certificate = "+r.certFile+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wget2rc := filepath.Join(home, ".wget2rc")
+	if err := os.WriteFile(wget2rc, []byte("ca-certificate = "+r.certFile+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in.env = []string{
+		"PATH=" + in.bin,
+		"HOME=" + home,
+		"TMPDIR=" + in.tmp,
+		"WICKET_BINDIR=" + in.bindir,
+		"WICKET_RELEASES_URL=" + r.tls.URL + "/releases",
+		"WICKET_API_URL=" + r.tls.URL + "/api",
+		"CURL_CA_BUNDLE=" + r.certFile,
+		"WGETRC=" + wgetrc,
+		"WGET2RC=" + wget2rc,
+		"SSL_CERT_FILE=" + r.certFile,
+		"FAKERDP_SANDBOX=" + in.leakTag,
+	}
+	return in
+}
+
+func sha256Tool(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("sha256sum"); err == nil {
+		return "sha256sum"
+	}
+	return "shasum"
+}
+
+func mustLookPath(t *testing.T, name string) string {
+	t.Helper()
+	p, err := exec.LookPath(name)
+	if err != nil {
+		t.Fatalf("install.sh needs %s: %v", name, err)
+	}
+	return p
+}
+
+// needPgrep skips the test, or fails it under WICKET_INSTALL_TESTS=all,
+// when there is no pgrep to give install.sh.
+func needPgrep(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("pgrep"); err == nil {
+		return
+	}
+	if requireAll {
+		t.Fatal("pgrep not installed")
+	}
+	t.Skip("pgrep not installed")
+}
+
+// linkFetcher puts fetcher on PATH as the name install.sh looks for.
+func (in *installer) linkFetcher(t *testing.T, fetcher string) {
+	t.Helper()
+	missing := func(why string) {
+		if requireAll {
+			t.Fatalf("%s: %s", fetcher, why)
+		}
+		t.Skipf("%s: %s", fetcher, why)
+	}
+	switch fetcher {
+	case "curl":
+		p, err := exec.LookPath("curl")
+		if err != nil {
+			missing("not installed")
+		}
+		in.link(t, "curl", p)
+	case "wget":
+		p, err := exec.LookPath("wget")
+		if err != nil {
+			missing("not installed")
+		}
+		if !strings.Contains(versionOf(t, p, "--version"), "GNU Wget 1.") {
+			missing("wget on PATH is not GNU Wget 1.x")
+		}
+		in.link(t, "wget", p)
+	case "busybox":
+		p, err := exec.LookPath("busybox")
+		if err != nil {
+			missing("not installed")
+		}
+		// busybox picks the applet from the name it is run as.
+		in.link(t, "wget", p)
+	case "wget2":
+		p, err := exec.LookPath("wget2")
+		if err != nil {
+			missing("not installed")
+		}
+		in.link(t, "wget", p)
+	default:
+		t.Fatalf("unknown fetcher %q", fetcher)
+	}
+}
+
+func versionOf(t *testing.T, path string, args ...string) string {
+	t.Helper()
+	out, _ := exec.CommandContext(t.Context(), path, args...).CombinedOutput()
+	return string(out)
+}
+
+func (in *installer) link(t *testing.T, name, target string) {
+	t.Helper()
+	if err := os.Symlink(target, filepath.Join(in.bin, name)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// script writes an sh script to the sandbox's PATH.
+func (in *installer) script(t *testing.T, name, body string) {
+	t.Helper()
+	writeScript(t, filepath.Join(in.bin, name), body)
+}
+
+func writeScript(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (in *installer) command(ctx context.Context, t *testing.T, args ...string) (*exec.Cmd, *bytes.Buffer) {
+	t.Helper()
+	script, err := filepath.Abs("install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(ctx, mustLookPath(t, "sh"), append([]string{script}, args...)...)
+	cmd.Env = in.env
+	cmd.Dir = in.dir
+	// A download the script failed to stop holds its output open; Wait
+	// would block on it for good.
+	cmd.WaitDelay = time.Second
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	return cmd, &out
+}
+
+// run runs install.sh to the end and returns its output and exit status.
+func (in *installer) run(t *testing.T, args ...string) (string, int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	cmd, out := in.command(ctx, t, args...)
+	err := cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return out.String(), 0
+	case errors.As(err, &exit) && exit.ExitCode() >= 0:
+		return out.String(), exit.ExitCode()
+	default:
+		t.Fatalf("install.sh: %v\n%s", err, out)
+		return "", 0
+	}
+}
+
+// installed is the output of the installed wicket's --version, or "".
+func (in *installer) installed(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(in.bindir, "wicket")
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(versionOf(t, p, "--version"))
+}
+
+// checkNothingLeft fails the test if the script left its temp dir behind or
+// any process running.
+func (in *installer) checkNothingLeft(t *testing.T) {
+	t.Helper()
+	// Only the script's mktemp -d dir: wget2 leaves lock files of its own.
+	if left, _ := filepath.Glob(filepath.Join(in.tmp, "tmp.*")); len(left) > 0 {
+		t.Errorf("temp dir left behind: %s", left[0])
+	}
+	if leaked := testutil.StopLeakedClients(in.leakTag, time.Second); len(leaked) > 0 {
+		t.Errorf("left running (now killed): %s", strings.Join(leaked, "; "))
+	}
+}
+
+func wantOutput(t *testing.T, out string, code, wantCode int, want string) {
+	t.Helper()
+	if code != wantCode || !strings.Contains(out, want) {
+		t.Fatalf("exit %d, want %d with %q in the output:\n%s", code, wantCode, want, out)
+	}
+}
+
+func TestInstallAndUpdate(t *testing.T) {
+	t.Parallel()
+	for _, fetcher := range fetchers {
+		t.Run(fetcher, func(t *testing.T) {
+			t.Parallel()
+			r := newRelease(t, fetcher)
+			in := newInstaller(t, r, fetcher)
+
+			out, code := in.run(t)
+			wantOutput(t, out, code, 0, "installed wicket "+version+" to "+in.bindir+"/wicket")
+			if !strings.Contains(out, "provenance not checked; install gh") {
+				t.Errorf("no note that provenance went unchecked:\n%s", out)
+			}
+			if got := in.installed(t); got != "wicket "+version {
+				t.Fatalf("installed wicket says %q", got)
+			}
+
+			out, code = in.run(t)
+			wantOutput(t, out, code, 0, "wicket "+version+" is already installed")
+
+			writeScript(t, filepath.Join(in.bindir, "wicket"), "echo 'wicket 1.2.2'")
+			out, code = in.run(t)
+			wantOutput(t, out, code, 0, "updated wicket 1.2.2 -> "+version)
+			if got := in.installed(t); got != "wicket "+version {
+				t.Fatalf("updated wicket says %q", got)
+			}
+			in.checkNothingLeft(t)
+		})
+	}
+}
+
+func TestInstallRefusesHTTP(t *testing.T) {
+	t.Parallel()
+	r := newRelease(t, "curl")
+	for _, v := range []string{"WICKET_RELEASES_URL", "WICKET_API_URL"} {
+		t.Run(v, func(t *testing.T) {
+			t.Parallel()
+			in := newInstaller(t, r, "curl")
+			in.env = append(in.env, v+"="+r.plain.URL+"/releases")
+			out, code := in.run(t)
+			wantOutput(t, out, code, 1, v+" must be an https URL")
+			if d := r.downloads(); len(d) > 0 {
+				t.Errorf("downloaded %v", d)
+			}
+		})
+	}
+}
+
+func TestInstallRefusesRedirectToHTTP(t *testing.T) {
+	t.Parallel()
+	refusal := map[string]string{
+		"curl":    "download failed",
+		"wget":    "refused a redirect away from https",
+		"busybox": "refused a redirect away from https",
+		"wget2":   "wget2 wrote nothing",
+	}
+	for _, fetcher := range fetchers {
+		t.Run(fetcher, func(t *testing.T) {
+			t.Parallel()
+			r := newRelease(t, fetcher)
+			r.set(func() { r.toHTTP[tag+"/"+asset+".tar.gz"] = true })
+			in := newInstaller(t, r, fetcher)
+			out, code := in.run(t)
+			wantOutput(t, out, code, 1, refusal[fetcher])
+			if got := in.installed(t); got != "" {
+				t.Errorf("installed %q", got)
+			}
+			in.checkNothingLeft(t)
+		})
+	}
+}
+
+// The latest tag goes into a path and a URL, so both fetch paths take only a
+// plain vX.Y.Z.
+func TestInstallRefusesOddLatestTag(t *testing.T) {
+	t.Parallel()
+	for _, fetcher := range fetchers {
+		for _, latest := range []string{
+			"v1.2.3/../x", "v1.2.3%2F..%2Fx", "v1.2.3-rc1", "v1.2", "v1.2.3.4", "v1..2.3", "v1.2.3.", "1.2.3",
+		} {
+			t.Run(fetcher+"/"+latest, func(t *testing.T) {
+				t.Parallel()
+				r := newRelease(t, fetcher)
+				r.set(func() { r.latest = latest })
+				in := newInstaller(t, r, fetcher)
+				out, code := in.run(t)
+				wantOutput(t, out, code, 1, "no release found")
+				if d := r.downloads(); len(d) > 0 {
+					t.Errorf("downloaded %v", d)
+				}
+			})
+		}
+	}
+}
+
+func TestInstallProvenance(t *testing.T) {
+	t.Parallel()
+	const help = "      --source-ref string   ...\n"
+	for _, tc := range []struct {
+		name     string
+		gh       string // stub body; "" leaves gh off PATH
+		wantCode int
+		want     string
+	}{
+		{"missing", "", 0, "provenance not checked; install gh"},
+		{"too old", `[ "$3" = --help ] && echo '      --owner string'; exit 0`, 0, "this gh is too old"},
+		{"passing", "", 0, "verified provenance: built by gaius-codius/wicket's release workflow from " + tag},
+		{"failing", "", 1, "provenance check failed for " + asset + ".tar.gz"},
+		{"logged out", "", 0, "gh is not logged in"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRelease(t, "curl")
+			in := newInstaller(t, r, "curl")
+			args := filepath.Join(in.dir, "gh-args")
+			verify := map[string]string{"passing": "0", "failing": "1", "logged out": "4"}
+			switch {
+			case tc.gh != "":
+				in.script(t, "gh", tc.gh)
+			case verify[tc.name] != "":
+				in.script(t, "gh", fmt.Sprintf(
+					`[ "$3" = --help ] && { printf '%%s' '%s'; exit 0; }
+printf '%%s\n' "GH_HOST=$GH_HOST" "$@" >%q
+echo 'verification output'
+exit %s`, help, args, verify[tc.name]))
+			}
+			out, code := in.run(t)
+			wantOutput(t, out, code, tc.wantCode, tc.want)
+			if got := in.installed(t); (got != "") != (tc.wantCode == 0) {
+				t.Errorf("installed %q after exit %d", got, code)
+			}
+			if verify[tc.name] == "" {
+				return
+			}
+			b, err := os.ReadFile(args)
+			if err != nil {
+				t.Fatalf("gh attestation verify did not run: %v", err)
+			}
+			for _, want := range []string{
+				"GH_HOST=github.com",
+				"--repo\ngaius-codius/wicket\n",
+				"--cert-identity\nhttps://github.com/gaius-codius/wicket/.github/workflows/release.yml@refs/tags/" + tag + "\n",
+			} {
+				if !strings.Contains(string(b), want) {
+					t.Errorf("gh ran without %q:\n%s", want, b)
+				}
+			}
+		})
+	}
+}
+
+// A release from before attestations is checked against the digest the
+// script carries, not the SHA256SUMS next to it, and gh is not asked.
+func TestInstallRefusesSubstitutedUnattestedRelease(t *testing.T) {
+	t.Parallel()
+	r := newRelease(t, "curl")
+	r.addTarball(t, "0.3.1", tarball(t, "0.3.1"))
+	in := newInstaller(t, r, "curl")
+	in.script(t, "gh", "exit 0")
+	out, code := in.run(t, "--version", "v0.3.1")
+	wantOutput(t, out, code, 1, "wicket_0.3.1_linux_amd64.tar.gz does not match the digest this installer has for v0.3.1")
+	if got := in.installed(t); got != "" {
+		t.Errorf("installed %q", got)
+	}
+}
+
+// A signal during a stalled download stops the script with the shell's
+// status for it, and takes the download and the temp dir with it.
+func TestInstallStopsOnSignal(t *testing.T) {
+	t.Parallel()
+	for _, fetcher := range fetchers {
+		for _, sig := range []struct {
+			sig  syscall.Signal
+			code int
+		}{{syscall.SIGHUP, 129}, {syscall.SIGINT, 130}, {syscall.SIGTERM, 143}} {
+			t.Run(fetcher+"/"+sig.sig.String(), func(t *testing.T) {
+				t.Parallel()
+				if fetcher == "busybox" {
+					// Its https helper outlives a killed wget.
+					needPgrep(t)
+				}
+				r := newRelease(t, fetcher)
+				r.set(func() { r.stall = tag + "/" + asset + ".tar.gz" })
+				in := newInstaller(t, r, fetcher)
+				in.signalDuring(t, r.stalled, sig.sig, sig.code)
+				select {
+				case <-r.hungUp:
+				case <-time.After(2 * time.Second):
+					t.Error("the download was still connected after the script stopped")
+				}
+				in.checkNothingLeft(t)
+			})
+		}
+	}
+}
+
+// A TERM while the installed wicket's --version hangs stops the script at
+// once rather than when that returns.
+func TestInstallStopsWhileVersionCheckHangs(t *testing.T) {
+	t.Parallel()
+	r := newRelease(t, "curl")
+	in := newInstaller(t, r, "curl")
+	started := filepath.Join(in.dir, "version-started")
+	writeScript(t, filepath.Join(in.bindir, "wicket"), fmt.Sprintf(": >%q\nexec sleep 30", started))
+	in.signalDuring(t, appears(t, started), syscall.SIGTERM, 143)
+	in.checkNothingLeft(t)
+}
+
+// A FreeRDP client that is a wrapper and hangs is stopped with what it
+// started, both when the probe gives up on it and when the script is
+// stopped during the probe.
+func TestInstallStopsHungFreeRDPWrapper(t *testing.T) {
+	t.Parallel()
+	needPgrep(t)
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("signalled=%v", stop), func(t *testing.T) {
+			t.Parallel()
+			r := newRelease(t, "curl")
+			in := newInstaller(t, r, "curl")
+			started := filepath.Join(in.dir, "client-started")
+			// Not exec: the wrapper forks the "real" client and waits.
+			in.script(t, "xfreerdp", fmt.Sprintf(": >%q\nsleep 30\nexit 0", started))
+			if stop {
+				in.signalDuring(t, appears(t, started), syscall.SIGTERM, 143)
+			} else {
+				out, code := in.run(t)
+				wantOutput(t, out, code, 0, "warning: no FreeRDP 3 client on PATH")
+			}
+			in.checkNothingLeft(t)
+		})
+	}
+}
+
+// appears is closed once path exists.
+func appears(t *testing.T, path string) <-chan struct{} {
+	t.Helper()
+	ready := make(chan struct{})
+	go func() {
+		for t.Context().Err() == nil {
+			if _, err := os.Stat(path); err == nil {
+				close(ready)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	return ready
+}
+
+// signalDuring starts install.sh, sends sig once ready is closed, and wants
+// it to exit with code within a second.
+func (in *installer) signalDuring(t *testing.T, ready <-chan struct{}, sig syscall.Signal, code int) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	cmd, out := in.command(ctx, t)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("install.sh exited early: %v\n%s", err, out)
+	case <-time.After(10 * time.Second):
+		cancel()
+		<-done
+		t.Fatalf("install.sh never reached the point to signal it:\n%s", out)
+	}
+	if err := cmd.Process.Signal(sig); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != code {
+			t.Errorf("after %v: %v, want exit status %d\n%s", sig, err, code, out)
+		}
+	case <-time.After(time.Second):
+		cancel()
+		<-done
+		t.Errorf("install.sh still running a second after %v\n%s", sig, out)
+	}
+}

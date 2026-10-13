@@ -78,6 +78,11 @@ Tests must not touch your real config, state or keyring. Every package calls
 `WICKET_STATE`, the XDG directories and `DBUS_SESSION_BUS_ADDRESS` somewhere
 harmless. Do not work around it.
 
+`install_test.go` runs `install.sh` against a fake release on localhost with
+each of curl, GNU wget, busybox and wget2, skipping any that is not
+installed. `WICKET_INSTALL_TESTS=all` makes a missing one fail instead, as
+CI's `install-sh` job does.
+
 A test that would be satisfied by the bug it is meant to catch is worth less
 than no test. Where a fix is subtle, check that the new test fails when the
 fix is reverted.

@@ -20,6 +20,31 @@ jobs:
       fuzz: |
         ./internal/config FuzzSave
 
+  # install.sh's tests skip a fetcher that is not installed. This job
+  # installs every one, and makes a missing one fail instead.
+  install-sh:
+    name: install-sh
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install busybox and wget2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends busybox wget2
+
+      - name: Test install.sh
+        env:
+          WICKET_INSTALL_TESTS: all
+        run: go test -count=1 -v -run '^TestInstall' .
+
   # go-ci is Linux-only; this job runs the Keychain backend's tests.
   verify-macos:
     name: test-vet-fmt-macos

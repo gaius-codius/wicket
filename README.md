@@ -30,6 +30,13 @@ This installs the latest release for amd64 or arm64 into `~/.local/bin` (set
 `WICKET_BINDIR` to change it) after checking it against the release's
 `SHA256SUMS`. Run the same command again to update.
 
+It downloads with `curl`, or with `wget` where there is no `curl`: GNU Wget
+1.x, Wget2 or busybox, each held to https through every redirect. Busybox
+checks certificates only through `openssl`, and only since 1.33. Without
+`openssl` on `PATH` it uses TLS of its own that checks nothing, so anyone
+between you and GitHub could hand it a release. The installer refuses an
+older busybox, or one without `openssl`, and asks for `curl` or `openssl`.
+
 ```
 ... | sh -s -- --version v0.1.0   # a given release
 ... | sh -s -- --uninstall        # remove the binary

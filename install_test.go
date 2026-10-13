@@ -11,12 +11,18 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -47,68 +53,120 @@ const (
 // fetchers are the download paths install.sh can take.
 var fetchers = []string{"curl", "wget", "busybox", "wget2"}
 
-// release is a fake GitHub release site. Downloads it is told to redirect go
-// to a plain-http twin, and one it is told to stall blocks until the client
-// hangs up.
+// release is a fake GitHub release site. A download it is told to redirect
+// goes to /mirror/ on a plain-http twin, on a second https server (as GitHub
+// sends every asset to another host), or on itself by a relative Location.
+// One it is told to stall blocks until the client hangs up.
 type release struct {
-	tls, plain *httptest.Server
-	certFile   string
+	tls, mirror, plain *httptest.Server
+	certFile           string
+	// url and mirrorURL are where tls and mirror are reached.
+	url, mirrorURL string
 
 	mu       sync.Mutex
 	latest   string
 	files    map[string][]byte // by path under /releases/download/
-	toHTTP   map[string]bool
+	redirect map[string]string // by the same key: "http", "https" or "relative"
 	stall    string
 	stalled  chan struct{} // closed once the stalled request arrives
 	hungUp   chan struct{} // closed once its client has gone
 	requests []string
+	mirrored []string // paths the second https server was asked for
 }
 
 // newRelease starts a release site for fetcher to download from.
 func newRelease(t *testing.T, fetcher string) *release {
 	t.Helper()
 	r := &release{
-		latest:  tag,
-		files:   map[string][]byte{},
-		toHTTP:  map[string]bool{},
-		stalled: make(chan struct{}),
-		hungUp:  make(chan struct{}),
+		latest:   tag,
+		files:    map[string][]byte{},
+		redirect: map[string]string{},
+		stalled:  make(chan struct{}),
+		hungUp:   make(chan struct{}),
 	}
-	r.addTarball(t, version, tarball(t, version))
+	r.addTarball(t, tag, asset, tarball(t, asset, version))
+	mirror := func(w http.ResponseWriter, req *http.Request) {
+		r.mu.Lock()
+		r.mirrored = append(r.mirrored, req.URL.Path)
+		r.mu.Unlock()
+		r.serve(w, req)
+	}
+	cert, err := testCert()
+	if err != nil {
+		t.Fatal(err)
+	}
 	r.tls = httptest.NewUnstartedServer(http.HandlerFunc(r.serve))
-	if fetcher == "busybox" {
-		// Busybox's own TLS fails against Go's AES-GCM (bad record MAC)
-		// and P-256 key exchange (invalid ClientKeyExchange); this is the
-		// suite the two agree on.
-		r.tls.TLS = &tls.Config{
-			MaxVersion:       tls.VersionTLS12,
-			CurvePreferences: []tls.CurveID{tls.X25519},
-			CipherSuites:     []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256},
+	r.mirror = httptest.NewUnstartedServer(http.HandlerFunc(mirror))
+	for _, s := range []*httptest.Server{r.tls, r.mirror} {
+		s.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+		if fetcher == "busybox-internal" {
+			// Busybox's own TLS fails against Go's AES-GCM (bad record
+			// MAC) and P-256 key exchange (invalid ClientKeyExchange);
+			// this is the suite the two agree on.
+			s.TLS = &tls.Config{
+				Certificates:     []tls.Certificate{cert},
+				MaxVersion:       tls.VersionTLS12,
+				CurvePreferences: []tls.CurveID{tls.X25519},
+				CipherSuites:     []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256},
+			}
 		}
+		s.StartTLS()
+		t.Cleanup(s.Close)
 	}
-	r.tls.StartTLS()
 	r.plain = httptest.NewServer(http.HandlerFunc(r.serve))
-	t.Cleanup(r.tls.Close)
 	t.Cleanup(r.plain.Close)
+	r.url, r.mirrorURL = r.tls.URL, r.mirror.URL
+	if fetcher == "busybox" {
+		// Busybox hands openssl "-verify_ip 127.0.0.1:<port>", port and
+		// all, which no certificate matches; a name is checked properly.
+		r.url = strings.Replace(r.url, "127.0.0.1", "localhost", 1)
+		r.mirrorURL = strings.Replace(r.mirrorURL, "127.0.0.1", "localhost", 1)
+	}
 
 	r.certFile = filepath.Join(t.TempDir(), "cert.pem")
-	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: r.tls.Certificate().Raw})
+	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
 	if err := os.WriteFile(r.certFile, block, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return r
 }
 
-// addTarball publishes tgz as version's linux/amd64 tarball, with a
-// SHA256SUMS that vouches for it.
-func (r *release) addTarball(t *testing.T, version string, tgz []byte) {
+// testCert is a self-signed certificate for localhost and 127.0.0.1, made
+// once. httptest's own names no localhost, and its key is not RSA, which
+// busybox's own TLS needs.
+var testCert = sync.OnceValues(func() (tls.Certificate, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate key: %w", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "localhost"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		DNSNames:              []string{"localhost"},
+		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("create certificate: %w", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+})
+
+// addTarball publishes tgz as release tag's name.tar.gz, with a SHA256SUMS
+// that vouches for it.
+func (r *release) addTarball(t *testing.T, tag, name string, tgz []byte) {
 	t.Helper()
-	name := "wicket_" + version + "_linux_amd64.tar.gz"
 	sum := sha256.Sum256(tgz)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.files["v"+version+"/"+name] = tgz
-	r.files["v"+version+"/SHA256SUMS"] = fmt.Appendf(nil, "%s  %s\n", hex.EncodeToString(sum[:]), name)
+	r.files[tag+"/"+name+".tar.gz"] = tgz
+	r.files[tag+"/SHA256SUMS"] = fmt.Appendf(nil, "%s  %s.tar.gz\n", hex.EncodeToString(sum[:]), name)
 }
 
 func (r *release) serve(w http.ResponseWriter, req *http.Request) {
@@ -120,25 +178,38 @@ func (r *release) serve(w http.ResponseWriter, req *http.Request) {
 	switch p := req.URL.Path; {
 	case p == "/releases/latest":
 		// As GitHub does: an absolute redirect to the tag's page.
-		w.Header().Set("Location", r.tls.URL+"/releases/tag/"+latest)
+		w.Header().Set("Location", r.url+"/releases/tag/"+latest)
 		w.WriteHeader(http.StatusFound)
 	case strings.HasPrefix(p, "/releases/tag/"):
 		fmt.Fprintln(w, "release page")
 	case p == "/api/releases/latest":
 		fmt.Fprintf(w, "{\n  \"url\": \"x\",\n  \"tag_name\": %q,\n  \"name\": \"x\"\n}\n", latest)
+	case strings.HasPrefix(p, "/mirror/"):
+		r.mu.Lock()
+		body, ok := r.files[strings.TrimPrefix(p, "/mirror/")]
+		r.mu.Unlock()
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		_, _ = w.Write(body)
 	case strings.HasPrefix(p, "/releases/download/"):
 		key := strings.TrimPrefix(p, "/releases/download/")
 		r.mu.Lock()
 		body, ok := r.files[key]
-		redirect := r.toHTTP[key] && req.TLS != nil
+		redirect := r.redirect[key]
 		r.mu.Unlock()
 		switch {
 		case key == stall:
 			close(r.stalled)
 			<-req.Context().Done()
 			close(r.hungUp)
-		case redirect:
-			http.Redirect(w, req, r.plain.URL+p, http.StatusFound)
+		case redirect == "http":
+			http.Redirect(w, req, r.plain.URL+"/mirror/"+key, http.StatusFound)
+		case redirect == "https":
+			http.Redirect(w, req, r.mirrorURL+"/mirror/"+key, http.StatusFound)
+		case redirect == "relative":
+			http.Redirect(w, req, "/mirror/"+key, http.StatusFound)
 		case ok:
 			_, _ = w.Write(body)
 		default:
@@ -168,13 +239,14 @@ func (r *release) downloads() []string {
 	return d
 }
 
-// tarball builds a release tarball whose wicket prints "wicket <version>".
-func tarball(t *testing.T, version string) []byte {
+// tarball builds release tarball name, whose wicket prints
+// "wicket <version>".
+func tarball(t *testing.T, name, version string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	dir := "wicket_" + version + "_linux_amd64/"
+	dir := name + "/"
 	body := fmt.Sprintf("#!/bin/sh\necho 'wicket %s'\n", version)
 	for _, h := range []*tar.Header{
 		{Name: dir, Typeflag: tar.TypeDir, Mode: 0o755},
@@ -200,6 +272,8 @@ func tarball(t *testing.T, version string) []byte {
 type installer struct {
 	dir, bin, bindir, tmp string
 	env                   []string
+	// installSh is the install.sh to run; a test can point it at a copy.
+	installSh string
 	// leakTag marks every process the script starts, so the test can find
 	// any left running (see testutil.StopLeakedClients).
 	leakTag string
@@ -219,12 +293,17 @@ func newInstaller(t *testing.T, r *release, fetcher string) *installer {
 		t.Skip("install.sh tests run on Linux")
 	}
 	dir := t.TempDir()
+	script, err := filepath.Abs("install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
 	in := &installer{
-		dir:     dir,
-		bin:     filepath.Join(dir, "bin"),
-		bindir:  filepath.Join(dir, "home", ".local", "bin"),
-		tmp:     filepath.Join(dir, "tmp"),
-		leakTag: filepath.Join(dir, "leak"),
+		dir:       dir,
+		bin:       filepath.Join(dir, "bin"),
+		bindir:    filepath.Join(dir, "home", ".local", "bin"),
+		tmp:       filepath.Join(dir, "tmp"),
+		installSh: script,
+		leakTag:   filepath.Join(dir, "leak"),
 	}
 	home := filepath.Join(dir, "home")
 	for _, d := range []string{in.bin, home, in.tmp} {
@@ -256,8 +335,8 @@ func newInstaller(t *testing.T, r *release, fetcher string) *installer {
 		"HOME=" + home,
 		"TMPDIR=" + in.tmp,
 		"WICKET_BINDIR=" + in.bindir,
-		"WICKET_RELEASES_URL=" + r.tls.URL + "/releases",
-		"WICKET_API_URL=" + r.tls.URL + "/api",
+		"WICKET_RELEASES_URL=" + r.url + "/releases",
+		"WICKET_API_URL=" + r.url + "/api",
 		"CURL_CA_BUNDLE=" + r.certFile,
 		"WGETRC=" + wgetrc,
 		"WGET2RC=" + wget2rc,
@@ -325,19 +404,32 @@ func (in *installer) linkFetcher(t *testing.T, fetcher string) {
 			missing("wget on PATH is not GNU Wget 1.x")
 		}
 		in.link(t, "wget", p)
-	case "busybox":
+	case "busybox", "busybox-internal":
 		p, err := exec.LookPath("busybox")
 		if err != nil {
 			missing("not installed")
 		}
 		// busybox picks the applet from the name it is run as.
 		in.link(t, "wget", p)
+		if fetcher == "busybox-internal" {
+			// No openssl, so busybox falls back to its own TLS.
+			break
+		}
+		// Busybox checks certificates only through openssl s_client,
+		// which finds the test's in SSL_CERT_FILE.
+		o, err := exec.LookPath("openssl")
+		if err != nil {
+			missing("openssl not installed")
+		}
+		in.link(t, "openssl", o)
 	case "wget2":
 		p, err := exec.LookPath("wget2")
 		if err != nil {
 			missing("not installed")
 		}
 		in.link(t, "wget", p)
+	case "none":
+		// The test puts a stub on PATH itself.
 	default:
 		t.Fatalf("unknown fetcher %q", fetcher)
 	}
@@ -356,10 +448,16 @@ func (in *installer) link(t *testing.T, name, target string) {
 	}
 }
 
-// script writes an sh script to the sandbox's PATH.
+// script writes an sh script to the sandbox's PATH, in place of any tool
+// linked there under that name.
 func (in *installer) script(t *testing.T, name, body string) {
 	t.Helper()
-	writeScript(t, filepath.Join(in.bin, name), body)
+	p := filepath.Join(in.bin, name)
+	// Not through the link, which would overwrite the real tool.
+	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	writeScript(t, p, body)
 }
 
 func writeScript(t *testing.T, path, body string) {
@@ -374,11 +472,7 @@ func writeScript(t *testing.T, path, body string) {
 
 func (in *installer) command(ctx context.Context, t *testing.T, args ...string) (*exec.Cmd, *bytes.Buffer) {
 	t.Helper()
-	script, err := filepath.Abs("install.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.CommandContext(ctx, mustLookPath(t, "sh"), append([]string{script}, args...)...)
+	cmd := exec.CommandContext(ctx, mustLookPath(t, "sh"), append([]string{in.installSh}, args...)...)
 	cmd.Env = in.env
 	cmd.Dir = in.dir
 	// A download the script failed to stop holds its output open; Wait
@@ -499,7 +593,7 @@ func TestInstallRefusesRedirectToHTTP(t *testing.T) {
 		t.Run(fetcher, func(t *testing.T) {
 			t.Parallel()
 			r := newRelease(t, fetcher)
-			r.set(func() { r.toHTTP[tag+"/"+asset+".tar.gz"] = true })
+			r.set(func() { r.redirect[tag+"/"+asset+".tar.gz"] = "http" })
 			in := newInstaller(t, r, fetcher)
 			out, code := in.run(t)
 			wantOutput(t, out, code, 1, refusal[fetcher])
@@ -595,26 +689,212 @@ exit %s`, help, args, verify[tc.name]))
 func TestInstallRefusesSubstitutedUnattestedRelease(t *testing.T) {
 	t.Parallel()
 	r := newRelease(t, "curl")
-	r.addTarball(t, "0.3.1", tarball(t, "0.3.1"))
+	const old = "wicket_0.3.1_linux_amd64"
+	r.addTarball(t, "v0.3.1", old, tarball(t, old, "0.3.1"))
 	in := newInstaller(t, r, "curl")
 	in.script(t, "gh", "exit 0")
 	out, code := in.run(t, "--version", "v0.3.1")
-	wantOutput(t, out, code, 1, "wicket_0.3.1_linux_amd64.tar.gz does not match the digest this installer has for v0.3.1")
+	wantOutput(t, out, code, 1, old+".tar.gz does not match the digest this installer has for v0.3.1")
 	if got := in.installed(t); got != "" {
 		t.Errorf("installed %q", got)
 	}
 }
 
+// A release up to v0.3.1 installs when its tarball matches the digest the
+// script carries. The real tarballs are not to hand, so this runs a copy of
+// install.sh that pins the fake one's digest in place of the real one.
+func TestInstallPinnedRelease(t *testing.T) {
+	t.Parallel()
+	const (
+		old    = "wicket_0.3.1_linux_amd64"
+		pinned = "7496a37a6ad73db67fd07dd0bff216bf625d3d0d920f8c971581dcfae48c01c8  " + old + ".tar.gz"
+	)
+	r := newRelease(t, "curl")
+	tgz := tarball(t, old, "0.3.1")
+	r.addTarball(t, "v0.3.1", old, tgz)
+	in := newInstaller(t, r, "curl")
+	in.script(t, "gh", "echo gh ran >&2; exit 1")
+
+	b, err := os.ReadFile(in.installSh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(pinned)) {
+		t.Fatalf("install.sh does not pin %q", pinned)
+	}
+	sum := sha256.Sum256(tgz)
+	b = bytes.Replace(b, []byte(pinned), []byte(hex.EncodeToString(sum[:])+"  "+old+".tar.gz"), 1)
+	in.installSh = filepath.Join(in.dir, "install.sh")
+	if err := os.WriteFile(in.installSh, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := in.run(t, "--version", "v0.3.1")
+	wantOutput(t, out, code, 0, "checked against the digest this installer has for v0.3.1")
+	if strings.Contains(out, "gh ran") {
+		t.Errorf("gh was asked about a pinned release:\n%s", out)
+	}
+	if got := in.installed(t); got != "wicket 0.3.1" {
+		t.Errorf("installed wicket says %q", got)
+	}
+}
+
+// A platform an old release never had a build for is refused, even when the
+// release site offers one.
+func TestInstallRefusesUnpinnedOldAsset(t *testing.T) {
+	t.Parallel()
+	const old = "wicket_0.1.0_darwin_arm64"
+	r := newRelease(t, "curl")
+	r.addTarball(t, "v0.1.0", old, tarball(t, old, "0.1.0"))
+	in := newInstaller(t, r, "curl")
+	in.script(t, "uname", `case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac`)
+	out, code := in.run(t, "--version", "v0.1.0")
+	wantOutput(t, out, code, 1, old+".tar.gz was never published for v0.1.0")
+	if got := in.installed(t); got != "" {
+		t.Errorf("installed %q", got)
+	}
+}
+
+// GitHub answers every asset download with a redirect to another https host,
+// so each fetcher has to follow one, and a relative one, which keeps the
+// scheme.
+func TestInstallFollowsHTTPSRedirect(t *testing.T) {
+	t.Parallel()
+	for _, fetcher := range fetchers {
+		for _, kind := range []string{"https", "relative"} {
+			t.Run(fetcher+"/"+kind, func(t *testing.T) {
+				t.Parallel()
+				r := newRelease(t, fetcher)
+				r.set(func() {
+					r.redirect[tag+"/"+asset+".tar.gz"] = kind
+					r.redirect[tag+"/SHA256SUMS"] = kind
+				})
+				in := newInstaller(t, r, fetcher)
+				out, code := in.run(t)
+				wantOutput(t, out, code, 0, "installed wicket "+version)
+				r.mu.Lock()
+				mirrored := r.mirrored
+				r.mu.Unlock()
+				if want := map[string]int{"https": 2, "relative": 0}[kind]; len(mirrored) != want {
+					t.Errorf("the second server was asked for %v, want %d downloads", mirrored, want)
+				}
+				in.checkNothingLeft(t)
+			})
+		}
+	}
+}
+
+// Busybox without openssl falls back to TLS of its own, which accepts any
+// certificate, so the download could come from anyone.
+func TestInstallRefusesUncheckedTLS(t *testing.T) {
+	t.Parallel()
+	r := newRelease(t, "busybox-internal")
+	in := newInstaller(t, r, "busybox-internal")
+	out, code := in.run(t)
+	wantOutput(t, out, code, 1, "does not check TLS certificates; install curl, or openssl for busybox to use")
+	if got := in.installed(t); got != "" {
+		t.Errorf("installed %q", got)
+	}
+	in.checkNothingLeft(t)
+}
+
+// Busybox before 1.33 hands https to openssl without asking it to check the
+// certificate, and says nothing of it, so its version is what gives it away.
+func TestInstallRefusesOldBusybox(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ banner, want string }{
+		{"BusyBox v1.30.1 (Debian 1:1.30.1-6+b3) multi-call binary.", "busybox wget 1.30 does not check"},
+		{"BusyBox v1.32.0 (2020-06-26 12:00:00 UTC) multi-call binary.", "busybox wget 1.32 does not check"},
+		{"BusyBox multi-call binary.", "busybox wget of unknown version does not check"},
+	} {
+		t.Run(tc.banner, func(t *testing.T) {
+			t.Parallel()
+			r := newRelease(t, "curl")
+			in := newInstaller(t, r, "none")
+			// It would download anything, with a log that passes.
+			in.script(t, "wget", fmt.Sprintf(`[ "$1" = --version ] && { echo %q >&2; exit 1; }
+printf x >"$3"
+echo '  HTTP/1.1 200 OK' >&2`, tc.banner))
+			out, code := in.run(t, "--version", tag)
+			wantOutput(t, out, code, 1, tc.want)
+			if got := in.installed(t); got != "" {
+				t.Errorf("installed %q", got)
+			}
+		})
+	}
+}
+
+// wget_https lets nothing through that it cannot read: a log with no status
+// line, or a Location wget printed in a form the check does not parse.
+func TestInstallRefusesUnreadableWgetLog(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, log, want string }{
+		{"no status line", "", "wget did not show its redirects"},
+		{
+			"escaped tab",
+			`  HTTP/1.1 302 Found\n  Location: \\011http://example.com/x\n  HTTP/1.1 200 OK\n`,
+			"refused a redirect away from https",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRelease(t, "curl")
+			in := newInstaller(t, r, "none")
+			// GNU wget 1.x as far as install.sh can tell: it answers
+			// --version and writes the download, with log on stderr.
+			in.script(t, "wget", fmt.Sprintf(`[ "$1" = --version ] && { echo 'GNU Wget 1.21.4'; exit 0; }
+printf x >"$3"
+printf '%s' >&2`, tc.log))
+			out, code := in.run(t, "--version", tag)
+			wantOutput(t, out, code, 1, tc.want)
+			if got := in.installed(t); got != "" {
+				t.Errorf("installed %q", got)
+			}
+		})
+	}
+}
+
+// The installer warns when no client on PATH is FreeRDP 3, reading the
+// version an unsuffixed name prints whatever its exit status.
+func TestInstallFreeRDP3Warning(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, client string
+		warn         bool
+	}{
+		{"2.11.7", "echo 'This is FreeRDP version 2.11.7 (n/a)'", true},
+		{"3.31.1", "echo 'This is FreeRDP version 3.31.1 (n/a)'", false},
+		{"3.31.1 then exit 1", "echo 'This is FreeRDP version 3.31.1 (n/a)'; exit 1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRelease(t, "curl")
+			in := newInstaller(t, r, "curl")
+			in.script(t, "xfreerdp", tc.client)
+			out, code := in.run(t)
+			wantOutput(t, out, code, 0, "installed wicket "+version)
+			if got := strings.Contains(out, "warning: no FreeRDP 3 client on PATH"); got != tc.warn {
+				t.Errorf("warned=%v, want %v:\n%s", got, tc.warn, out)
+			}
+			in.checkNothingLeft(t)
+		})
+	}
+}
+
 // A signal during a stalled download stops the script with the shell's
-// status for it, and takes the download and the temp dir with it.
+// status for it, and takes the download and the temp dir with it. Ctrl-C
+// in a terminal goes to the whole process group, the download included.
 func TestInstallStopsOnSignal(t *testing.T) {
 	t.Parallel()
 	for _, fetcher := range fetchers {
-		for _, sig := range []struct {
-			sig  syscall.Signal
-			code int
-		}{{syscall.SIGHUP, 129}, {syscall.SIGINT, 130}, {syscall.SIGTERM, 143}} {
-			t.Run(fetcher+"/"+sig.sig.String(), func(t *testing.T) {
+		for _, sig := range []signal{
+			{sig: syscall.SIGHUP, code: 129},
+			{sig: syscall.SIGINT, code: 130},
+			{sig: syscall.SIGINT, code: 130, group: true},
+			{sig: syscall.SIGQUIT, code: 131},
+			{sig: syscall.SIGTERM, code: 143},
+		} {
+			t.Run(fmt.Sprintf("%s/%v/group=%v", fetcher, sig.sig, sig.group), func(t *testing.T) {
 				t.Parallel()
 				if fetcher == "busybox" {
 					// Its https helper outlives a killed wget.
@@ -623,7 +903,7 @@ func TestInstallStopsOnSignal(t *testing.T) {
 				r := newRelease(t, fetcher)
 				r.set(func() { r.stall = tag + "/" + asset + ".tar.gz" })
 				in := newInstaller(t, r, fetcher)
-				in.signalDuring(t, r.stalled, sig.sig, sig.code)
+				in.signalDuring(t, r.stalled, sig)
 				select {
 				case <-r.hungUp:
 				case <-time.After(2 * time.Second):
@@ -636,14 +916,46 @@ func TestInstallStopsOnSignal(t *testing.T) {
 }
 
 // A TERM while the installed wicket's --version hangs stops the script at
-// once rather than when that returns.
+// once rather than when that returns. One that ignores TERM is killed after
+// a grace period.
 func TestInstallStopsWhileVersionCheckHangs(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		trap   string
+		within time.Duration
+	}{
+		{"hangs", "", time.Second},
+		{"ignores TERM", `trap "" TERM`, 3 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRelease(t, "curl")
+			in := newInstaller(t, r, "curl")
+			started := filepath.Join(in.dir, "version-started")
+			writeScript(t, filepath.Join(in.bindir, "wicket"),
+				fmt.Sprintf("%s\n: >%q\nexec sleep 30", tc.trap, started))
+			in.signalDuring(t, appears(t, started), signal{sig: syscall.SIGTERM, code: 143, within: tc.within})
+			in.checkNothingLeft(t)
+		})
+	}
+}
+
+// A signal while the new binary is copied into place takes the copy with it,
+// and leaves the old wicket.
+func TestInstallStopsDuringCopy(t *testing.T) {
 	t.Parallel()
 	r := newRelease(t, "curl")
 	in := newInstaller(t, r, "curl")
-	started := filepath.Join(in.dir, "version-started")
-	writeScript(t, filepath.Join(in.bindir, "wicket"), fmt.Sprintf(": >%q\nexec sleep 30", started))
-	in.signalDuring(t, appears(t, started), syscall.SIGTERM, 143)
+	started := filepath.Join(in.dir, "copy-started")
+	in.script(t, "cp", fmt.Sprintf("%q \"$@\"\n: >%q\nexec sleep 30", mustLookPath(t, "cp"), started))
+	in.signalDuring(t, appears(t, started), signal{sig: syscall.SIGTERM, code: 143})
+	if left, _ := filepath.Glob(filepath.Join(in.bindir, ".wicket*")); len(left) > 0 {
+		t.Errorf("left in %s: %v", in.bindir, left)
+	}
+	if got := in.installed(t); got != "" {
+		t.Errorf("installed %q", got)
+	}
 	in.checkNothingLeft(t)
 }
 
@@ -662,7 +974,7 @@ func TestInstallStopsHungFreeRDPWrapper(t *testing.T) {
 			// Not exec: the wrapper forks the "real" client and waits.
 			in.script(t, "xfreerdp", fmt.Sprintf(": >%q\nsleep 30\nexit 0", started))
 			if stop {
-				in.signalDuring(t, appears(t, started), syscall.SIGTERM, 143)
+				in.signalDuring(t, appears(t, started), signal{sig: syscall.SIGTERM, code: 143})
 			} else {
 				out, code := in.run(t)
 				wantOutput(t, out, code, 0, "warning: no FreeRDP 3 client on PATH")
@@ -688,13 +1000,28 @@ func appears(t *testing.T, path string) <-chan struct{} {
 	return ready
 }
 
-// signalDuring starts install.sh, sends sig once ready is closed, and wants
-// it to exit with code within a second.
-func (in *installer) signalDuring(t *testing.T, ready <-chan struct{}, sig syscall.Signal, code int) {
+// signal is what signalDuring sends and what it wants back.
+type signal struct {
+	sig  syscall.Signal
+	code int
+	// group sends sig to install.sh's process group, as a terminal does.
+	group bool
+	// within is how long install.sh has to exit; zero means a second.
+	within time.Duration
+}
+
+// signalDuring starts install.sh, sends s.sig once ready is closed, and
+// wants it to exit with s.code in time.
+func (in *installer) signalDuring(t *testing.T, ready <-chan struct{}, s signal) {
 	t.Helper()
+	within := s.within
+	if within == 0 {
+		within = time.Second
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	cmd, out := in.command(ctx, t)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: s.group}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -709,18 +1036,22 @@ func (in *installer) signalDuring(t *testing.T, ready <-chan struct{}, sig sysca
 		<-done
 		t.Fatalf("install.sh never reached the point to signal it:\n%s", out)
 	}
-	if err := cmd.Process.Signal(sig); err != nil {
+	pid := cmd.Process.Pid
+	if s.group {
+		pid = -pid
+	}
+	if err := syscall.Kill(pid, s.sig); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case err := <-done:
 		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() != code {
-			t.Errorf("after %v: %v, want exit status %d\n%s", sig, err, code, out)
+		if !errors.As(err, &exit) || exit.ExitCode() != s.code {
+			t.Errorf("after %v: %v, want exit status %d\n%s", s.sig, err, s.code, out)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(within):
 		cancel()
 		<-done
-		t.Errorf("install.sh still running a second after %v\n%s", sig, out)
+		t.Errorf("install.sh still running %v after %v\n%s", within, s.sig, out)
 	}
 }

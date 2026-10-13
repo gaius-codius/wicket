@@ -73,9 +73,11 @@ run() {
 	return "$run_status"
 }
 
-# stop kills the running command, removes the temp dir and exits with $1.
-# Background commands ignore INT and QUIT, so it has to kill them for
-# Ctrl-C and Ctrl-\ too.
+# stop kills the running command, cleans up and exits with $1. Background
+# commands ignore INT and QUIT, so it has to kill them for Ctrl-C and Ctrl-\
+# too. A command that ignores TERM as well gets 2 s and then KILL, from a
+# watcher: kill -0 cannot tell, as a child that has exited stays a zombie
+# until it is waited for.
 stop() {
 	if [ -n "$starting" ]; then
 		stopping=$1
@@ -83,10 +85,24 @@ stop() {
 	fi
 	if [ -n "$child" ]; then
 		kill_tree TERM "$child"
+		(
+			sleep 2
+			kill_tree KILL "$child"
+		) &
+		st_watch=$!
 		wait "$child" 2>/dev/null || :
+		kill_tree KILL "$st_watch"
+		wait "$st_watch" 2>/dev/null || :
 	fi
-	rm -rf "$tmp"
+	cleanup
 	exit "$1"
+}
+
+# cleanup removes the temp dir and, once the copy into $BINDIR has started,
+# the copy, which is gone by then if it was renamed into place.
+cleanup() {
+	rm -rf "$tmp"
+	[ -z "$copying" ] || rm -f "$BINDIR/.wicket.new"
 }
 
 # kill_tree sends signal $1 to process $2 and everything under it, the
@@ -121,9 +137,25 @@ fetch() { # url dest
 # printed for -S; a download that came over plain http is never used. A log
 # with no status line means this wget did not print its headers, and an
 # unchecked redirect is not let through.
+#
+# Busybox runs openssl s_client for https, which checks the certificate
+# since 1.33; before that it did not ask openssl to, and said nothing.
+# Without openssl on PATH, or built without that helper, it falls back to TLS
+# of its own that checks nothing, and says so. Either way anyone on the path
+# could serve a tarball with a SHA256SUMS to match, so both are refused, the
+# second failed download or not. Busybox has no --version; it prints its
+# usage, which names its version, instead.
 wget_https() {
 	: >"$tmp/wget-version"
-	run wget --version >"$tmp/wget-version" 2>/dev/null || :
+	run wget --version >"$tmp/wget-version" 2>&1 || :
+	if grep -q 'BusyBox' "$tmp/wget-version"; then
+		bb_version=$(sed -n 's/.*BusyBox v\([0-9]*\.[0-9]*\).*/\1/p' "$tmp/wget-version" | head -n 1)
+		case "$bb_version" in
+		"" | 0.* | 1.[0-9] | 1.[12][0-9] | 1.3[0-2])
+			die "busybox wget ${bb_version:-of unknown version} does not check TLS certificates; install curl, or busybox 1.33 or newer with openssl"
+			;;
+		esac
+	fi
 	if grep -q 'Wget2' "$tmp/wget-version"; then
 		rm -f "$2"
 		run wget -q --https-only -O "$2" "$1" || return
@@ -131,7 +163,12 @@ wget_https() {
 			die "wget2 wrote nothing for $1; it skips a redirect away from https"
 		return
 	fi
-	run wget -S -O "$2" "$1" 2>"$tmp/wget.log" || return
+	wg_status=0
+	run wget -S -O "$2" "$1" 2>"$tmp/wget.log" || wg_status=$?
+	if grep -q 'TLS certificate validation not implemented' "$tmp/wget.log"; then
+		die "this wget (busybox without openssl) does not check TLS certificates; install curl, or openssl for busybox to use"
+	fi
+	[ "$wg_status" -eq 0 ] || return "$wg_status"
 	grep -q 'HTTP/' "$tmp/wget.log" ||
 		die "wget did not show its redirects, so they could not be checked; install curl"
 	# Every Location has to be https or start with /, which keeps the
@@ -297,9 +334,9 @@ main() {
 	*) die "no build for $(uname -m); try: go install github.com/$REPO/cmd/wicket@latest" ;;
 	esac
 
-	child="" starting="" stopping=""
+	child="" starting="" stopping="" copying=""
 	tmp=$(mktemp -d)
-	trap 'rm -rf "$tmp"' EXIT
+	trap cleanup EXIT
 	# A signal trap that only cleaned up would let the script carry on
 	# without $tmp. Stop with the status the shell would give.
 	trap 'stop 129' HUP
@@ -333,8 +370,10 @@ main() {
 	tar -xzf "$tmp/$name.tar.gz" -C "$tmp"
 	mkdir -p "$BINDIR"
 	# Copy next to the target, then rename, so a running wicket is not
-	# overwritten in place and a failed copy leaves the old one.
-	cp "$tmp/$name/wicket" "$BINDIR/.wicket.new"
+	# overwritten in place and a failed copy leaves the old one. Through
+	# run, as a copy to a slow disk is stopped like a download.
+	copying=1
+	run cp "$tmp/$name/wicket" "$BINDIR/.wicket.new"
 	chmod 755 "$BINDIR/.wicket.new"
 	mv -f "$BINDIR/.wicket.new" "$BINDIR/wicket"
 
@@ -411,13 +450,15 @@ freerdp3_probe() {
 	fr_starting=""
 	[ -z "$fr_stopping" ] || freerdp3_probe_stop
 	wait "$fr_pid" || :
-	kill "$fr_watch" || :
+	# KILL, as the watcher loses a TERM that comes before its trap is set,
+	# and would then report a timeout for a client that answered.
+	kill_tree KILL "$fr_watch"
 	wait "$fr_watch" || :
 }
 
 freerdp3_probe_stop() {
 	kill_tree KILL "$fr_pid"
-	kill "$fr_watch" 2>/dev/null || :
+	kill_tree KILL "$fr_watch"
 	wait
 	exit 143
 }

@@ -902,6 +902,11 @@ func TestInstallIgnoresInsecureConfig(t *testing.T) {
 				if code == 0 {
 					t.Fatalf("installed with certificate checks off (%v):\n%s", args, out)
 				}
+				// Refused at the connection, not for some other reason.
+				if !strings.Contains(out, "could not reach") && !strings.Contains(out, "no release found") &&
+					!strings.Contains(out, "download failed") {
+					t.Errorf("exit %d (%v) for another reason:\n%s", code, args, out)
+				}
 			}
 			if got := in.installed(t); got != "" {
 				t.Errorf("installed %q", got)

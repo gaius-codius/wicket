@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
@@ -304,8 +305,10 @@ func TestRetry_ShowsHowTheClientExited(t *testing.T) {
 	m := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory()).m
 	p, _ := m.app.Cfg.Profile("work")
 	m.view = viewRetry
-	m.retry = retryState{profile: p, status: "session ended quickly", class: rdp.ClassShortSession,
-		outcome: rdp.Outcome{ExitCode: 131, Duration: 2300 * time.Millisecond}}
+	m.retry = retryState{
+		profile: p, status: "session ended quickly", class: rdp.ClassShortSession,
+		outcome: rdp.Outcome{ExitCode: 131, Duration: 2300 * time.Millisecond},
+	}
 	out := screen(m)
 	for _, want := range []string{"▲ session ended quickly", "exited with status 131 after 2.3s", "If the password may be wrong"} {
 		if !strings.Contains(out, want) {
@@ -343,8 +346,10 @@ func TestRetry_WrappedMessageSurvivesTinyHeights(t *testing.T) {
 	m := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory()).m
 	p, _ := m.app.Cfg.Profile("work")
 	m.view = viewRetry
-	m.retry = retryState{profile: p, class: rdp.ClassShortSession,
-		status: "session ended quickly: the client could not reach the host"}
+	m.retry = retryState{
+		profile: p, class: rdp.ClassShortSession,
+		status: "session ended quickly: the client could not reach the host",
+	}
 	for h := heightTiny; h <= 8; h++ {
 		nm, _ := m.Update(teaWin(20, h))
 		out := stripANSI(nm.(Model).render())
@@ -387,9 +392,11 @@ func TestRetry_ShedsSpacingBeforeTheExitDetails(t *testing.T) {
 	m := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory()).m
 	p, _ := m.app.Cfg.Profile("work")
 	m.view = viewRetry
-	m.retry = retryState{profile: p, status: "FreeRDP failed: could not connect", class: rdp.ClassFailed,
+	m.retry = retryState{
+		profile: p, status: "FreeRDP failed: could not connect", class: rdp.ClassFailed,
 		outcome: rdp.Outcome{Client: "sdl-freerdp3", ExitCode: 141, Duration: 15 * time.Second},
-		note:    "ERRCONNECT_CONNECT_FAILED"}
+		note:    "ERRCONNECT_CONNECT_FAILED",
+	}
 	for _, size := range [][2]int{{40, 8}, {60, 8}, {80, 8}} {
 		nm, _ := m.Update(teaWin(size[0], size[1]))
 		out := stripANSI(nm.(Model).render())

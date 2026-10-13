@@ -63,8 +63,10 @@ func TestSave_KeepsTheFileAsWritten(t *testing.T) {
 			upsert(t, c, p, "lab")
 		}},
 		{"add", func(t *testing.T, c *Config) {
-			upsert(t, c, Profile{Name: "new", Host: "h", User: "u", Client: DefaultClient,
-				DynamicResolution: true, Scale: 100, Clipboard: true}, "")
+			upsert(t, c, Profile{
+				Name: "new", Host: "h", User: "u", Client: DefaultClient,
+				DynamicResolution: true, Scale: 100, Clipboard: true,
+			}, "")
 		}},
 		{"delete-middle", func(t *testing.T, c *Config) { remove(t, c, "lab") }},
 		{"delete-first", func(t *testing.T, c *Config) { remove(t, c, "work") }},
@@ -188,8 +190,10 @@ func TestSave_LineEndings(t *testing.T) {
 			p, _ := c.Profile("work")
 			p.Size = "100%"
 			upsert(t, c, p, "work")
-			upsert(t, c, Profile{Name: "new", Host: "h", User: "u", Client: DefaultClient,
-				DynamicResolution: true, Scale: 100, Clipboard: true}, "")
+			upsert(t, c, Profile{
+				Name: "new", Host: "h", User: "u", Client: DefaultClient,
+				DynamicResolution: true, Scale: 100, Clipboard: true,
+			}, "")
 			if c.Rewrote() {
 				t.Fatal("rewrote the file in full")
 			}
@@ -269,8 +273,10 @@ func FuzzSave(f *testing.F) {
 			d.setProfile(0, applyProfile(d.profiles[0], p))
 			fallthrough
 		default:
-			d.addProfile(applyProfile(nil, Profile{Name: "fuzz-new", Host: "h", User: "u",
-				Client: DefaultClient, Scale: 100}))
+			d.addProfile(applyProfile(nil, Profile{
+				Name: "fuzz-new", Host: "h", User: "u",
+				Client: DefaultClient, Scale: 100,
+			}))
 		}
 		out, err := d.patch()
 		if err == nil && !d.matches(out) {
@@ -323,8 +329,10 @@ func TestSave_ReviewCases(t *testing.T) {
 			name: "add goes after a comment flush under the last profile",
 			src:  prof("a") + "# about a\n\n[ui]\ntheme = \"auto\"\n",
 			save: func(t *testing.T, c *Config) {
-				upsert(t, c, Profile{Name: "b", Host: "h", User: "u", Client: DefaultClient,
-					DynamicResolution: true, Scale: 100, Clipboard: true}, "")
+				upsert(t, c, Profile{
+					Name: "b", Host: "h", User: "u", Client: DefaultClient,
+					DynamicResolution: true, Scale: 100, Clipboard: true,
+				}, "")
 			},
 			want: prof("a") + "# about a\n\n[[profiles]]\nname = \"b\"\nhost = \"h\"\nuser = \"u\"\n" +
 				"client = \"sdl-freerdp3\"\nfullscreen = false\ndynamic_resolution = true\nscale = 100\n" +
@@ -511,8 +519,10 @@ func TestSave_AddThenDeleteIsANoOp(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			upsert(t, c, Profile{Name: "new", Host: "h", User: "u", Client: DefaultClient,
-				DynamicResolution: true, Scale: 100, Clipboard: true}, "")
+			upsert(t, c, Profile{
+				Name: "new", Host: "h", User: "u", Client: DefaultClient,
+				DynamicResolution: true, Scale: 100, Clipboard: true,
+			}, "")
 			remove(t, c, "new")
 			if c.Rewrote() {
 				t.Fatal("rewrote the file in full")

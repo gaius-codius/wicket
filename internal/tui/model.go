@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
@@ -432,8 +433,10 @@ func (m Model) fitChrome(lo *layout) (context string, status, foot []string, c c
 		status = []string{st.Render(mark) + " " + st.Render(truncate(m.status, max(lo.Inner-2, 1)))}
 	}
 
-	c = chromeParts{header: true, divider: true, topGap: true, gap: true,
-		status: len(status) > 0, foot: len(foot) > 0}
+	c = chromeParts{
+		header: true, divider: true, topGap: true, gap: true,
+		status: len(status) > 0, foot: len(foot) > 0,
+	}
 	avail := max(lo.Height-2, 1) // the frame's top and bottom border
 	room := func() int { return avail - c.cost(len(status), len(foot)) }
 	want, keep, core := m.bodyNeeds(*lo)
@@ -518,6 +521,8 @@ func (m Model) bodyNeeds(lo layout) (want, keep, core int) {
 		msg, fullscreen, detail, why, note, hint := m.retryBlocks(lo)
 		keep := len(msg) + len(fullscreen) + len(detail) + len(note)
 		return keep + len(why) + len(hint) + 2, keep, len(msg)
+	case viewLoadErr, viewHelp, viewModal:
+		// These take the minimum below.
 	}
 	return 1, 1, 1
 }
@@ -668,8 +673,12 @@ func (m Model) chrome() (string, []keyHint) {
 	case viewSession:
 		return "session open", m.sessionHints()
 	case viewRetry:
-		return m.listContext(), []keyHint{{"enter", "retry", intentPrimary}, {"n", "new password", intentNormal},
-			{"esc", "dismiss", intentNormal}, {"?", "help", intentNormal}}
+		return m.listContext(), []keyHint{
+			{"enter", "retry", intentPrimary},
+			{"n", "new password", intentNormal},
+			{"esc", "dismiss", intentNormal},
+			{"?", "help", intentNormal},
+		}
 	default:
 		return m.listContext(), m.listHints()
 	}

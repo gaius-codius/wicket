@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // LoadError is a fatal config-file problem. The file bytes must not be mutated.
 type LoadError struct {
@@ -32,18 +35,8 @@ func loadError(path string, err error) error {
 	if err == nil {
 		return nil
 	}
-	var le *LoadError
-	if errorsAs(err, &le) {
+	if _, ok := errors.AsType[*LoadError](err); ok {
 		return err
 	}
 	return &LoadError{Path: path, Err: err}
-}
-
-func errorsAs(err error, target **LoadError) bool {
-	le, ok := err.(*LoadError)
-	if !ok {
-		return false
-	}
-	*target = le
-	return true
 }

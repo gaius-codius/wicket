@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
 	"github.com/gaius-codius/wicket/internal/secret"
 )
 
@@ -446,7 +447,7 @@ func TestForm_NarrowTextIsMarkedAsCut(t *testing.T) {
 	m = focusField(t, m, fieldScale)
 	out := stripANSI(m.render())
 	var pw, host string
-	for _, ln := range strings.Split(out, "\n") {
+	for ln := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(ln, "password:") && !strings.Contains(ln, "forget") {
 			pw = ln
 		}
@@ -460,7 +461,7 @@ func TestForm_NarrowTextIsMarkedAsCut(t *testing.T) {
 	m = sized(t, cfg, 30, 30, "e")
 	m = focusField(t, m, fieldScale)
 	out = stripANSI(m.render())
-	for _, ln := range strings.Split(out, "\n") {
+	for ln := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(ln, "host:") {
 			host = ln
 		}

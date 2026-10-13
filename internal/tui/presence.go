@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
@@ -78,7 +79,7 @@ func (m Model) ensurePresence() (Model, tea.Cmd) {
 		return m, nil
 	}
 	id := m.identity(p)
-	if e, known := m.presence[id]; known && !(e.state == presenceUnavailable && m.clock().Sub(e.at) >= presenceRetryAfter) {
+	if e, known := m.presence[id]; known && (e.state != presenceUnavailable || m.clock().Sub(e.at) < presenceRetryAfter) {
 		return m, nil
 	}
 	m.presenceSeq++

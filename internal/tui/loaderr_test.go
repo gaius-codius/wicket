@@ -34,8 +34,8 @@ func TestLoadError_InvalidTOMLUnchanged(t *testing.T) {
 	flat = strings.ReplaceAll(flat, " ", "")
 	pathShown := strings.Contains(flat, strings.ReplaceAll(h.cfg, " ", ""))
 	if !pathShown {
-		if real, err := filepath.EvalSymlinks(h.cfg); err == nil {
-			pathShown = strings.Contains(flat, strings.ReplaceAll(real, " ", ""))
+		if target, err := filepath.EvalSymlinks(h.cfg); err == nil {
+			pathShown = strings.Contains(flat, strings.ReplaceAll(target, " ", ""))
 		}
 	}
 	if !pathShown {
@@ -72,7 +72,7 @@ func TestLoadError_UnreadableNotReplaced(t *testing.T) {
 	if err := os.Chmod(h.cfg, 0o000); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(h.cfg, 0o600)
+	defer func() { _ = os.Chmod(h.cfg, 0o600) }()
 	m := New(Options{
 		Home:       h.home,
 		ConfigPath: h.cfg,

@@ -28,7 +28,7 @@ func Sandbox(m *testing.M) int {
 	if err != nil {
 		panic(err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	for k, v := range map[string]string{
 		"WICKET_CONFIG":   filepath.Join(dir, "missing.toml"),
@@ -123,7 +123,7 @@ func fakeClients(tag string) []int {
 func fakeEnv(pid int) string {
 	env, _ := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
 	var out []string
-	for _, kv := range strings.Split(string(env), "\x00") {
+	for kv := range strings.SplitSeq(string(env), "\x00") {
 		if strings.HasPrefix(kv, "FAKERDP_") && !strings.HasPrefix(kv, "FAKERDP_SANDBOX=") {
 			out = append(out, kv)
 		}

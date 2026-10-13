@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/gaius-codius/wicket/internal/secret"
 	"github.com/gaius-codius/wicket/internal/testutil"
 	"github.com/gaius-codius/wicket/internal/testutil/fakesecret"
@@ -43,9 +45,11 @@ func (s *stallStore) stall(ctx context.Context, op string) error {
 func (s *stallStore) Lookup(ctx context.Context, _ secret.Identity) (secret.LookupResult, error) {
 	return secret.LookupResult{}, s.stall(ctx, "Lookup")
 }
+
 func (s *stallStore) Upsert(ctx context.Context, _ secret.Identity, _ secret.Password) error {
 	return s.stall(ctx, "Upsert")
 }
+
 func (s *stallStore) Delete(ctx context.Context, _ secret.Identity) error {
 	return s.stall(ctx, "Delete")
 }
@@ -155,7 +159,7 @@ func TestKeyring_StalledLookupKeepsTheUIResponsive(t *testing.T) {
 
 	// The cancelled lookup's reply, when it comes, changes nothing.
 	nm, c := m.Update(keyringReplyMsg{id: id, reply: credResolvedMsg{res: credResult{NeedModal: true}}})
-	if after := nm.(Model); c != nil || after.view != viewModal || after.modal.lookupErr != m.modal.lookupErr {
+	if after := nm.(Model); c != nil || after.view != viewModal || !errors.Is(after.modal.lookupErr, m.modal.lookupErr) {
 		t.Fatal("a stale keyring reply was acted on")
 	}
 }
@@ -314,7 +318,7 @@ func TestRun_SignalsEndAWaitOnAStalledKeyring(t *testing.T) {
 			h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewDBus())
 
 			inR, inW := io.Pipe()
-			defer inW.Close()
+			defer func() { _ = inW.Close() }()
 			var out lockedBuffer
 			done := make(chan error, 1)
 			go func() {

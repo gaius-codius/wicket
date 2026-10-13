@@ -1,0 +1,5 @@
+remotes:
+  - git_url: https://github.com/gaius-codius/go-ci
+    ref: v1.0.1 # the release ci.yml pins
+    configs:
+      - lefthook/go.yml

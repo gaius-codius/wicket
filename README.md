@@ -207,8 +207,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Security:
 [advisories](https://github.com/gaius-codius/wicket/security/advisories/new)
 and [SECURITY.md](SECURITY.md).
 
-CI runs `gofmt`, `go vet`, `go test ./...`, and `go test -race ./internal/secret`
-on pushes and pull requests to `main`.
+CI runs the shared [go-ci](https://github.com/gaius-codius/go-ci) checks
+(tests, the race detector, a fuzz run, `go vet`, golangci-lint and
+govulncheck) on Linux, and the tests with the Keychain backend on macOS, on
+pushes and pull requests to `main`.
 
 ## License
 

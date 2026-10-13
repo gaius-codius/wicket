@@ -120,7 +120,7 @@ func TestBuildPlan_FolderShares(t *testing.T) {
 	j := strings.Index(joined, wantDocs)
 	k := strings.Index(joined, wantProj)
 	l := strings.Index(joined, "/from-stdin:force")
-	if !(i < j && j < k && k < l) {
+	if i >= j || j >= k || k >= l {
 		t.Fatalf("order: %v", plan.Args)
 	}
 }

@@ -154,8 +154,8 @@ func realPkgPath(id, path string) (pkg string, isTest bool, skip bool) {
 		return "", false, true
 	}
 	isTest = strings.Contains(id, ".test]")
-	if strings.HasSuffix(path, "_test") {
-		path, isTest = strings.TrimSuffix(path, "_test"), true
+	if before, ok := strings.CutSuffix(path, "_test"); ok {
+		path, isTest = before, true
 	}
 	return path, isTest, false
 }

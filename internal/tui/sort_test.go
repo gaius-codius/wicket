@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
@@ -193,7 +194,7 @@ func TestList_RowsNeverOverflow(t *testing.T) {
 						continue
 					}
 					m.fitChrome(&lo)
-					for _, ln := range strings.Split(m.viewList(lo), "\n") {
+					for ln := range strings.SplitSeq(m.viewList(lo), "\n") {
 						if got := lipgloss.Width(ln); got > lo.Inner {
 							t.Fatalf("%dx%d q=%q sel=%d: %d-cell line in a %d-cell panel:\n%s",
 								w, hgt, q, sel, got, lo.Inner, stripANSI(ln))
@@ -296,7 +297,7 @@ func TestList_FilterHighlightKeepsReverseInTerminalMode(t *testing.T) {
 		t.Fatalf("no style on the match:\n%q", lit)
 	}
 	set := map[string]bool{}
-	for _, p := range strings.Split(params[1], ";") {
+	for p := range strings.SplitSeq(params[1], ";") {
 		set[p] = true
 	}
 	if !set["4"] || !set["7"] {

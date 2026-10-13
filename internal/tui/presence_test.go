@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/gaius-codius/wicket/internal/secret"
 )
 
@@ -278,7 +279,7 @@ func TestPresence_UnavailableIsAskedAgain(t *testing.T) {
 	store := &recoveringStore{Memory: secret.NewMemory(), down: true}
 	h := newHarness(t, twoProfiles(), store)
 	p, _ := h.m.app.Cfg.Profile("work")
-	if err := store.Memory.Upsert(bg, h.m.identity(p), mustPassword(t, "pw")); err != nil {
+	if err := store.Upsert(bg, h.m.identity(p), mustPassword(t, "pw")); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Unix(1000, 0)

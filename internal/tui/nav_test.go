@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
@@ -18,7 +19,7 @@ func paste(m Model, s string) Model {
 func manyProfiles(n int) string {
 	var b strings.Builder
 	b.WriteString("[general]\n")
-	for i := 0; i < n; i++ {
+	for i := range n {
 		fmt.Fprintf(&b, "[[profiles]]\nname = \"p%02d\"\nhost = \"h%02d\"\nuser = \"u\"\nscale = 100\n", i, i)
 	}
 	return b.String()

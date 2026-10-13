@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
@@ -223,12 +224,15 @@ type panicStore struct{}
 func (panicStore) Lookup(context.Context, secret.Identity) (secret.LookupResult, error) {
 	panic("list must not query secret.Store")
 }
+
 func (panicStore) Upsert(context.Context, secret.Identity, secret.Password) error {
 	panic("list must not query secret.Store")
 }
+
 func (panicStore) Delete(context.Context, secret.Identity) error {
 	panic("list must not query secret.Store")
 }
+
 func (panicStore) Presence(context.Context, secret.Identity) (secret.Presence, error) {
 	panic("list must not query secret.Store")
 }
@@ -248,15 +252,18 @@ func (w *wrapStore) Lookup(ctx context.Context, id secret.Identity) (secret.Look
 	}
 	return w.inner.Lookup(ctx, id)
 }
+
 func (w *wrapStore) Upsert(ctx context.Context, id secret.Identity, pw secret.Password) error {
 	if w.upsertErr != nil {
 		return w.upsertErr
 	}
 	return w.inner.Upsert(ctx, id, pw)
 }
+
 func (w *wrapStore) Presence(ctx context.Context, id secret.Identity) (secret.Presence, error) {
 	return w.inner.Presence(ctx, id)
 }
+
 func (w *wrapStore) Delete(ctx context.Context, id secret.Identity) error {
 	if w.deleteErr != nil {
 		return w.deleteErr
@@ -294,8 +301,10 @@ func newHarness(t *testing.T, body string, store secret.Store) *harness {
 	if store == nil {
 		store = secret.NewMemory()
 	}
-	h := &harness{t: t, home: home, cfg: cfg, state: st, store: store,
-		stdout: new(bytes.Buffer), stderr: new(bytes.Buffer)}
+	h := &harness{
+		t: t, home: home, cfg: cfg, state: st, store: store,
+		stdout: new(bytes.Buffer), stderr: new(bytes.Buffer),
+	}
 	m := New(Options{
 		Home:       home,
 		ConfigPath: cfg,

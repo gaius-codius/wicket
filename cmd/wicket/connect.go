@@ -9,19 +9,20 @@ import (
 	"os"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
-	"golang.org/x/term"
 )
 
 var (
-	openStore     = func() secret.Store { return secret.Default() }
+	openStore     = secret.Default
 	lookupProfile = func(cfg *config.Config, name string) (config.Profile, bool) {
 		return cfg.Profile(name)
 	}
-	isTerminal   = func(fd int) bool { return term.IsTerminal(fd) }
-	readPassword = func(fd int) ([]byte, error) { return term.ReadPassword(fd) }
+	isTerminal   = term.IsTerminal
+	readPassword = term.ReadPassword
 	stdinFile    = func() *os.File { return os.Stdin }
 	newLauncher  = func(stdout, stderr io.Writer) *rdp.Launcher {
 		return &rdp.Launcher{Stdout: stdout, Stderr: stderr}

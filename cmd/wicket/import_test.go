@@ -227,6 +227,39 @@ func TestImportRemmina_SkipEscapesControlCharacters(t *testing.T) {
 	}
 }
 
+// A share the import plan drops is named in the summary with its reason, and
+// a dry run says the same as the import, which keeps the valid share.
+func TestImportRemmina_DroppedShareReported(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	t.Setenv("WICKET_CONFIG", cfgPath)
+	t.Setenv("WICKET_STATE", filepath.Join(t.TempDir(), "state.toml"))
+	dir := t.TempDir()
+	// GKeyFile unescapes \n, so the sharefolder path holds a newline.
+	doc := "[remmina]\nname=files\nprotocol=RDP\nserver=h\nusername=u\n" +
+		"sharefolder=/tmp/wicket-a\\nb\ndrive=docs,/tmp/wicket-docs\n"
+	if err := os.WriteFile(filepath.Join(dir, "files.remmina"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	note := `files: share "/tmp/wicket-a\nb" dropped: path must not contain control characters` + "\n"
+
+	dry := runCLI(t, []string{"import", "remmina", "--dry-run", dir})
+	if dry.code != 0 || !strings.Contains(dry.stdout, note) {
+		t.Fatalf("dry-run exit %d stdout %q stderr %q", dry.code, dry.stdout, dry.stderr)
+	}
+	got := runCLI(t, []string{"import", "remmina", dir})
+	if got.code != 0 || got.stdout != dry.stdout {
+		t.Fatalf("import exit %d stdout %q, dry run said %q", got.code, got.stdout, dry.stdout)
+	}
+	c, err := config.Open(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := c.Profile("files")
+	if !ok || len(p.Shares) != 1 || p.Shares[0].Path != "/tmp/wicket-docs" || p.Shares[0].Name != "docs" {
+		t.Fatalf("profile %+v", p)
+	}
+}
+
 // Imported profiles take the preferred FreeRDP 3 client: an unsuffixed
 // xfreerdp counts only when its --version says 3, exit status aside.
 func TestImport_ClientNeedsFreeRDP3(t *testing.T) {

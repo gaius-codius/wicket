@@ -49,9 +49,11 @@ var (
 	ErrPromptDismissed = errors.New("the keyring prompt was dismissed")
 	// ErrPromptTimeout means nobody answered a keyring prompt in time.
 	ErrPromptTimeout = errors.New("timed out waiting for the keyring prompt")
-	// ErrLocked means a lookup found a stored password but could not read
-	// it because the keyring stayed locked. It wraps why the unlock failed,
-	// usually ErrPromptDismissed, and that cause wraps ErrUnavailable.
+	// ErrLocked means a lookup found a stored password it could not read
+	// because the keyring stayed locked. Another match may have been
+	// readable, but the locked one may be newer, so none is returned. It
+	// wraps why the unlock failed, usually ErrPromptDismissed, and that
+	// cause wraps ErrUnavailable.
 	ErrLocked = errors.New("the keyring is locked")
 )
 
@@ -150,37 +152,44 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 	if err != nil {
 		return LookupResult{}, err
 	}
-	// A locked keyring answers Unlock with a prompt path. Items that stay
-	// locked simply yield no secret below, so a failed or dismissed prompt
-	// is not fatal here -- unless the caller gave up, which is not the same
-	// as the user saying no. It is kept, though: if nothing could be read,
-	// a password is stored behind it, and "not found" would send the user
-	// off to save one into the same locked keyring.
-	var unlockErr error
+	// A locked keyring answers Unlock with a prompt path. If the prompt is
+	// refused or fails, the lookup is ErrLocked even when another match is
+	// readable: the locked one may be the newer, and reading around it would
+	// send a stale password with no word of why (issue #80). Nor is it "not
+	// found", which would send the user off to save one into the same locked
+	// keyring. A caller that gave up is told so instead, which is not the
+	// same as the user saying no. Stopping here also keeps locked items out
+	// of GetSecrets, which some backends fail outright, hiding the lock
+	// behind a generic "unavailable".
 	if len(locked) > 0 {
 		var opened []dbus.ObjectPath
 		var prompt dbus.ObjectPath
-		if err := svc.CallWithContext(ctx, ssServiceIface+".Unlock", 0, locked).Store(&opened, &prompt); err != nil {
-			unlockErr = unavailable(ctx, err)
-		} else if err := runPrompt(ctx, conn, prompt); err != nil {
+		err := svc.CallWithContext(ctx, ssServiceIface+".Unlock", 0, locked).Store(&opened, &prompt)
+		if err != nil {
+			err = unavailable(ctx, err)
+		} else {
+			err = runPrompt(ctx, conn, prompt)
+		}
+		if err != nil {
 			if ctx.Err() != nil {
 				return LookupResult{}, err
 			}
-			unlockErr = err
+			return LookupResult{}, fmt.Errorf("%w (%w)", ErrLocked, err)
 		}
 	}
-	// After a refused unlock only the unlocked matches can be read. Asking
-	// for the locked ones too would leave the outcome to the backend: some
-	// skip them, others fail the whole call, and a failure here would hide
-	// that the keyring is locked behind a generic "unavailable".
-	readable := items
-	if unlockErr != nil {
-		readable = unlocked
-	}
 	secrets := map[dbus.ObjectPath]ssSecret{}
-	if len(readable) > 0 {
-		if err := svc.CallWithContext(ctx, ssServiceIface+".GetSecrets", 0, readable, session).Store(&secrets); err != nil {
-			return LookupResult{}, unavailable(ctx, err)
+	if err := svc.CallWithContext(ctx, ssServiceIface+".GetSecrets", 0, items, session).Store(&secrets); err != nil {
+		return LookupResult{}, unavailable(ctx, err)
+	}
+	// An unlock can complete and still leave a match locked: a backend may
+	// let the user open some items and not others. GetSecrets skips it, and
+	// the older match that is left must not stand in for it.
+	for _, p := range locked {
+		if _, ok := secrets[p]; !ok {
+			for _, sec := range secrets {
+				clear(sec.Value)
+			}
+			return LookupResult{}, fmt.Errorf("%w (%w: the unlock left a match locked)", ErrLocked, ErrUnavailable)
 		}
 	}
 	// A match whose password Wicket cannot use stays in the running: the
@@ -204,9 +213,6 @@ func (d *DBus) Lookup(ctx context.Context, id Identity) (LookupResult, error) {
 		hits = append(hits, hit{pw: pw, err: err, mod: mod})
 	}
 	if len(hits) == 0 {
-		if unlockErr != nil {
-			return LookupResult{}, fmt.Errorf("%w (%w)", ErrLocked, unlockErr)
-		}
 		return LookupResult{}, ErrNotFound
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].mod > hits[j].mod })

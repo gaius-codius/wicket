@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -305,12 +304,19 @@ func validateImported(p Profile) error {
 
 // dropUnimportableShares keeps shares a loaded config would accept, and
 // drops the rest, so one bad Remmina folder does not skip the connection.
+// Each dropped share comes back with its reason, for the import summary.
 // Names that are almost valid are cleaned the way ShareNameFromPath is.
-func dropUnimportableShares(p Profile) Profile {
+func dropUnimportableShares(p Profile) (Profile, []DroppedShare) {
 	if len(p.Shares) == 0 {
-		return p
+		return p, nil
 	}
+	var dropped []DroppedShare
 	kept := make([]Share, 0, len(p.Shares))
+	// seen maps each kept drive name to its folder. Remmina can list one
+	// folder bare and again under its own base name; that second entry is
+	// the share already kept, so it goes without a note rather than one
+	// saying a folder the summary lists was dropped.
+	seen := map[string]string{}
 	for _, s := range p.Shares {
 		s.Path = strings.TrimSpace(s.Path)
 		s.Name = strings.TrimSpace(s.Name)
@@ -321,15 +327,23 @@ func dropUnimportableShares(p Profile) Profile {
 				s.Name = cleaned
 			}
 		}
-		trial := p
-		trial.Shares = append(slices.Clone(kept), s)
-		if validateSharesShape(trial) != nil {
+		drive, msg := checkShareShape(s, p.ShareHome)
+		key := strings.ToLower(drive)
+		if prev, ok := seen[key]; msg == "" && ok {
+			if expanded, _ := ExpandPath(s.Path); expanded == prev {
+				continue
+			}
+			msg = fmt.Sprintf("duplicate share name %q", drive)
+		}
+		if msg != "" {
+			dropped = append(dropped, DroppedShare{Path: s.Path, Reason: msg})
 			continue
 		}
+		seen[key], _ = ExpandPath(s.Path)
 		kept = append(kept, s)
 	}
 	p.Shares = kept
-	return p
+	return p, dropped
 }
 
 // validateSharesShape checks share paths and names without touching the
@@ -337,41 +351,9 @@ func dropUnimportableShares(p Profile) Profile {
 func validateSharesShape(p Profile) error {
 	seen := map[string]bool{}
 	for i, s := range p.Shares {
-		path := strings.TrimSpace(s.Path)
-		if path == "" {
-			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: path must not be empty", i+1)}
-		}
-		if hasControl(path) {
-			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: path must not contain control characters", i+1)}
-		}
-		if strings.ContainsRune(path, ',') {
-			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: path must not contain ','", i+1)}
-		}
-		expanded, err := ExpandPath(path)
-		if err != nil {
-			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %v", i+1, err)}
-		}
-		if !filepath.IsAbs(expanded) {
-			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: path must be absolute or ~/…", i+1)}
-		}
-		name := strings.TrimSpace(s.Name)
-		if name != "" {
-			if hasControl(name) {
-				return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: name must not contain control characters", i+1)}
-			}
-			if strings.ContainsAny(name, ",/") || strings.Contains(name, string(filepath.Separator)) {
-				return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: name must not contain ',' or '/'", i+1)}
-			}
-			if name != sanitizeShareName(name) {
-				return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: name must be letters, digits, '_' or '-'", i+1)}
-			}
-		}
-		drive := name
-		if drive == "" {
-			drive = ShareNameFromPath(expanded)
-		}
-		if p.ShareHome && strings.EqualFold(drive, "home") {
-			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: name %q clashes with share_home", i+1, drive)}
+		drive, msg := checkShareShape(s, p.ShareHome)
+		if msg != "" {
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %s", i+1, msg)}
 		}
 		key := strings.ToLower(drive)
 		if seen[key] {
@@ -380,6 +362,50 @@ func validateSharesShape(p Profile) error {
 		seen[key] = true
 	}
 	return nil
+}
+
+// checkShareShape is why one share would not load on its own, or "" when it
+// would, and the drive name it is shared as. Duplicate drive names are left
+// to the caller, which knows the shares before it. It names no entry number,
+// so an import can report a dropped share by its path.
+func checkShareShape(s Share, shareHome bool) (drive, msg string) {
+	path := strings.TrimSpace(s.Path)
+	if path == "" {
+		return "", "path must not be empty"
+	}
+	if hasControl(path) {
+		return "", "path must not contain control characters"
+	}
+	if strings.ContainsRune(path, ',') {
+		return "", "path must not contain ','"
+	}
+	expanded, err := ExpandPath(path)
+	if err != nil {
+		return "", err.Error()
+	}
+	if !filepath.IsAbs(expanded) {
+		return "", "path must be absolute or ~/…"
+	}
+	name := strings.TrimSpace(s.Name)
+	if name != "" {
+		if hasControl(name) {
+			return "", "name must not contain control characters"
+		}
+		if strings.ContainsAny(name, ",/") || strings.Contains(name, string(filepath.Separator)) {
+			return "", "name must not contain ',' or '/'"
+		}
+		if name != sanitizeShareName(name) {
+			return "", "name must be letters, digits, '_' or '-'"
+		}
+	}
+	drive = name
+	if drive == "" {
+		drive = ShareNameFromPath(expanded)
+	}
+	if shareHome && strings.EqualFold(drive, "home") {
+		return "", fmt.Sprintf("name %q clashes with share_home", drive)
+	}
+	return drive, ""
 }
 
 // validateSharesExist requires each share path to name an existing directory

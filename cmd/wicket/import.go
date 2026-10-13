@@ -115,6 +115,7 @@ func doImport(stdout, stderr io.Writer, dryRun, rename bool, parse func() ([]con
 
 	var (
 		imported []config.Profile
+		dropped  []config.DroppedShare
 		skipped  []importer.Skip
 	)
 	if dryRun {
@@ -123,7 +124,7 @@ func doImport(stdout, stderr io.Writer, dryRun, rename bool, parse func() ([]con
 			fmt.Fprintln(stderr, err)
 			return 2
 		}
-		imported, skipped = config.PlanProfiles(existing, profiles, rename)
+		imported, skipped, dropped = config.PlanProfiles(existing, profiles, rename)
 	} else {
 		cfg, err := config.OpenOrCreate(paths.Config)
 		if err != nil {
@@ -133,14 +134,14 @@ func doImport(stdout, stderr io.Writer, dryRun, rename bool, parse func() ([]con
 		for _, w := range cfg.Warnings() {
 			fmt.Fprintln(stderr, "warning:", w)
 		}
-		imported, skipped, err = cfg.AddProfiles(profiles, rename)
+		imported, skipped, dropped, err = cfg.AddProfiles(profiles, rename)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 2
 		}
 	}
 	skipped = append(parseSkipped, skipped...)
-	importer.WriteSummary(stdout, imported, skipped)
+	importer.WriteSummary(stdout, imported, dropped, skipped)
 	if len(imported) == 0 && len(skipped) > 0 {
 		return 1
 	}

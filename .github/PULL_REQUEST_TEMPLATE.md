@@ -6,7 +6,8 @@ Closes #
 
 ## Testing
 
-- [ ] `gofmt -l .` prints nothing
-- [ ] `go vet ./...`
 - [ ] `go test ./...`
-- [ ] `go test -race ./internal/secret`
+- [ ] `go test -race ./...`
+- [ ] `go vet ./...`
+- [ ] `golangci-lint run ./...`
+- [ ] `./scripts/govulncheck.sh`

@@ -29,3 +29,6 @@ working-docs/
 
 # Maintainer-only screenshot capture
 scripts/capture-screenshots.sh
+
+# Local-only git hooks, merged by lefthook
+lefthook-local.yml

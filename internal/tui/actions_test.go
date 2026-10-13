@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -589,5 +591,55 @@ func TestSaveProfile_DuplicateGetsFreshID(t *testing.T) {
 	}
 	if got := storedAs(t, store, a, orig); got != "orig" {
 		t.Fatalf("source password %q", got)
+	}
+}
+
+// lookupRunner finds only the names in found, and records every name it is
+// asked for.
+type lookupRunner struct {
+	rdp.OSRunner
+	found  []string
+	looked *[]string
+}
+
+func (r lookupRunner) LookPath(file string) (string, error) {
+	*r.looked = append(*r.looked, file)
+	if slices.Contains(r.found, file) {
+		return "/fake/bin/" + file, nil
+	}
+	return "", exec.ErrNotFound
+}
+
+// The TUI's probe and wicket connect refuse the same client names: a path
+// is refused before PATH is searched, however the runner would answer, and
+// a basename is looked up through the launcher's runner, as Start does.
+func TestProbeClient_AgreesWithLookupClient(t *testing.T) {
+	for _, tc := range []struct {
+		client string
+		ok     bool
+	}{
+		{rdp.ClientSDL, true},
+		{rdp.ClientX11, false},
+		{"bin/" + rdp.ClientSDL, false},
+		{"/usr/bin/" + rdp.ClientSDL, false},
+	} {
+		t.Run(tc.client, func(t *testing.T) {
+			var looked []string
+			runner := lookupRunner{found: []string{rdp.ClientSDL, "bin/" + rdp.ClientSDL, "/usr/bin/" + rdp.ClientSDL}, looked: &looked}
+			a := testApp(t, "", nil)
+			a.Launcher = &rdp.Launcher{Runner: runner}
+			p := config.Profile{Name: "n", Host: "h", User: "u", Client: tc.client, Scale: 100}
+			probeErr := a.ProbeClient(p)
+			_, lookupErr := a.Launcher.LookupClient(tc.client)
+			if (probeErr == nil) != tc.ok || (lookupErr == nil) != tc.ok {
+				t.Fatalf("ProbeClient %v, LookupClient %v, want ok=%v", probeErr, lookupErr, tc.ok)
+			}
+			if strings.Contains(tc.client, "/") && len(looked) != 0 {
+				t.Fatalf("a path was looked up: %q", looked)
+			}
+			if !tc.ok && !strings.Contains(tc.client, "/") && !errors.Is(probeErr, rdp.ErrClientNotFound) {
+				t.Fatalf("error %v, want ErrClientNotFound", probeErr)
+			}
+		})
 	}
 }

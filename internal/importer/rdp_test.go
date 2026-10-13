@@ -301,9 +301,9 @@ func assertImports(t *testing.T, ps []config.Profile) {
 	for i := range ps {
 		ps[i].Client = config.DefaultClient
 	}
-	ok, skipped := config.PlanProfiles(nil, ps, false)
-	if len(skipped) != 0 || len(ok) != len(ps) {
-		t.Fatalf("imported %+v, skipped %+v", ok, skipped)
+	ok, skipped, dropped := config.PlanProfiles(nil, ps, false)
+	if len(skipped) != 0 || len(ok) != len(ps) || len(dropped) != 0 {
+		t.Fatalf("imported %+v, skipped %+v, dropped %+v", ok, skipped, dropped)
 	}
 }
 

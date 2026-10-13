@@ -229,6 +229,15 @@ type Skip struct {
 	Reason string
 }
 
+// DroppedShare is a shared folder left out of a profile an import accepts,
+// because a loaded config would refuse it. Profile is the name the profile
+// is imported under.
+type DroppedShare struct {
+	Profile string
+	Path    string
+	Reason  string
+}
+
 // errNoSave tells mutate the edit made no change, so the file must not be written.
 var errNoSave = errors.New("config: no save needed")
 
@@ -236,12 +245,12 @@ var errNoSave = errors.New("config: no save needed")
 // single locked reload/save, by the rules of PlanProfiles against the
 // reloaded config. An empty input, or an input that yields nothing to write,
 // does not touch the file.
-func (c *Config) AddProfiles(profiles []Profile, rename bool) (added []Profile, skipped []Skip, err error) {
+func (c *Config) AddProfiles(profiles []Profile, rename bool) (added []Profile, skipped []Skip, dropped []DroppedShare, err error) {
 	if len(profiles) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	err = c.mutate(func() error {
-		added, skipped = PlanProfiles(c.profiles, profiles, rename)
+		added, skipped, dropped = PlanProfiles(c.profiles, profiles, rename)
 		if len(added) == 0 {
 			return errNoSave
 		}
@@ -252,22 +261,23 @@ func (c *Config) AddProfiles(profiles []Profile, rename bool) (added []Profile, 
 		}
 		return nil
 	})
-	return added, skipped, err
+	return added, skipped, dropped, err
 }
 
 // PlanProfiles decides which of profiles would be added next to existing,
 // without writing: invalid profiles are skipped, never written half-valid.
-// A share that would not load (relative path, bad name) is dropped; a
-// folder that is only missing on disk is kept. A name collision is skipped
-// unless rename is set, in which case "-2", "-3", … are tried until free.
-// AddProfiles and a dry run share it.
-func PlanProfiles(existing, profiles []Profile, rename bool) (accepted []Profile, skipped []Skip) {
+// A share that would not load (relative path, bad name) is dropped, and
+// reported in dropped when its profile is accepted, so the summary does not
+// claim every folder came across; a folder that is only missing on disk is
+// kept. A name collision is skipped unless rename is set, in which case
+// "-2", "-3", … are tried until free. AddProfiles and a dry run share it.
+func PlanProfiles(existing, profiles []Profile, rename bool) (accepted []Profile, skipped []Skip, dropped []DroppedShare) {
 	taken := make(map[string]bool, len(existing)+len(profiles))
 	for _, p := range existing {
 		taken[p.Name] = true
 	}
 	for _, p := range profiles {
-		p = dropUnimportableShares(p)
+		p, lost := dropUnimportableShares(p)
 		if err := validateImported(p); err != nil {
 			skipped = append(skipped, Skip{Name: skipName(p), Reason: err.Error()})
 			continue
@@ -281,8 +291,12 @@ func PlanProfiles(existing, profiles []Profile, rename bool) (accepted []Profile
 		}
 		taken[p.Name] = true
 		accepted = append(accepted, p)
+		for _, d := range lost {
+			d.Profile = p.Name
+			dropped = append(dropped, d)
+		}
 	}
-	return accepted, skipped
+	return accepted, skipped, dropped
 }
 
 func skipName(p Profile) string {

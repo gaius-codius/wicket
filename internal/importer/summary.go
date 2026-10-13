@@ -17,7 +17,7 @@ const passwordNotice = "passwords are never imported; you'll be asked on first c
 const noUserNotice = "a profile with no user needs one before it connects: open it in wicket to add it"
 
 // WriteSummary prints the import result in the form the CLI documents.
-func WriteSummary(w io.Writer, imported []config.Profile, skipped []Skip) {
+func WriteSummary(w io.Writer, imported []config.Profile, dropped []config.DroppedShare, skipped []Skip) {
 	if len(imported) > 0 {
 		// Each name carries the account it will sign in as, so a dry run
 		// shows what an import made of the file's user and domain.
@@ -28,6 +28,11 @@ func WriteSummary(w io.Writer, imported []config.Profile, skipped []Skip) {
 			noUser = noUser || p.User == ""
 		}
 		fmt.Fprintf(w, "imported %d: %s\n", len(imported), strings.Join(names, ", "))
+		// A folder the import left out is named, so the line above is not
+		// read as every folder having come across.
+		for _, d := range dropped {
+			fmt.Fprintln(w, printable(fmt.Sprintf("%s: share %s dropped: %s", d.Profile, strconv.Quote(d.Path), d.Reason)))
+		}
 		if noUser {
 			fmt.Fprintln(w, noUserNotice)
 		}

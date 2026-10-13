@@ -141,3 +141,50 @@ func running(pid int) bool {
 	i := strings.LastIndexByte(s, ')')
 	return i < 0 || i+2 >= len(s) || s[i+2] != 'Z'
 }
+
+// WaitGroupGone fails t unless every process in group pgid stops within a
+// few seconds. A zombie counts as stopped: a killed helper is left for
+// whoever adopts it to collect, which a container's init may never do.
+// Elsewhere than Linux, with no /proc, kill decides, and counts a zombie as
+// still there.
+func WaitGroupGone(t *testing.T, pgid int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for groupRunning(pgid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("process group %d still has members", pgid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func groupRunning(pgid int) bool {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return syscall.Kill(-pgid, 0) == nil
+	}
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err != nil {
+			continue
+		}
+		b, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		// After the parenthesised command name: state, ppid, pgrp.
+		s := string(b)
+		i := strings.LastIndexByte(s, ')')
+		if i < 0 {
+			continue
+		}
+		f := strings.Fields(s[i+1:])
+		if len(f) >= 3 && f[0] != "Z" && f[2] == strconv.Itoa(pgid) {
+			return true
+		}
+	}
+	return false
+}
+
+// Running reports whether pid is a live process rather than gone or a
+// zombie. Elsewhere than Linux, with no /proc, it reports false.
+func Running(pid int) bool { return running(pid) }

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -22,8 +23,14 @@ type runResult struct {
 
 // TestMain points config, state and the bus somewhere harmless so no test in
 // this package can read the user's real config or keyring, or spawn FreeRDP.
-// Tests that need a config still override with t.Setenv.
-func TestMain(m *testing.M) { os.Exit(testutil.Sandbox(m)) }
+// Tests that need a config still override with t.Setenv. Import finds no
+// client unless a test says otherwise: PATH still holds the machine's own
+// directories, and an import would run the FreeRDP it found there to ask its
+// version.
+func TestMain(m *testing.M) {
+	lookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	os.Exit(testutil.Sandbox(m))
+}
 
 func runCLI(t *testing.T, args []string) runResult {
 	t.Helper()

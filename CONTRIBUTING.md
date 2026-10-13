@@ -106,6 +106,11 @@ publishes them with `SHA256SUMS` as a GitHub release, which is what
 `install.sh` downloads. Linux builds are static (`CGO_ENABLED=0`); darwin
 builds use cgo against Security.framework.
 
+Any other tag, such as `v0.4.0-rc.1`, is published the same way but as a
+prerelease. GitHub never marks a prerelease latest, so `install.sh` and
+the AUR package carry on with the last plain release, and an rc is
+installed only by name (`--version v0.4.0-rc.1`).
+
 The workflow also attests each tarball, and `install.sh` refuses a release
 after v0.3.1 that has no attestation when `gh` is available. A tag runs the
 `release.yml` at its own commit, so tag only a commit that has the attest

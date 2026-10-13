@@ -312,7 +312,11 @@ func dropUnimportableShares(p Profile) (Profile, []DroppedShare) {
 	}
 	var dropped []DroppedShare
 	kept := make([]Share, 0, len(p.Shares))
-	seen := map[string]bool{}
+	// seen maps each kept drive name to its folder. Remmina can list one
+	// folder bare and again under its own base name; that second entry is
+	// the share already kept, so it goes without a note rather than one
+	// saying a folder the summary lists was dropped.
+	seen := map[string]string{}
 	for _, s := range p.Shares {
 		s.Path = strings.TrimSpace(s.Path)
 		s.Name = strings.TrimSpace(s.Name)
@@ -324,14 +328,18 @@ func dropUnimportableShares(p Profile) (Profile, []DroppedShare) {
 			}
 		}
 		drive, msg := checkShareShape(s, p.ShareHome)
-		if msg == "" && seen[strings.ToLower(drive)] {
+		key := strings.ToLower(drive)
+		if prev, ok := seen[key]; msg == "" && ok {
+			if expanded, _ := ExpandPath(s.Path); expanded == prev {
+				continue
+			}
 			msg = fmt.Sprintf("duplicate share name %q", drive)
 		}
 		if msg != "" {
 			dropped = append(dropped, DroppedShare{Path: s.Path, Reason: msg})
 			continue
 		}
-		seen[strings.ToLower(drive)] = true
+		seen[key], _ = ExpandPath(s.Path)
 		kept = append(kept, s)
 	}
 	p.Shares = kept

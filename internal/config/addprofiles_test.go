@@ -217,7 +217,8 @@ func TestPlanProfiles_ReportsDroppedShares(t *testing.T) {
 		mk("work", "h2",
 			Share{Path: "/tmp/docs"},
 			Share{Path: "/tmp/a\nb"},
-			Share{Path: "/srv/docs"}, // drive "docs" again
+			Share{Path: "/srv/docs"},                // drive "docs" again
+			Share{Path: "/tmp/docs/", Name: "Docs"}, // the kept share again
 		),
 		mk("bad", "bad host", Share{Path: "relative"}),
 		mk("lab", "h3", Share{Path: "/tmp/lab"}),

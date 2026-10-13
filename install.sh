@@ -35,10 +35,15 @@ USAGE
 # run runs a command in the background and waits for it. A shell takes a
 # trapped signal only once the foreground command returns, so a TERM sent to
 # the script alone would wait out a stalled download; it does interrupt wait.
-# stop then kills the command, whose pid is in $child while it runs.
+# stop then kills the command, whose pid is in $child while it runs. A
+# signal that arrives before $child is set is held until it is, or stop
+# would miss the command.
 run() {
+	starting=1
 	"$@" &
 	child=$!
+	starting=""
+	[ -z "$stopping" ] || stop "$stopping"
 	run_status=0
 	wait "$child" || run_status=$?
 	child=""
@@ -46,8 +51,13 @@ run() {
 }
 
 # stop kills the running command, removes the temp dir and exits with $1.
-# Background commands ignore INT, so it has to kill them for Ctrl-C too.
+# Background commands ignore INT and QUIT, so it has to kill them for
+# Ctrl-C and Ctrl-\ too.
 stop() {
+	if [ -n "$starting" ]; then
+		stopping=$1
+		return
+	fi
 	if [ -n "$child" ]; then
 		kill "$child" 2>/dev/null || :
 		wait "$child" 2>/dev/null || :
@@ -147,12 +157,13 @@ main() {
 	*) die "no build for $(uname -m); try: go install github.com/$REPO/cmd/wicket@latest" ;;
 	esac
 
-	child=""
+	child="" starting="" stopping=""
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT
 	# A signal trap that only cleaned up would let the script carry on
 	# without $tmp. Stop with the status the shell would give.
 	trap 'stop 130' INT
+	trap 'stop 131' QUIT
 	trap 'stop 143' TERM
 
 	[ -n "$tag" ] || latest_tag
@@ -228,17 +239,21 @@ freerdp3() {
 
 # freerdp3_probe runs "$1 --version" into $fr_out, killing it after 3 s. When
 # stop kills the probe, it takes the client and the watcher with it.
+# A TERM that arrives while the client and watcher are being started is held
+# until both pids are known, as in run.
 freerdp3_probe() {
-	fr_pid="" fr_watch=""
-	trap '[ -z "$fr_pid" ] || kill -KILL "$fr_pid" || :
-		[ -z "$fr_watch" ] || kill "$fr_watch" || :
-		wait; exit 143' TERM
+	fr_starting=1 fr_stopping=""
+	trap 'if [ -n "$fr_starting" ]; then fr_stopping=1; else freerdp3_probe_stop; fi' TERM
 	"$1" --version >"$fr_out" 2>&1 </dev/null &
 	fr_pid=$!
 	(
-		trap 'kill "$fr_sleep" 2>/dev/null; exit 0' TERM
+		# KILL, as a TERM that reaches sleep before it has started
+		# can be lost.
+		fr_sleep="" fr_held=""
+		trap 'fr_held=1; [ -z "$fr_sleep" ] || { kill -KILL "$fr_sleep"; exit 0; }' TERM
 		sleep 3 &
 		fr_sleep=$!
+		[ -z "$fr_held" ] || { kill -KILL "$fr_sleep"; exit 0; }
 		# After an interrupt $tmp is gone and the marker cannot be
 		# written; the client must still be killed. printf, not :, as
 		# a redirection error on a special builtin exits sh.
@@ -248,9 +263,18 @@ freerdp3_probe() {
 		}
 	) &
 	fr_watch=$!
+	fr_starting=""
+	[ -z "$fr_stopping" ] || freerdp3_probe_stop
 	wait "$fr_pid" || :
 	kill "$fr_watch" || :
 	wait "$fr_watch" || :
+}
+
+freerdp3_probe_stop() {
+	kill -KILL "$fr_pid" 2>/dev/null || :
+	kill "$fr_watch" 2>/dev/null || :
+	wait
+	exit 143
 }
 
 # Everything runs from here, so a download cut off mid-script does nothing.

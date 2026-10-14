@@ -121,6 +121,49 @@ step. Never add a new release to `UNATTESTED` in `install.sh`.
 git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0
 ```
 
+### Release notes
+
+There is no CHANGELOG. The workflow publishes the release with GitHub's
+generated list of merged PRs. Once it is up, write a short summary of what
+changed for users since the last tag, put it above that list, and replace the
+notes:
+
+```
+gh release view vX.Y.Z --json body --jq .body > notes.md   # add the summary at the top
+gh release edit vX.Y.Z --notes-file notes.md
+```
+
+### After the release
+
+When the workflow has finished, check what it published before announcing it:
+
+1. Download the assets and check them against `SHA256SUMS`:
+
+   ```
+   gh release download vX.Y.Z --dir rel && (cd rel && sha256sum -c SHA256SUMS)
+   ```
+
+2. Verify the attestation of each tarball:
+
+   ```
+   for t in rel/*.tar.gz; do
+     GH_HOST=github.com gh attestation verify "$t" --repo gaius-codius/wicket \
+       --cert-identity https://github.com/gaius-codius/wicket/.github/workflows/release.yml@refs/tags/vX.Y.Z
+   done
+   ```
+
+   `install.sh` runs the same check, so a tarball that fails it makes every
+   install with gh 2.68 or later fail closed.
+
+3. Install the release end to end into a scratch directory:
+
+   ```
+   WICKET_BINDIR="$(mktemp -d)" sh install.sh --version vX.Y.Z
+   ```
+
+   With `gh` on `PATH` it should print `verified provenance`, then
+   `installed wicket X.Y.Z`.
+
 ### AUR
 
 `packaging/aur/wicket-bin/PKGBUILD` is the template for the `wicket-bin` AUR
@@ -128,8 +171,9 @@ package. When the `AUR_SSH_PRIVATE_KEY` secret is set, the `release` workflow
 sets `pkgver`, `pkgrel=1` and the checksums from the tag and `SHA256SUMS`,
 test-builds the package, and pushes `PKGBUILD` and a fresh `.SRCINFO` to the
 AUR, in an `update-aur` job after the release. Without the secret the job
-does nothing, and it skips any tag that is not a plain `vX.Y.Z`. If the push
-fails, re-run that job alone from the Actions page.
+skips itself, as it does until the AUR package is first published (#56).
+It also skips any tag that is not a plain `vX.Y.Z`. If the push fails,
+re-run that job alone from the Actions page.
 
 First-time setup:
 

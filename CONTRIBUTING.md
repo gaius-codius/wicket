@@ -137,7 +137,8 @@ gh release edit vX.Y.Z --notes-file notes.md
 
 When the workflow has finished, check what it published before announcing it:
 
-1. Download the assets and check them against `SHA256SUMS`:
+1. Download the assets and check them against `SHA256SUMS` (on macOS, use
+   `shasum -a 256 -c SHA256SUMS`):
 
    ```
    gh release download vX.Y.Z --dir rel && (cd rel && sha256sum -c SHA256SUMS)
@@ -152,8 +153,9 @@ When the workflow has finished, check what it published before announcing it:
    done
    ```
 
-   `install.sh` runs the same check, so a tarball that fails it makes every
-   install with gh 2.68 or later fail closed.
+   `install.sh` runs the same check on the tarball for the platform it
+   installs, so a tarball that fails it fails closed for every install of
+   that platform with gh 2.68 or later.
 
 3. Install the release end to end into a scratch directory:
 
@@ -161,8 +163,8 @@ When the workflow has finished, check what it published before announcing it:
    WICKET_BINDIR="$(mktemp -d)" sh install.sh --version vX.Y.Z
    ```
 
-   With `gh` on `PATH` it should print `verified provenance`, then
-   `installed wicket X.Y.Z`.
+   With gh 2.68 or later on `PATH` it should print `verified provenance`,
+   then `installed wicket X.Y.Z`.
 
 ### AUR
 

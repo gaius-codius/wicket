@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
 	"github.com/gaius-codius/wicket/internal/testutil"
@@ -147,5 +149,42 @@ func TestShareCheck_RefusalComesBeforeThePrompt(t *testing.T) {
 	m := press(h.m, "enter")
 	if m.view != viewList || m.statusKind != statusError || !strings.Contains(m.status, "FreeRDP follows links") {
 		t.Fatalf("view %v, status %q", m.view, m.status)
+	}
+}
+
+// A save the user stopped waiting for leaves its check reading on, and the
+// form can be edited meanwhile: the check reads a copy of the shares, not
+// the form's own, or the race detector finds the two touching one slice.
+func TestShareCheck_StoppedSaveDoesNotShareTheFormsShares(t *testing.T) {
+	h, _ := shareHarness(t, secret.NewMemory())
+	read := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	h.m.app.CheckShares = func(p config.Profile) (config.CheckedShares, error) {
+		checked, err := config.CheckShares(p)
+		close(read)
+		// It goes on reading, as a slow walk would, while the form is
+		// edited.
+		for {
+			select {
+			case <-release:
+				return checked, err
+			default:
+				_ = len(p.Shares[0].Path)
+			}
+		}
+	}
+	m := press(h.m, "e")
+	m, cmd := updateKey(m, "ctrl+s")
+	runCmd(cmd)
+	<-read
+	m, _ = updateKey(m, "esc")
+	other := t.TempDir()
+	m = focusField(t, m, shareRow(0))
+	m = press(m, "enter", "ctrl+u")
+	m, _ = act(m, tea.PasteMsg{Content: other})
+	m = press(m, "enter")
+	if m.form.p.Shares[0].Path != other {
+		t.Fatalf("shares %+v", m.form.p.Shares)
 	}
 }

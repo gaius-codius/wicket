@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -207,6 +208,9 @@ func (m Model) checkShares(p config.Profile, stopped func(Model, string) (tea.Mo
 	if len(p.Shares) == 0 {
 		return then(m, config.CheckedShares{}, nil)
 	}
+	// The form edits its shares in place, and a check the user stopped
+	// waiting for goes on reading them, so it reads a copy.
+	p.Shares = slices.Clone(p.Shares)
 	app := m.app
 	return m.runKeyring(
 		"Checking the shared folders of "+truncate(p.Name, statusNameWidth)+"…",

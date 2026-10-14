@@ -3,7 +3,6 @@ package main
 import (
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -42,9 +41,6 @@ func TestImportGraph(t *testing.T) {
 		}
 		path, isTest, skip := realPkgPath(pkg.ID, pkg.PkgPath)
 		if skip {
-			continue
-		}
-		if path == "github.com/gaius-codius/wicket/tools" || strings.HasPrefix(path, "github.com/gaius-codius/wicket/tools/") {
 			continue
 		}
 
@@ -176,13 +172,6 @@ func isBubbleTea(path string) bool {
 
 func isLipgloss(path string) bool {
 	return strings.HasPrefix(path, "charm.land/lipgloss") || strings.HasPrefix(path, "github.com/charmbracelet/lipgloss")
-}
-
-func TestImportGraphModuleLoads(t *testing.T) {
-	// Ensure the tools file is not treated as missing by the loader.
-	if _, err := os.Stat(filepath.Join(moduleRoot(t), "tools", "tools.go")); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func moduleRoot(t *testing.T) string {

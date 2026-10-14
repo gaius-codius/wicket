@@ -103,12 +103,12 @@ stop() {
 		wait "$child" 2>/dev/null || :
 		kill_watcher "$st_watch"
 		wait "$st_watch" 2>/dev/null || :
-		# shellcheck disable=SC2086
+		# shellcheck disable=SC2086 # st_tree is a list of pids to split
 		while st_left=$(alive_pids "$child" $st_tree) && [ -n "$st_left" ] &&
 			[ "$(date +%s)" -lt "$st_end" ]; do
 			sleep 0.1
 		done
-		# shellcheck disable=SC2086
+		# shellcheck disable=SC2086 # st_left is a list of pids to split
 		[ -z "$st_left" ] || kill -KILL $st_left 2>/dev/null || :
 	fi
 	cleanup
@@ -219,8 +219,9 @@ wget_https() {
 		die "this wget is not GNU Wget, Wget2 or busybox, so whether it checks TLS certificates is unknown; install curl"
 	fi
 	wg_status=0
-	# shellcheck disable=SC2086 # no option for busybox
-	run wget -S $wg_check -O "$2" "$1" 2>"$tmp/wget.log" || wg_status=$?
+	# wg_check is one option or empty (busybox has none): unquoted, an empty
+	# value would pass wget an empty argument.
+	run wget -S ${wg_check:+"$wg_check"} -O "$2" "$1" 2>"$tmp/wget.log" || wg_status=$?
 	if grep -q 'TLS certificate validation not implemented' "$tmp/wget.log"; then
 		die "this wget (busybox without openssl) does not check TLS certificates; install curl, or openssl for busybox to use"
 	fi

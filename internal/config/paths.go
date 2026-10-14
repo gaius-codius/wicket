@@ -94,11 +94,11 @@ func Canonical(path, cwd string) (string, error) {
 	// A path that does not exist yet, or cannot be resolved, is still a
 	// usable name for it: callers create it, or report the error on use.
 	if _, err := os.Lstat(abs); err != nil {
-		return abs, nil //nolint:nilerr // see above
+		return abs, nil //nolint:nilerr // a path that is missing or unreadable is still a usable name, as the comment above says
 	}
 	eval, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return abs, nil //nolint:nilerr // see above
+		return abs, nil //nolint:nilerr // an unresolvable symlink still leaves a usable name, as the comment above says; the caller reports the error on use
 	}
 	return filepath.Clean(eval), nil
 }

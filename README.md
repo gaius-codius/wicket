@@ -160,7 +160,11 @@ shares = [
 ```
 
 `share_home` shares all of your home folder, read-write, dotfiles and
-`~/.ssh` included. Only turn it on for machines you trust.
+`~/.ssh` included. It also shares wherever links in your home lead, `/`
+included: FreeRDP follows them, and Wicket does not check them for
+`share_home`, so a Wine or Proton prefix in home, whose `dosdevices/z:` is
+`/`, hands the remote machine your whole file system. Only turn it on for
+machines you trust.
 
 `shares` lists specific local folders as named drives (`/drive:name,path` in
 FreeRDP). Paths must be absolute or `~/…`, and must exist as directories when
@@ -174,7 +178,9 @@ symlinks inside a shared folder, so a folder with a link anywhere in it that
 leads to one of those is refused too, such as a Wine prefix's `dosdevices`,
 whose `z:` is `/`. Wicket reads at most 100,000 files and folders of a share
 to look for links, and refuses a larger one, or one with a folder it may
-enter but not list. A link made after the check, while Wicket asks for a
+enter but not list. It reads them once for each save or connect, and the
+TUI keeps drawing while it does; `esc` stops waiting on a slow or network
+share. A link made after the check, while Wicket asks for a
 password or during the session, is not seen until the next connect.
 
 Keys left out keep their default, and a save only writes the ones changed.

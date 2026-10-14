@@ -346,3 +346,48 @@ func TestConfig_ProfileClonesShares(t *testing.T) {
 		t.Fatalf("Profile aliased shares: %+v", again.Shares)
 	}
 }
+
+// A save or a connect reads its shares once and hands on what it found, so
+// the steps after it do not read them again. What it hands on covers only
+// the shares it read.
+func TestCheckShares_CoversOnlyTheSharesItRead(t *testing.T) {
+	t.Parallel()
+	dir, other := t.TempDir(), t.TempDir()
+	p := Profile{
+		Name: "work", Host: "h", User: "u", Client: "sdl-freerdp3", Scale: 100,
+		Shares: []Share{{Path: dir}},
+	}
+	checked, err := CheckShares(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A link put in place after the check is not seen by the steps that
+	// trust it, and is by any that read the shares again.
+	if err := os.Symlink("/", filepath.Join(dir, "z:")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCheckedProfile(p, checked); err != nil {
+		t.Fatalf("checked shares were read again: %v", err)
+	}
+	if err := ValidateProfileInUse(p); err == nil {
+		t.Fatal("unchecked validation passed a share with a link to /")
+	}
+	if err := ValidateCheckedProfile(p, CheckedShares{}); err == nil {
+		t.Fatal("the zero CheckedShares covered a profile with shares")
+	}
+	// A profile whose shares differ from the ones read is read in full.
+	moved := p
+	moved.Shares = []Share{{Path: other}, {Path: dir, Name: "d"}}
+	if checked.Covers(moved) {
+		t.Fatal("covers shares it never read")
+	}
+	if err := ValidateCheckedProfile(moved, checked); err == nil {
+		t.Fatal("a share the check never read was trusted")
+	}
+	// The rest of the profile is still checked.
+	noUser := p
+	noUser.User = ""
+	if err := ValidateCheckedProfile(noUser, checked); !errors.Is(err, ErrNoUser) {
+		t.Fatalf("err = %v, want ErrNoUser", err)
+	}
+}

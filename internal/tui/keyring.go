@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +23,10 @@ import (
 // Only one operation runs at a time, and while it does every other key is
 // ignored: a second Enter must not start a second lookup, and an edit must
 // not change the profile a save is half way through writing.
+//
+// Reading a profile's shared folders before a save or a connect runs the
+// same way, though it is not a keyring call: it reads every folder in them,
+// and an automount or NFS share can keep it waiting as long as a keyring.
 
 // keyringWait bounds one keyring operation. It is minutes rather than
 // seconds because the wait may be for a person: a desktop unlock prompt, or a
@@ -61,8 +66,17 @@ type keyringSlowMsg struct{ id int }
 
 // credResolvedMsg is the password lookup for a connect.
 type credResolvedMsg struct {
-	p   config.Profile
-	res credResult
+	p       config.Profile
+	checked config.CheckedShares
+	res     credResult
+}
+
+// sharesCheckedMsg is the reading of a profile's shares that a save or a
+// connect starts with; its then goes on with what it found.
+type sharesCheckedMsg struct {
+	checked config.CheckedShares
+	err     error
+	then    func(Model, config.CheckedShares, error) (tea.Model, tea.Cmd)
 }
 
 // secretStoredMsg is the password dialog's ctrl+s store.
@@ -164,6 +178,8 @@ func (m Model) handleKeyringReply(msg keyringReplyMsg) (tea.Model, tea.Cmd) {
 	m.keyring = nil
 	m.setStatus("", statusInfo)
 	switch r := msg.reply.(type) {
+	case sharesCheckedMsg:
+		return r.then(m, r.checked, r.err)
 	case credResolvedMsg:
 		return m.handleCredResolved(r)
 	case secretStoredMsg:
@@ -180,13 +196,44 @@ func (m Model) handleKeyringReply(msg keyringReplyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// --- reading shares ---
+
+// checkShares reads p's shares off the loop, once for the save or connect
+// it starts, then goes on with then and what it found: checked spares every
+// later step of the action from reading them again. A profile with no
+// shares has nothing to read and goes straight on, and so does one the
+// rules that need no file system refuse, with that error. stopped is what
+// Esc or Ctrl+C does; the reading itself cannot be stopped, and its result
+// is dropped.
+func (m Model) checkShares(p config.Profile, stopped func(Model, string) (tea.Model, tea.Cmd), then func(Model, config.CheckedShares, error) (tea.Model, tea.Cmd)) (tea.Model, tea.Cmd) {
+	if len(p.Shares) == 0 {
+		return then(m, config.CheckedShares{}, nil)
+	}
+	if err := config.ValidateProfileBeforeShares(p); err != nil {
+		return then(m, config.CheckedShares{}, err)
+	}
+	// The form edits its shares in place, and a check the user stopped
+	// waiting for goes on reading them, so it reads a copy.
+	p.Shares = slices.Clone(p.Shares)
+	app := m.app
+	return m.runKeyring(
+		"Checking the shared folders of "+truncate(p.Name, statusNameWidth)+"…",
+		"Still checking the shared folders… a slow or network share takes a while.",
+		stopWaitingKeys,
+		stopped,
+		func(context.Context) tea.Msg {
+			checked, err := app.checkShares(p)
+			return sharesCheckedMsg{checked: checked, err: err, then: then}
+		})
+}
+
 // --- connect ---
 
 // resolveCredential looks up p's password off the loop, then connects or
 // asks for one. Esc stops waiting and asks for the password instead, which
 // is the way past a keyring that has stopped answering; Ctrl+C goes back to
-// the list.
-func (m Model) resolveCredential(p config.Profile) (tea.Model, tea.Cmd) {
+// the list. checked is what checkShares found for p's shares.
+func (m Model) resolveCredential(p config.Profile, checked config.CheckedShares) (tea.Model, tea.Cmd) {
 	app := m.app
 	name := truncate(p.Name, statusNameWidth)
 	return m.runKeyring(
@@ -195,7 +242,7 @@ func (m Model) resolveCredential(p config.Profile) (tea.Model, tea.Cmd) {
 		[]keyHint{{"esc", "type the password", intentNormal}, {"ctrl+c", "cancel", intentNormal}},
 		func(m Model, key string) (tea.Model, tea.Cmd) {
 			if key == "esc" {
-				return m.openModal(p, context.Canceled, false)
+				return m.openModal(p, context.Canceled, false, checked)
 			}
 			m.view = viewList
 			m.clearUseOnce()
@@ -203,19 +250,19 @@ func (m Model) resolveCredential(p config.Profile) (tea.Model, tea.Cmd) {
 			return m, nil
 		},
 		func(ctx context.Context) tea.Msg {
-			return credResolvedMsg{p: p, res: app.ResolveCredential(ctx, p, nil)}
+			return credResolvedMsg{p: p, checked: checked, res: app.ResolveCredential(ctx, p, nil)}
 		})
 }
 
 func (m Model) handleCredResolved(r credResolvedMsg) (tea.Model, tea.Cmd) {
 	if r.res.NeedModal {
-		return m.openModal(r.p, r.res.Err, false)
+		return m.openModal(r.p, r.res.Err, false, r.checked)
 	}
 	extra := ""
 	if r.res.Multiple {
 		extra = "multiple matching secrets; using the most recently modified"
 	}
-	return m.runConnect(r.p, r.res.Cred, false, extra)
+	return m.runConnect(r.p, r.res.Cred, false, extra, r.checked)
 }
 
 // --- the password dialog's ctrl+s ---
@@ -254,11 +301,29 @@ func (m Model) handleSecretStored(r secretStoredMsg) (tea.Model, tea.Cmd) {
 
 // --- saving a profile ---
 
-// beginSave saves the form's profile. Validation and the config write run on
-// the loop; the keyring steps either side of the write run off it.
+// beginSave saves the form's profile. Reading its shares runs off the loop,
+// then validation and the config write run on it; the keyring steps either
+// side of the write run off it.
 func (m Model) beginSave(f formState, intent PasswordIntent) (tea.Model, tea.Cmd) {
 	m.form = f
-	plan, err := m.app.planSave(f.oldName, f.p, intent)
+	return m.checkShares(f.p,
+		func(m Model, _ string) (tea.Model, tea.Cmd) {
+			// Nothing has been written, so the form is as the user left it.
+			m.setStatus("Not saved: stopped checking the shared folders.", statusError)
+			return m, nil
+		},
+		func(m Model, checked config.CheckedShares, err error) (tea.Model, tea.Cmd) {
+			if err != nil {
+				return m.saveFailed(err), nil
+			}
+			return m.planSave(f, intent, checked)
+		})
+}
+
+// planSave validates the save, then writes it, moving the stored password
+// first if it must move.
+func (m Model) planSave(f formState, intent PasswordIntent, checked config.CheckedShares) (tea.Model, tea.Cmd) {
+	plan, err := m.app.planSave(f.oldName, f.p, intent, checked)
 	if err != nil {
 		return m.saveFailed(err), nil
 	}

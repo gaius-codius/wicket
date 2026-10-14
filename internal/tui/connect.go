@@ -46,17 +46,30 @@ func (m Model) connectProfile(p config.Profile, typed *secret.Password) (tea.Mod
 	if p.User == "" {
 		return m.askForUser(p)
 	}
-	if err := m.app.ProbeClient(p); err != nil {
-		m.setStatus(err.Error(), statusError)
-		m.view = viewList
-		return m, nil
-	}
-	if typed != nil {
-		return m.runConnect(p, *typed, true, "")
-	}
-	// The keyring is asked off the loop: it may be waiting on an unlock
-	// prompt, or not answering at all. See keyring.go.
-	return m.resolveCredential(p)
+	return m.checkShares(p, stoppedConnect, func(m Model, checked config.CheckedShares, err error) (tea.Model, tea.Cmd) {
+		if err == nil {
+			err = m.app.ProbeClient(p, checked)
+		}
+		if err != nil {
+			m.setStatus(err.Error(), statusError)
+			m.view = viewList
+			return m, nil
+		}
+		if typed != nil {
+			return m.runConnect(p, *typed, true, "", checked)
+		}
+		// The keyring is asked off the loop: it may be waiting on an unlock
+		// prompt, or not answering at all. See keyring.go.
+		return m.resolveCredential(p, checked)
+	})
+}
+
+// stoppedConnect gives up on a connect whose shares were still being read.
+func stoppedConnect(m Model, _ string) (tea.Model, tea.Cmd) {
+	m.view = viewList
+	m.clearUseOnce()
+	m.setStatus("Not connected: stopped checking the shared folders.", statusError)
+	return m, nil
 }
 
 // askForUser opens the form at the user field of a profile that has none, as
@@ -76,9 +89,10 @@ const noUserMsg = "add a user to connect"
 // Wicket keeps the terminal throughout: see session.go. Starting returns as
 // soon as the client is running; recording the last-used time waits on a
 // lock another Wicket may hold, so it happens off the update loop, where it
-// cannot keep the session from being drawn or stopped.
-func (m Model) runConnect(p config.Profile, cred rdp.Credential, keepUseOnce bool, extra string) (tea.Model, tea.Cmd) {
-	s, err := m.app.Start(p, cred)
+// cannot keep the session from being drawn or stopped. checked is what
+// checkShares found for p's shares.
+func (m Model) runConnect(p config.Profile, cred rdp.Credential, keepUseOnce bool, extra string, checked config.CheckedShares) (tea.Model, tea.Cmd) {
+	s, err := m.app.Start(p, cred, checked)
 	if err != nil {
 		return m.applyConnect(p, cred, keepUseOnce, extra, startFailed(err))
 	}
@@ -176,7 +190,19 @@ func (m Model) handleRetryKey(key string) (tea.Model, tea.Cmd) {
 		}
 		m.retry = retryState{}
 		m.clearUseOnce()
-		return m.openModal(p, nil, true)
+		// Leave the overlay, as enter does: the check may take a while,
+		// and the overlay would be drawn with its message cleared.
+		m.view = viewList
+		// A new password is a new connect, so its shares are read again,
+		// and a refusal comes before the prompt, as it does from the list.
+		return m.checkShares(p, stoppedConnect, func(m Model, checked config.CheckedShares, err error) (tea.Model, tea.Cmd) {
+			if err != nil {
+				m.setStatus(err.Error(), statusError)
+				m.view = viewList
+				return m, nil
+			}
+			return m.openModal(p, nil, true, checked)
+		})
 	case "enter":
 		p := m.retry.profile
 		held := m.retry.held

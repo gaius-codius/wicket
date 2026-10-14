@@ -22,11 +22,14 @@ type modalState struct {
 	// replacing is set when the user asked for a new password for a profile
 	// that may already have one, rather than being asked for a missing one.
 	replacing bool
-	ti        textinput.Model
+	// checked is what checkShares found for profile's shares, for the
+	// connect the dialog ends in.
+	checked config.CheckedShares
+	ti      textinput.Model
 }
 
-func (m Model) openModal(p config.Profile, lookupErr error, replacing bool) (tea.Model, tea.Cmd) {
-	m.modal = modalState{profile: p, focused: true, lookupErr: lookupErr, replacing: replacing, ti: m.newInput("", true)}
+func (m Model) openModal(p config.Profile, lookupErr error, replacing bool, checked config.CheckedShares) (tea.Model, tea.Cmd) {
+	m.modal = modalState{profile: p, focused: true, lookupErr: lookupErr, replacing: replacing, checked: checked, ti: m.newInput("", true)}
 	m.modal.ti.Focus()
 	m.view = viewModal
 	return m, nil
@@ -106,7 +109,7 @@ func (m Model) modalConnect(save bool) (tea.Model, tea.Cmd) {
 // kept for a retry as a use-once password. warn is anything to report beside
 // the session.
 func (m Model) modalStart(warn string) (tea.Model, tea.Cmd) {
-	p := m.modal.profile
+	p, checked := m.modal.profile, m.modal.checked
 	pw, err := secret.NewPassword(m.modal.input)
 	if err != nil || pw.Empty() {
 		// modalConnect checked the input and nothing can change it while
@@ -119,7 +122,7 @@ func (m Model) modalStart(warn string) (tea.Model, tea.Cmd) {
 	cp := pw
 	m.useOnce = &cp
 	m.useOnceName = p.Name
-	return m.runConnect(p, pw, true, warn)
+	return m.runConnect(p, pw, true, warn, checked)
 }
 
 // canSave reports whether ctrl+s is worth offering. When the keyring could

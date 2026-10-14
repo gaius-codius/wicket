@@ -13,6 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/secret"
 	"github.com/gaius-codius/wicket/internal/testutil"
 	"github.com/gaius-codius/wicket/internal/testutil/fakesecret"
@@ -283,7 +284,7 @@ func TestKeyring_StalledDialogSaveFallsBackToConnectOnce(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "h", "u"), store)
 	// Open the dialog as a missing password would.
 	p, _ := h.m.app.Cfg.Profile("work")
-	nm, _ := h.m.openModal(p, nil, false)
+	nm, _ := h.m.openModal(p, nil, false, config.CheckedShares{})
 	m := typeInto(nm.(Model), sentinel)
 	m, cmd := updateKey(m, "ctrl+s")
 	if m.keyring == nil || m.view != viewModal {

@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
 )
@@ -195,7 +196,7 @@ func TestModal_SubtitlePerState(t *testing.T) {
 	}
 
 	p, _ := missing.app.Cfg.Profile("work")
-	nm, _ := missing.openModal(p, nil, true)
+	nm, _ := missing.openModal(p, nil, true, config.CheckedShares{})
 	out = screen(nm.(Model))
 	if !strings.Contains(out, "Type a new password") || strings.Contains(out, "No password is saved") {
 		t.Fatalf("replacing:\n%s", out)

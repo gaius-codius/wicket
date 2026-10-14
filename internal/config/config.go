@@ -198,8 +198,14 @@ func openWithoutAssign(path string) (*Config, error) {
 
 // Upsert validates p, inserts or replaces the profile named except (empty = add), and saves.
 func (c *Config) Upsert(p Profile, except string) error {
+	return c.UpsertChecked(p, except, CheckedShares{})
+}
+
+// UpsertChecked is Upsert for a profile whose shares checked covers, so they
+// are not read again; see ValidateCheckedProfile.
+func (c *Config) UpsertChecked(p Profile, except string, checked CheckedShares) error {
 	EnsureID(&p)
-	if err := ValidateProfileInUse(p); err != nil {
+	if err := ValidateCheckedProfile(p, checked); err != nil {
 		return err
 	}
 	return c.mutate(func() error {

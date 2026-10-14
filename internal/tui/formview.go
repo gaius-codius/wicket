@@ -457,7 +457,7 @@ var formHelp = [fieldCount]string{
 	fieldDynamic:    "Resize the remote desktop with the window. `space` switches.",
 	fieldScale:      "`←/→` to choose.",
 	fieldClipboard:  "Copy and paste between here and there. `space` switches.",
-	fieldShareHome:  "All of your home folder, read-write, as a drive there. `space` switches.",
+	fieldShareHome:  "Home, read-write, and wherever its links lead, / included. `space` switches.",
 	fieldShareAdd:   "Share another local folder as a drive. `enter` adds one.",
 	fieldPassword:   "Saved in the keyring on `ctrl+s`. Empty keeps what is stored.",
 	fieldForget:     "Deletes the stored password on save. `space` switches.",

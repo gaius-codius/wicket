@@ -478,7 +478,7 @@ func TestSave_SpacedHostIsRefusedBeforeTheKeyring(t *testing.T) {
 	h := newHarness(t, fixtureTOML("work", "good.example", "u"), panicStore{})
 	p, _ := h.m.app.Cfg.Profile("work")
 	p.Host = "bad host"
-	_, err := h.m.app.planSave("work", p, PasswordIntent{})
+	_, err := h.m.app.planSave("work", p, PasswordIntent{}, config.CheckedShares{})
 	var fe *config.FieldError
 	if !errors.As(err, &fe) || fe.Field != "host" {
 		t.Fatalf("planSave error = %v, want a host field error", err)
@@ -630,7 +630,7 @@ func TestProbeClient_AgreesWithLookupClient(t *testing.T) {
 			a := testApp(t, "", nil)
 			a.Launcher = &rdp.Launcher{Runner: runner}
 			p := config.Profile{Name: "n", Host: "h", User: "u", Client: tc.client, Scale: 100}
-			probeErr := a.ProbeClient(p)
+			probeErr := a.ProbeClient(p, config.CheckedShares{})
 			_, lookupErr := a.Launcher.LookupClient(tc.client)
 			if (probeErr == nil) != tc.ok || (lookupErr == nil) != tc.ok {
 				t.Fatalf("ProbeClient %v, LookupClient %v, want ok=%v", probeErr, lookupErr, tc.ok)

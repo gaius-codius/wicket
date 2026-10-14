@@ -149,7 +149,7 @@ type carry struct {
 
 // checkShares reads p's shares, once for a save or a connect: it reads
 // every folder in them, and every folder their links lead to, so it can
-// take seconds, and runs off the TUI's update loop.
+// take seconds. The TUI calls it off its update loop; see Model.checkShares.
 func (a *App) checkShares(p config.Profile) (config.CheckedShares, error) {
 	if a.CheckShares != nil {
 		return a.CheckShares(p)

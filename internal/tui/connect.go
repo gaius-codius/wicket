@@ -190,6 +190,9 @@ func (m Model) handleRetryKey(key string) (tea.Model, tea.Cmd) {
 		}
 		m.retry = retryState{}
 		m.clearUseOnce()
+		// Leave the overlay, as enter does: the check may take a while,
+		// and the overlay would be drawn with its message cleared.
+		m.view = viewList
 		// A new password is a new connect, so its shares are read again,
 		// and a refusal comes before the prompt, as it does from the list.
 		return m.checkShares(p, stoppedConnect, func(m Model, checked config.CheckedShares, err error) (tea.Model, tea.Cmd) {

@@ -86,11 +86,11 @@ func TestShareCheck_ConnectReadsEachShareOnce(t *testing.T) {
 }
 
 // slowShares makes the share check wait until the test lets it go.
-func slowShares(t *testing.T, h *harness) {
+func slowShares(t *testing.T, app *App) {
 	t.Helper()
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	h.m.app.CheckShares = func(p config.Profile) (config.CheckedShares, error) {
+	app.CheckShares = func(p config.Profile) (config.CheckedShares, error) {
 		<-release
 		return config.CheckShares(p)
 	}
@@ -102,7 +102,7 @@ func slowShares(t *testing.T, h *harness) {
 func TestShareCheck_SlowCheckDoesNotHoldTheLoop(t *testing.T) {
 	t.Run("save", func(t *testing.T) {
 		h, _ := shareHarness(t, secret.NewMemory())
-		slowShares(t, h)
+		slowShares(t, h.m.app)
 		m := press(h.m, "e")
 		m, cmd := updateKey(m, "ctrl+s")
 		if m.keyring == nil {
@@ -120,7 +120,7 @@ func TestShareCheck_SlowCheckDoesNotHoldTheLoop(t *testing.T) {
 	t.Run("connect", func(t *testing.T) {
 		withFakeRDP(t)
 		h, _ := shareHarness(t, secret.NewMemory())
-		slowShares(t, h)
+		slowShares(t, h.m.app)
 		m, cmd := updateKey(h.m, "enter")
 		if m.keyring == nil {
 			t.Fatal("connect read the shares on the update loop")
@@ -187,4 +187,40 @@ func TestShareCheck_StoppedSaveDoesNotShareTheFormsShares(t *testing.T) {
 	if m.form.p.Shares[0].Path != other {
 		t.Fatalf("shares %+v", m.form.p.Shares)
 	}
+}
+
+// A mistake that needs no file system to find, such as a space in the host,
+// is reported at once, not after the shares have been read.
+func TestShareCheck_FieldErrorsComeBeforeTheRead(t *testing.T) {
+	h, reads := shareHarness(t, secret.NewMemory())
+	m := press(h.m, "e")
+	m.form.p.Host = "bad host"
+	m, _ = updateKey(m, "ctrl+s")
+	if m.keyring != nil || m.form.errField != fieldHost {
+		t.Fatalf("waiting %v, error %q on field %v", m.keyring != nil, m.form.err, m.form.errField)
+	}
+	if n := reads.Load(); n != 0 {
+		t.Fatalf("shares read %d times before a host error", n)
+	}
+}
+
+// n on the retry overlay asks for a new password once the shares are read.
+// While they are, the overlay, its message already cleared, is not drawn.
+func TestShareCheck_RetryNewPasswordLeavesTheOverlay(t *testing.T) {
+	withFakeRDP(t)
+	t.Setenv("FAKERDP_EXIT", "1")
+	store := secret.NewMemory()
+	h, _ := shareHarness(t, store)
+	p, _ := h.m.app.Cfg.Profile("work")
+	_ = store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))
+	m := press(h.m, "enter")
+	if m.view != viewRetry {
+		t.Fatalf("view %v, want the retry overlay; status %q", m.view, m.status)
+	}
+	slowShares(t, m.app)
+	m, cmd := updateKey(m, "n")
+	if m.keyring == nil || m.view != viewList {
+		t.Fatalf("waiting %v, view %v", m.keyring != nil, m.view)
+	}
+	runCmd(cmd)
 }

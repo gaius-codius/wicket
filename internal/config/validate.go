@@ -259,6 +259,20 @@ func ValidateProfileInUse(p Profile) error {
 // them once and hands the result on. Shares checked does not cover are read
 // now.
 func ValidateCheckedProfile(p Profile, checked CheckedShares) error {
+	if err := ValidateProfileBeforeShares(p); err != nil {
+		return err
+	}
+	if checked.Covers(p) {
+		return nil
+	}
+	return validateSharesExist(p)
+}
+
+// ValidateProfileBeforeShares is ValidateProfileInUse without reading the
+// shares: every rule that needs no file system, the shares' shape among
+// them. A caller that reads the shares off its own thread asks it first, so
+// a mistyped host is reported at once rather than after a long read.
+func ValidateProfileBeforeShares(p Profile) error {
 	if err := ValidateProfile(p); err != nil {
 		return err
 	}
@@ -273,11 +287,7 @@ func ValidateCheckedProfile(p Profile, checked CheckedShares) error {
 	if err := validateSizeInRange(p.Size); err != nil {
 		return err
 	}
-	if checked.Covers(p) {
-		return validateSharesShape(p)
-	}
-	_, err := CheckShares(p)
-	return err
+	return validateSharesShape(p)
 }
 
 // CheckedShares is the share paths of a profile CheckShares passed. The zero
@@ -302,13 +312,15 @@ func sharePaths(p Profile) []string {
 	return paths
 }
 
-// CheckShares requires each share path to name an existing directory after ~
+// CheckShares is ValidateProfileInUse, and what it read of p's shares. It
+// requires each share path to name an existing directory after ~
 // expansion, and one ShareRefusal allows, as it is when asked: a share an
 // import kept may since have become a link to home. Save and connect ask;
 // load does not. It reads each share's tree, and the trees its links lead
-// to, so it can take a while; see ShareRefusal.
+// to, so it can take a while; see ShareRefusal. The rules that need no file
+// system come first, so a profile they refuse is not read at all.
 func CheckShares(p Profile) (CheckedShares, error) {
-	if err := validateSharesExist(p); err != nil {
+	if err := ValidateCheckedProfile(p, CheckedShares{}); err != nil {
 		return CheckedShares{}, err
 	}
 	return CheckedShares{paths: sharePaths(p)}, nil

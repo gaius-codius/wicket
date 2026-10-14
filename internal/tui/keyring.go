@@ -72,7 +72,7 @@ type credResolvedMsg struct {
 }
 
 // sharesCheckedMsg is the reading of a profile's shares that a save or a
-// connect starts with; then goes on with what it found.
+// connect starts with; its then goes on with what it found.
 type sharesCheckedMsg struct {
 	checked config.CheckedShares
 	err     error
@@ -201,12 +201,16 @@ func (m Model) handleKeyringReply(msg keyringReplyMsg) (tea.Model, tea.Cmd) {
 // checkShares reads p's shares off the loop, once for the save or connect
 // it starts, then goes on with then and what it found: checked spares every
 // later step of the action from reading them again. A profile with no
-// shares has nothing to read and goes straight on. stopped is what Esc or
-// Ctrl+C does; the reading itself cannot be stopped, and its result is
-// dropped.
+// shares has nothing to read and goes straight on, and so does one the
+// rules that need no file system refuse, with that error. stopped is what
+// Esc or Ctrl+C does; the reading itself cannot be stopped, and its result
+// is dropped.
 func (m Model) checkShares(p config.Profile, stopped func(Model, string) (tea.Model, tea.Cmd), then func(Model, config.CheckedShares, error) (tea.Model, tea.Cmd)) (tea.Model, tea.Cmd) {
 	if len(p.Shares) == 0 {
 		return then(m, config.CheckedShares{}, nil)
+	}
+	if err := config.ValidateProfileBeforeShares(p); err != nil {
+		return then(m, config.CheckedShares{}, err)
 	}
 	// The form edits its shares in place, and a check the user stopped
 	// waiting for goes on reading them, so it reads a copy.

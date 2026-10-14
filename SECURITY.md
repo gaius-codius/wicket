@@ -47,6 +47,22 @@ The latest release. There are no backports to earlier tags.
   cancel stops further native steps and rejects results after cancel, but an
   unlock or access dialog already shown cannot be dismissed by Wicket and
   remains until the user responds or the process exits.
+- **The installer checks who built a release, not only that it arrived
+  whole.** `install.sh` checks each download against the release's
+  `SHA256SUMS`, but both come from the same place, so that alone shows only
+  that the tarball is complete. Releases from v0.4.0 on carry a signed build
+  provenance attestation. When the GitHub CLI 2.68 or newer is installed, the
+  installer runs `gh attestation verify` with an exact match on the release
+  workflow and the tag, and refuses the download when the check fails,
+  including when GitHub cannot be reached or rate limits it. v0.1.0 to v0.3.1
+  predate attestations; their tarballs are checked against SHA-256 digests
+  kept in the script itself, so a replaced release does not pass.
+- **The installer fetches over https only.** A `WICKET_RELEASES_URL` or
+  `WICKET_API_URL` that is not `https://` is refused, and so is a redirect to
+  anything else. It uses `curl`, or a `wget` it knows to check certificates
+  (GNU Wget 1.x, Wget2, or busybox 1.33 or newer through `openssl` and not
+  behind `http_proxy`), and makes it check them whatever `~/.curlrc` or
+  `~/.wgetrc` says.
 
 ## What Wicket does not protect against
 
@@ -70,6 +86,13 @@ The latest release. There are no backports to earlier tags.
 - **Go strings cannot be wiped.** Password bytes received over D-Bus are
   zeroed as soon as they have been copied, but the copy lives in a Go string
   and may persist in memory until it is collected.
+- **An install without a recent GitHub CLI checks less.** With no `gh`, a
+  `gh` older than 2.68, or one that asks for a login, the installer says the
+  provenance check was skipped and checks a v0.4.0 or later download only
+  against `SHA256SUMS` from the same release. Someone who can replace a
+  release's files can replace both. Install `gh`, or run the
+  `gh attestation verify` command in the README yourself. The installer
+  script itself is trusted as it comes from the repository.
 - **What FreeRDP does with the connection.** Wicket builds a command line and
   hands over a password. Everything after that — the RDP protocol, certificate
   validation, the remote host — belongs to FreeRDP.

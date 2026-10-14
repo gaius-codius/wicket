@@ -111,7 +111,8 @@ files into wicket profiles. Import only — there is no export or sync.
 A turned-off clipboard and shared folders come across. "All drives" (`*`,
 `DynamicDrives` in an `.rdp` file), Windows drive letters, the home folder
 (`%`, `~`), any folder that holds it, such as `/home` or `/`, and anything
-under `/proc` do not; turn on `share_home` yourself if you want home shared.
+under `/proc` do not, nor does a folder with a link in it that leads to one
+of those; turn on `share_home` yourself if you want home shared.
 Nor does a relative path, or a folder a config could not hold, such as a
 path with a comma or a control character in it, or a second folder shared
 under the same name. The summary names each folder left out and why.
@@ -165,6 +166,16 @@ shares = [
 FreeRDP). Paths must be absolute or `~/…`, and must exist as directories when
 you save or connect. Leave `name` out to derive it from the folder name.
 `share_home` and a share named `home` cannot both be set.
+
+A share that holds your home folder, such as `~`, `/home` or `/`, or that
+leads through `/proc` or `/dev/fd`, is refused when you save or connect, even
+in a config written by hand; use `share_home` to share home. FreeRDP follows
+symlinks inside a shared folder, so a folder with a link anywhere in it that
+leads to one of those is refused too, such as a Wine prefix's `dosdevices`,
+whose `z:` is `/`. Wicket reads at most 100,000 files and folders of a share
+to look for links, and refuses a larger one, or one with a folder it may
+enter but not list. A link made after the check, while Wicket asks for a
+password or during the session, is not seen until the next connect.
 
 Keys left out keep their default, and a save only writes the ones changed.
 

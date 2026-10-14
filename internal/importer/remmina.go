@@ -187,15 +187,21 @@ func splitDomainUser(user string) (domain, bare string, ok bool) {
 // shareSet collects the shares an import keeps, by the rules both formats
 // share, and the ones it refuses with the reason, for the summary. A path
 // must be absolute or ~/…, or it is refused; an empty one names nothing and
-// is passed over. A folder holding the whole home folder is refused too: a
-// file sent to the user could otherwise hand a server every file they have,
-// and Wicket offers home only as share_home, which an import does not turn
-// on. Whether the folder exists is left to the time it is used. A repeat of
-// a share already kept or refused goes without a note.
+// is passed over. A folder config.ShareRefusal refuses is refused too, such
+// as one holding the whole home folder, or with a link in it that leads
+// there: a file sent to the user could otherwise hand a server every file
+// they have, and Wicket offers home only as share_home, which an import does
+// not turn on. Save and connect ask it again, so a folder that changes
+// after the import is caught there. Whether the folder exists is left to
+// the time it is used. A repeat of a share already kept or refused goes
+// without a note.
 type shareSet struct {
 	list    []config.Share
 	refused []config.DroppedShare
 	seen    map[string]bool
+	// reasons is shareRefusal's answer for each cleaned path asked so far,
+	// so a file that lists one large folder many times has it read once.
+	reasons map[string]string
 }
 
 func (s *shareSet) add(name, path string) {
@@ -204,7 +210,7 @@ func (s *shareSet) add(name, path string) {
 	if path == "" {
 		return
 	}
-	if reason := shareRefusal(path); reason != "" {
+	if reason := s.refusal(path); reason != "" {
 		s.refuse(path, reason)
 		return
 	}
@@ -214,6 +220,24 @@ func (s *shareSet) add(name, path string) {
 	if s.first(filepath.Clean(path) + "\x00" + name) {
 		s.list = append(s.list, config.Share{Path: path, Name: name})
 	}
+}
+
+// refusal is shareRefusal(path), with what config.ShareRefusal finds on
+// disk asked once per cleaned path. The path's own spelling is checked each
+// time, since /srv/a,/.. cleans to /srv but /srv may be shared.
+func (s *shareSet) refusal(path string) string {
+	if reason := shareSpelling(path); reason != "" {
+		return reason
+	}
+	key := filepath.Clean(path)
+	if reason, ok := s.reasons[key]; ok {
+		return reason
+	}
+	if s.reasons == nil {
+		s.reasons = map[string]string{}
+	}
+	s.reasons[key] = config.ShareRefusal(path)
+	return s.reasons[key]
 }
 
 // refuse notes an entry left out, once per path, since the summary names
@@ -241,21 +265,30 @@ func (s *shareSet) first(key string) bool {
 const (
 	refusedNotPath  = "path must be absolute or ~/…"
 	refusedComma    = "path must not contain ','"
-	refusedHome     = "holds the whole home folder; turn on share_home to share it"
-	refusedProc     = "folders under /proc or /dev/fd, or reached through them, are not shared"
 	refusedAllDrive = "only folders are shared, not all drives"
-	refusedNoHome   = "the home folder is unknown (HOME is unset or not absolute), so no folder is shared"
+	refusedHome     = config.RefusedHome
+	refusedProc     = config.RefusedProc
+	refusedNoHome   = config.RefusedNoHome
 )
 
 // shareRefusal is why path cannot be imported as a share, or "".
 func shareRefusal(path string) string {
+	if reason := shareSpelling(path); reason != "" {
+		return reason
+	}
+	return config.ShareRefusal(path)
+}
+
+// shareSpelling is why path, as written, cannot be imported as a share, or
+// "", without looking at the file system.
+func shareSpelling(path string) string {
 	switch {
 	case !isSharePath(path):
 		return refusedNotPath
 	case strings.ContainsRune(path, ','):
 		return refusedComma
 	}
-	return wholeHomeOrRoot(path)
+	return ""
 }
 
 func isSharePath(path string) bool {

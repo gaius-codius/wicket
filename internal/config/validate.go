@@ -409,7 +409,9 @@ func checkShareShape(s Share, shareHome bool) (drive, msg string) {
 }
 
 // validateSharesExist requires each share path to name an existing directory
-// after ~ expansion. Save and connect ask; load does not.
+// after ~ expansion, and one ShareRefusal allows, as it is when asked: a
+// share an import kept may since have become a link to home. Save and
+// connect ask; load does not.
 func validateSharesExist(p Profile) error {
 	if err := validateSharesShape(p); err != nil {
 		return err
@@ -428,6 +430,9 @@ func validateSharesExist(p Profile) error {
 		}
 		if !info.IsDir() {
 			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %s is not a directory", i+1, expanded)}
+		}
+		if reason := ShareRefusal(s.Path); reason != "" {
+			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %s: %s", i+1, expanded, reason)}
 		}
 	}
 	return nil

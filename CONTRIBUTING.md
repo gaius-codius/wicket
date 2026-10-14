@@ -33,7 +33,7 @@ blocked-by links, then put it on the board. The commands are in
 ## What you need
 
 - [mise](https://mise.jdx.dev). `mise.toml` pins Go (1.27.2, matching the
-  `toolchain` line in `go.mod`), golangci-lint, govulncheck and lefthook. Run
+  `toolchain` line in `go.mod`), golangci-lint, govulncheck, deadcode, gopls, shellcheck and lefthook. Run
   `mise install` after cloning and whenever `mise.toml` changes, then
   `lefthook install` once to set up the git hooks: on commit they format and
   lint the staged packages, on push they run the tests. Put hooks of your own
@@ -65,7 +65,7 @@ go build ./cmd/wicket/
 CI runs the same on Linux through the shared
 [go-ci](https://github.com/gaius-codius/go-ci) workflow, plus short runs
 of `FuzzSave` and the importer's `FuzzParseRDP` and `FuzzParseRemmina`, and
-the tests with the Keychain backend on macOS.
+a `go mod tidy` check, shellcheck on `install.sh`, a deadcode report (warnings only), and lint and the tests with the Keychain backend on macOS.
 `.golangci.yml` is go-ci's baseline with wicket's exclusions, each with its
 reason; suppress a single finding only with `//nolint:<linter> // reason`. A
 reachable vulnerability fails `govulncheck.sh` unless

@@ -12,10 +12,14 @@ permissions:
 
 jobs:
   verify:
-    uses: gaius-codius/go-ci/.github/workflows/go.yml@25c4a99358e56e3ca2967d783de6dec46c0661de # v1.0.1
+    uses: gaius-codius/go-ci/.github/workflows/go.yml@fd3220208154a540db699c603ebbf24ae2befcce # v1.1.0
     with:
       runs-on: '["ubuntu-latest"]'
       mise-cache: true
+      timeout-minutes: 30
+      tidy-check: true
+      shellcheck: install.sh
+      deadcode: true
       build: ./cmd/wicket/
       fuzz: |
         ./internal/config FuzzSave
@@ -49,10 +53,12 @@ jobs:
           WICKET_INSTALL_TESTS: all
         run: go test -count=1 -v -run '^TestInstall' .
 
-  # go-ci is Linux-only; this job runs the Keychain backend's tests.
+  # go-ci is Linux-only; this job lints and tests the darwin and cgo files
+  # (the Keychain backend, kqueue) natively.
   verify-macos:
     name: test-vet-fmt-macos
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -63,6 +69,13 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: true
+
+      - name: Install golangci-lint (mise.toml)
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          # Only the linter: the rest of mise.toml is for Linux CI and editors.
+          install_args: golangci-lint
           cache: true
 
       - name: Check gofmt
@@ -76,6 +89,9 @@ jobs:
 
       - name: Run go vet
         run: go vet ./...
+
+      - name: Run golangci-lint
+        run: golangci-lint run ./...
 
       - name: Run tests
         env:

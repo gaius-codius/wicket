@@ -25,7 +25,9 @@ func waitExited(pid int) bool {
 	if err != nil {
 		return false
 	}
-	defer unix.Close(kq)
+	// Nothing to do if closing a read-only kqueue fails, and the process is
+	// about to learn the child's exit state either way.
+	defer func() { _ = unix.Close(kq) }()
 
 	var ev unix.Kevent_t
 	unix.SetKevent(&ev, pid, unix.EVFILT_PROC, unix.EV_ADD|unix.EV_ONESHOT)
@@ -52,7 +54,9 @@ func waitExited(pid int) bool {
 			continue
 		}
 		if events[0].Flags&unix.EV_ERROR != 0 {
-			return syscall.Errno(events[0].Data) == unix.ESRCH
+			// Data carries the errno as an int64; compare in that type
+			// rather than converting it to a uintptr Errno.
+			return events[0].Data == int64(unix.ESRCH)
 		}
 		if events[0].Fflags&unix.NOTE_EXIT != 0 {
 			return true

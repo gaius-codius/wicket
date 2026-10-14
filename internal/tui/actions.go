@@ -60,6 +60,9 @@ type App struct {
 	// tell an unsuffixed FreeRDP 3 client from FreeRDP 2. nil means
 	// rdp.FreeRDPMajor, which runs it.
 	FreeRDPMajor func(path string) (int, bool)
+	// CheckShares reads a profile's shares before a save or a connect. nil
+	// means config.CheckShares; a test puts a slow one in its place.
+	CheckShares func(config.Profile) (config.CheckedShares, error)
 
 	// active is the session running now, if any. It is kept here rather
 	// than only in the model so that Wicket can stop it on the way out,
@@ -110,6 +113,9 @@ type savePlan struct {
 	intent PasswordIntent
 	oldID  secret.Identity
 	newID  secret.Identity
+	// checked is p's shares as the save read them, so the config write does
+	// not read them again.
+	checked config.CheckedShares
 	// moved is set when the save changes the keyring identity (profile UUID).
 	// Name, host, user and domain edits do not move it (issue #24).
 	moved bool
@@ -141,8 +147,20 @@ type carry struct {
 	attempted bool
 }
 
+// checkShares reads p's shares, once for a save or a connect: it reads
+// every folder in them, and every folder their links lead to, so it can
+// take seconds, and runs off the TUI's update loop.
+func (a *App) checkShares(p config.Profile) (config.CheckedShares, error) {
+	if a.CheckShares != nil {
+		return a.CheckShares(p)
+	}
+	return config.CheckShares(p)
+}
+
 // planSave validates a save without touching the config or the keyring.
-func (a *App) planSave(oldName string, newP config.Profile, intent PasswordIntent) (savePlan, error) {
+// checked is what checkShares found for newP's shares; any it does not
+// cover are read here.
+func (a *App) planSave(oldName string, newP config.Profile, intent PasswordIntent, checked config.CheckedShares) (savePlan, error) {
 	// Surrounding whitespace is trimmed rather than rejected. A paste was
 	// already trimmed on its way into the field, so typing the same trailing
 	// space was the only way to see "must not have leading or trailing
@@ -151,7 +169,7 @@ func (a *App) planSave(oldName string, newP config.Profile, intent PasswordInten
 	// The in-use rules are asked here, before any keyring work, so a host
 	// Upsert would refuse costs nothing and reports like every other field
 	// error rather than after a password has been copied.
-	if err := config.ValidateProfileInUse(newP); err != nil {
+	if err := config.ValidateCheckedProfile(newP, checked); err != nil {
 		return savePlan{}, err
 	}
 	if intent.set() && intent.Password.Empty() {
@@ -171,7 +189,7 @@ func (a *App) planSave(oldName string, newP config.Profile, intent PasswordInten
 		}
 		config.EnsureID(&newP)
 	}
-	plan := savePlan{oldName: oldName, p: newP, intent: intent, newID: secret.IdentityFor(a.Cfg.Path(), newP)}
+	plan := savePlan{oldName: oldName, p: newP, intent: intent, newID: secret.IdentityFor(a.Cfg.Path(), newP), checked: checked}
 	if oldName != "" {
 		if p, ok := a.Cfg.Profile(oldName); ok {
 			plan.old = &p
@@ -212,7 +230,7 @@ func (a *App) carrySecret(ctx context.Context, plan savePlan) (carry, error) {
 
 // commitSave writes the config and moves the last-used time with a rename.
 func (a *App) commitSave(plan savePlan) (warnings []string, err error) {
-	if err := a.Cfg.Upsert(plan.p, plan.oldName); err != nil {
+	if err := a.Cfg.UpsertChecked(plan.p, plan.oldName, plan.checked); err != nil {
 		return nil, err
 	}
 	warnings = append(warnings, a.rewroteWarning()...)
@@ -268,7 +286,11 @@ func (a *App) finishSave(ctx context.Context, plan savePlan, c carry) (warnings 
 // oldName is empty, and does what intent says with its stored password. It
 // runs the steps the TUI runs one at a time, in the same order.
 func (a *App) SaveProfile(ctx context.Context, oldName string, newP config.Profile, intent PasswordIntent) (warnings []string, err error) {
-	plan, err := a.planSave(oldName, newP, intent)
+	checked, err := a.checkShares(newP)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := a.planSave(oldName, newP, intent, checked)
 	if err != nil {
 		return nil, err
 	}
@@ -437,8 +459,9 @@ type Session struct {
 // TUI can draw the session while it lasts. The terminal stays with Wicket:
 // the client's output goes to a bounded buffer rather than to a screen
 // Bubble Tea is drawing, and its password to a private pipe as always.
-func (a *App) Start(p config.Profile, cred rdp.Credential) (*Session, error) {
-	plan, err := rdp.BuildPlan(p)
+// checked is what checkShares found for p's shares.
+func (a *App) Start(p config.Profile, cred rdp.Credential, checked config.CheckedShares) (*Session, error) {
+	plan, err := rdp.BuildCheckedPlan(p, checked)
 	if err != nil {
 		return nil, err
 	}
@@ -659,9 +682,10 @@ func (a *App) Installed(client string) bool {
 	return err == nil
 }
 
-// ProbeClient reports a missing or illegal client basename before any password prompt.
-func (a *App) ProbeClient(p config.Profile) error {
-	plan, err := rdp.BuildPlan(p)
+// ProbeClient reports a missing or illegal client basename before any
+// password prompt. checked is what checkShares found for p's shares.
+func (a *App) ProbeClient(p config.Profile, checked config.CheckedShares) error {
+	plan, err := rdp.BuildCheckedPlan(p, checked)
 	if err != nil {
 		return err
 	}

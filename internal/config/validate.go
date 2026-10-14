@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -249,6 +250,15 @@ func fmtIndex(i int) string {
 // rather than FreeRDP's. A config that already holds one still opens, or a
 // single bad profile would lock the user out of every other.
 func ValidateProfileInUse(p Profile) error {
+	return ValidateCheckedProfile(p, CheckedShares{})
+}
+
+// ValidateCheckedProfile is ValidateProfileInUse for a profile whose shares
+// CheckShares has already passed, as checked says. Reading a share's tree
+// can take seconds, and a save or a connect asks more than once, so it reads
+// them once and hands the result on. Shares checked does not cover are read
+// now.
+func ValidateCheckedProfile(p Profile, checked CheckedShares) error {
 	if err := ValidateProfile(p); err != nil {
 		return err
 	}
@@ -263,7 +273,45 @@ func ValidateProfileInUse(p Profile) error {
 	if err := validateSizeInRange(p.Size); err != nil {
 		return err
 	}
-	return validateSharesExist(p)
+	if checked.Covers(p) {
+		return validateSharesShape(p)
+	}
+	_, err := CheckShares(p)
+	return err
+}
+
+// CheckedShares is the share paths of a profile CheckShares passed. The zero
+// value covers only a profile with no shares.
+type CheckedShares struct {
+	paths []string
+}
+
+// Covers reports whether c was checked for exactly the share paths p holds.
+func (c CheckedShares) Covers(p Profile) bool {
+	return slices.Equal(c.paths, sharePaths(p))
+}
+
+func sharePaths(p Profile) []string {
+	if len(p.Shares) == 0 {
+		return nil
+	}
+	paths := make([]string, len(p.Shares))
+	for i, s := range p.Shares {
+		paths[i] = s.Path
+	}
+	return paths
+}
+
+// CheckShares requires each share path to name an existing directory after ~
+// expansion, and one ShareRefusal allows, as it is when asked: a share an
+// import kept may since have become a link to home. Save and connect ask;
+// load does not. It reads each share's tree, and the trees its links lead
+// to, so it can take a while; see ShareRefusal.
+func CheckShares(p Profile) (CheckedShares, error) {
+	if err := validateSharesExist(p); err != nil {
+		return CheckedShares{}, err
+	}
+	return CheckedShares{paths: sharePaths(p)}, nil
 }
 
 // ErrNoUser is a profile with no user, as an import may leave one, asked to
@@ -408,10 +456,7 @@ func checkShareShape(s Share, shareHome bool) (drive, msg string) {
 	return drive, ""
 }
 
-// validateSharesExist requires each share path to name an existing directory
-// after ~ expansion, and one ShareRefusal allows, as it is when asked: a
-// share an import kept may since have become a link to home. Save and
-// connect ask; load does not.
+// validateSharesExist is CheckShares without the record of what it checked.
 func validateSharesExist(p Profile) error {
 	if err := validateSharesShape(p); err != nil {
 		return err

@@ -95,25 +95,49 @@ func TestHelp_VersionOnlyOnListHelp(t *testing.T) {
 	}
 }
 
-// The version line is the first thing a short panel sheds: with room for
-// exactly the key lines, every key stays and the version goes.
+// A blank line sets the version apart from the last key.
+func TestHelp_VersionAfterBlankLine(t *testing.T) {
+	m := newHarness(t, fixtureTOML("work", "h", "u"), panicStore{}).m
+	m.version = testVersion
+	m.helpFor = viewList
+	keys := helpKeys(viewList)
+	lines := strings.Split(stripANSI(m.viewHelp(layout{Inner: 76, Budget: 40})), "\n")
+	if len(lines) != len(keys)+2 {
+		t.Fatalf("got %d help lines, want %d:\n%s", len(lines), len(keys)+2, strings.Join(lines, "\n"))
+	}
+	if gap := strings.TrimSpace(lines[len(keys)]); gap != "" {
+		t.Fatalf("line before the version = %q, want blank", gap)
+	}
+	if got := lines[len(keys)+1]; got != testVersion {
+		t.Fatalf("last line = %q, want %q", got, testVersion)
+	}
+}
+
+// The version line and its gap are the first thing a short panel sheds: with
+// room for only one more line than the keys, every key stays and the version
+// goes.
 func TestHelp_VersionDroppedBeforeKeys(t *testing.T) {
 	m := newHarness(t, fixtureTOML("work", "h", "u"), panicStore{}).m
 	m.version = testVersion
 	m.helpFor = viewList
 	keys := helpKeys(viewList)
-	lo := layout{Inner: 76, Budget: len(keys) + 1}
+	lo := layout{Inner: 76, Budget: len(keys) + 2}
 	if out := stripANSI(m.viewHelp(lo)); !strings.Contains(out, testVersion) {
 		t.Fatalf("version should fit at budget %d:\n%s", lo.Budget, out)
 	}
-	lo.Budget = len(keys)
-	out := stripANSI(m.viewHelp(lo))
-	if strings.Contains(out, "0.3.1") {
-		t.Fatalf("version should be dropped at budget %d:\n%s", lo.Budget, out)
-	}
-	for _, k := range keys {
-		if !strings.Contains(out, k.label) {
-			t.Fatalf("key %q dropped at budget %d:\n%s", k.label, lo.Budget, out)
+	for _, budget := range []int{len(keys) + 1, len(keys)} {
+		lo.Budget = budget
+		out := stripANSI(m.viewHelp(lo))
+		if strings.Contains(out, "0.3.1") {
+			t.Fatalf("version should be dropped at budget %d:\n%s", lo.Budget, out)
+		}
+		if got := len(strings.Split(out, "\n")); got != len(keys) {
+			t.Fatalf("got %d lines at budget %d, want only the %d keys:\n%s", got, lo.Budget, len(keys), out)
+		}
+		for _, k := range keys {
+			if !strings.Contains(out, k.label) {
+				t.Fatalf("key %q dropped at budget %d:\n%s", k.label, lo.Budget, out)
+			}
 		}
 	}
 	// Shorter still, help scrolls as before and the version never appears.

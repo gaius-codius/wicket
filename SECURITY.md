@@ -57,9 +57,11 @@ The latest release. There are no backports to earlier tags.
   including when GitHub cannot be reached or rate limits it. v0.1.0 to v0.3.1
   predate attestations; their tarballs are checked against SHA-256 digests
   kept in the script itself, so a replaced release does not pass.
-- **The installer fetches over https only.** A `WICKET_RELEASES_URL` or
-  `WICKET_API_URL` that is not `https://` is refused, and so is a redirect to
-  anything else. It uses `curl`, or a `wget` it knows to check certificates
+- **The installer uses only what it fetched over https.** A
+  `WICKET_RELEASES_URL` or `WICKET_API_URL` that is not `https://` is
+  refused. `curl` and Wget2 refuse a redirect away from https before
+  following it. GNU Wget 1.x and busybox cannot, so the installer reads
+  their redirects after the download and refuses it if any left https. It uses `curl`, or a `wget` it knows to check certificates
   (GNU Wget 1.x, Wget2, or busybox 1.33 or newer through `openssl` and not
   behind `http_proxy`), and makes it check them whatever `~/.curlrc` or
   `~/.wgetrc` says.

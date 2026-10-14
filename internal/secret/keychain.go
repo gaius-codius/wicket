@@ -84,10 +84,10 @@ func (k *Keychain) Presence(ctx context.Context, id Identity) (Presence, error) 
 	}
 	query := k.baseQuery(id)
 	defer C.CFRelease(C.CFTypeRef(query))
-	C.dictSet(query, C.CFTypeRef(C.kSecMatchLimit), C.CFTypeRef(C.matchLimitOne()))
+	C.dictSet(query, C.CFTypeRef(C.kSecMatchLimit), C.matchLimitOne())
 	C.dictSet(query, C.CFTypeRef(C.kSecReturnAttributes), C.CFTypeRef(C.kCFBooleanTrue))
 	// Never unlock or prompt just because the list cursor moved.
-	C.dictSet(query, C.CFTypeRef(C.kSecUseAuthenticationUI), C.CFTypeRef(C.authUIFail()))
+	C.dictSet(query, C.CFTypeRef(C.kSecUseAuthenticationUI), C.authUIFail())
 
 	result, status, err := secCopyMatching(ctx, C.CFDictionaryRef(query))
 	if err != nil {
@@ -118,7 +118,7 @@ func (k *Keychain) Lookup(ctx context.Context, id Identity) (LookupResult, error
 	// ref (MatchLimitOne alone is not guaranteed to return the newest).
 	query := k.baseQuery(id)
 	defer C.CFRelease(C.CFTypeRef(query))
-	C.dictSet(query, C.CFTypeRef(C.kSecMatchLimit), C.CFTypeRef(C.matchLimitAll()))
+	C.dictSet(query, C.CFTypeRef(C.kSecMatchLimit), C.matchLimitAll())
 	C.dictSet(query, C.CFTypeRef(C.kSecReturnAttributes), C.CFTypeRef(C.kCFBooleanTrue))
 	C.dictSet(query, C.CFTypeRef(C.kSecReturnPersistentRef), C.CFTypeRef(C.kCFBooleanTrue))
 
@@ -143,7 +143,7 @@ func (k *Keychain) Lookup(ctx context.Context, id Identity) (LookupResult, error
 	case C.CFArrayGetTypeID():
 		arr := C.CFArrayRef(result)
 		n := int(C.CFArrayGetCount(arr))
-		for i := 0; i < n; i++ {
+		for i := range n {
 			dict := C.CFDictionaryRef(C.CFArrayGetValueAtIndex(arr, C.CFIndex(i)))
 			pref := persistentRef(dict)
 			if pref == 0 {
@@ -199,7 +199,7 @@ func (k *Keychain) copyPasswordByPersistentRef(ctx context.Context, pref C.CFDat
 	defer C.CFRelease(C.CFTypeRef(query))
 	C.dictSet(query, C.CFTypeRef(C.kSecClass), C.CFTypeRef(C.kSecClassGenericPassword))
 	C.dictSet(query, C.CFTypeRef(C.kSecValuePersistentRef), C.CFTypeRef(pref))
-	C.dictSet(query, C.CFTypeRef(C.kSecMatchLimit), C.CFTypeRef(C.matchLimitOne()))
+	C.dictSet(query, C.CFTypeRef(C.kSecMatchLimit), C.matchLimitOne())
 	C.dictSet(query, C.CFTypeRef(C.kSecReturnData), C.CFTypeRef(C.kCFBooleanTrue))
 
 	result, status, err := secCopyMatching(ctx, C.CFDictionaryRef(query))
@@ -289,7 +289,7 @@ func (k *Keychain) Delete(ctx context.Context, id Identity) error {
 	query := k.baseQuery(id)
 	defer C.CFRelease(C.CFTypeRef(query))
 	// File-keychain SecItemDelete defaults to one match without MatchLimitAll.
-	C.dictSet(query, C.CFTypeRef(C.kSecMatchLimit), C.CFTypeRef(C.matchLimitAll()))
+	C.dictSet(query, C.CFTypeRef(C.kSecMatchLimit), C.matchLimitAll())
 	status, err := secItemDelete(ctx, C.CFDictionaryRef(query))
 	if err != nil {
 		return err
@@ -418,13 +418,13 @@ func cfStringToGo(s C.CFStringRef) string {
 	if n == 0 {
 		return ""
 	}
-	max := C.CFStringGetMaximumSizeForEncoding(n, C.kCFStringEncodingUTF8) + 1
-	buf := (*C.char)(C.malloc(C.size_t(max)))
+	size := C.CFStringGetMaximumSizeForEncoding(n, C.kCFStringEncodingUTF8) + 1
+	buf := (*C.char)(C.malloc(C.size_t(size)))
 	if buf == nil {
 		return ""
 	}
 	defer C.free(unsafe.Pointer(buf))
-	if C.CFStringGetCString(s, buf, max, C.kCFStringEncodingUTF8) == 0 {
+	if C.CFStringGetCString(s, buf, size, C.kCFStringEncodingUTF8) == 0 {
 		return ""
 	}
 	return C.GoString(buf)

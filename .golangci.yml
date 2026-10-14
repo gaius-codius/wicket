@@ -81,6 +81,12 @@ linters:
           - gosec
         text: G304
       # Test-only helpers and fakes, never built into the wicket binary.
+      # cgo rewrites calls that pass &Go-variable into code that compares a
+      # pointer with itself; the finding lands on the call's source line.
+      - path: internal/secret/keychain\.go
+        linters:
+          - gocritic
+        text: dupSubExpr
       - path: internal/testutil/
         linters:
           - gosec

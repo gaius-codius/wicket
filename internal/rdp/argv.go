@@ -62,7 +62,9 @@ func BuildCheckedPlan(p config.Profile, checked config.CheckedShares) (Plan, err
 	}
 	if p.ShareHome {
 		// FreeRDP finds the home folder itself, as it launches, so no path
-		// is put on the command line or needs checking here.
+		// is put on the command line. Nothing is checked, not even where
+		// links in home lead: share_home is consent to all of it, and the
+		// README and the form say it reaches / through a link.
 		args = append(args, "+home-drive")
 	}
 	for _, s := range p.Shares {

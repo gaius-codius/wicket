@@ -49,3 +49,8 @@ golangci-lint run ./...
 ./scripts/govulncheck.sh
 go build ./cmd/wicket/
 ```
+
+## Reviews and worktrees
+
+- **Reviews:** with `project-review`, never `team-pr-review`, which `.claude/settings.json` denies here. Its facts and lenses for this project are in `~/code/gaius-codius-skills/projects/wicket/`. Each review writes its record to `~/code/wicket/working-docs/reviews/`.
+- **Worktrees:** make them under `~/code/wicket-worktrees/` with `git worktree add` from `origin/main`, then copy the untracked settings in: `mkdir -p <worktree>/.claude && cp ~/code/wicket/.claude/settings.json <worktree>/.claude/`.

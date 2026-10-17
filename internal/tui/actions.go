@@ -61,8 +61,9 @@ type App struct {
 	// rdp.FreeRDPMajor, which runs it.
 	FreeRDPMajor func(path string) (int, bool)
 	// CheckShares reads a profile's shares before a save or a connect. nil
-	// means config.CheckShares; a test puts a slow one in its place.
-	CheckShares func(config.Profile) (config.CheckedShares, error)
+	// means config.CheckShares; a test puts a slow one in its place. ctx is
+	// cancelled when the user stops waiting.
+	CheckShares func(context.Context, config.Profile) (config.CheckedShares, error)
 
 	// active is the session running now, if any. It is kept here rather
 	// than only in the model so that Wicket can stop it on the way out,
@@ -81,7 +82,7 @@ type App struct {
 }
 
 // keyringContext returns a context for one keyring operation, bounded by
-// limit and cancelled early if Wicket exits.
+// limit, or unbounded when limit is 0, and cancelled early if Wicket exits.
 func (a *App) keyringContext(limit time.Duration) (context.Context, context.CancelFunc) {
 	a.mu.Lock()
 	if a.base == nil {
@@ -89,6 +90,9 @@ func (a *App) keyringContext(limit time.Duration) (context.Context, context.Canc
 	}
 	base := a.base
 	a.mu.Unlock()
+	if limit == 0 {
+		return context.WithCancel(base)
+	}
 	return context.WithTimeout(base, limit)
 }
 
@@ -150,11 +154,11 @@ type carry struct {
 // checkShares reads p's shares, once for a save or a connect: it reads
 // every folder in them, and every folder their links lead to, so it can
 // take seconds. The TUI calls it off its update loop; see Model.checkShares.
-func (a *App) checkShares(p config.Profile) (config.CheckedShares, error) {
+func (a *App) checkShares(ctx context.Context, p config.Profile) (config.CheckedShares, error) {
 	if a.CheckShares != nil {
-		return a.CheckShares(p)
+		return a.CheckShares(ctx, p)
 	}
-	return config.CheckShares(p)
+	return config.CheckShares(ctx, p)
 }
 
 // planSave validates a save without touching the config or the keyring.
@@ -286,7 +290,7 @@ func (a *App) finishSave(ctx context.Context, plan savePlan, c carry) (warnings 
 // oldName is empty, and does what intent says with its stored password. It
 // runs the steps the TUI runs one at a time, in the same order.
 func (a *App) SaveProfile(ctx context.Context, oldName string, newP config.Profile, intent PasswordIntent) (warnings []string, err error) {
-	checked, err := a.checkShares(newP)
+	checked, err := a.checkShares(ctx, newP)
 	if err != nil {
 		return nil, err
 	}

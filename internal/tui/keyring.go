@@ -120,9 +120,15 @@ var stopWaitingKeys = []keyHint{{"esc", "stop waiting", intentNormal}}
 
 // runKeyring starts op off the loop, saying what on the status line.
 func (m Model) runKeyring(what, slow string, keys []keyHint, stopped func(Model, string) (tea.Model, tea.Cmd), op func(context.Context) tea.Msg) (tea.Model, tea.Cmd) {
+	return m.runOp(keyringWait, what, slow, keys, stopped, op)
+}
+
+// runOp is runKeyring with op's context bounded by limit, or unbounded when
+// limit is 0, so that only the user stopping it, or Wicket exiting, ends it.
+func (m Model) runOp(limit time.Duration, what, slow string, keys []keyHint, stopped func(Model, string) (tea.Model, tea.Cmd), op func(context.Context) tea.Msg) (tea.Model, tea.Cmd) {
 	m.keyringSeq++
 	id := m.keyringSeq
-	ctx, cancel := m.app.keyringContext(keyringWait)
+	ctx, cancel := m.app.keyringContext(limit)
 	m.keyring = &keyringOp{id: id, cancel: cancel, slow: slow, keys: keys, stopped: stopped}
 	m.setStatus(what, statusInfo)
 	run := func() tea.Msg {
@@ -203,8 +209,8 @@ func (m Model) handleKeyringReply(msg keyringReplyMsg) (tea.Model, tea.Cmd) {
 // later step of the action from reading them again. A profile with no
 // shares has nothing to read and goes straight on, and so does one the
 // rules that need no file system refuse, with that error. stopped is what
-// Esc or Ctrl+C does; the reading itself cannot be stopped, and its result
-// is dropped.
+// Esc or Ctrl+C does: the reading stops once the folder it is reading
+// answers, rather than going on to the next, and its result is dropped.
 func (m Model) checkShares(p config.Profile, stopped func(Model, string) (tea.Model, tea.Cmd), then func(Model, config.CheckedShares, error) (tea.Model, tea.Cmd)) (tea.Model, tea.Cmd) {
 	if len(p.Shares) == 0 {
 		return then(m, config.CheckedShares{}, nil)
@@ -213,16 +219,19 @@ func (m Model) checkShares(p config.Profile, stopped func(Model, string) (tea.Mo
 		return then(m, config.CheckedShares{}, err)
 	}
 	// The form edits its shares in place, and a check the user stopped
-	// waiting for goes on reading them, so it reads a copy.
+	// waiting for reads on until the folder it is in answers, so it reads a
+	// copy.
 	p.Shares = slices.Clone(p.Shares)
 	app := m.app
-	return m.runKeyring(
+	// A large tree on a slow share can take longer than a keyring is given,
+	// so only the user stopping it, or Wicket exiting, ends the check.
+	return m.runOp(0,
 		"Checking the shared folders of "+truncate(p.Name, statusNameWidth)+"…",
 		"Still checking the shared folders… a slow or network share takes a while.",
 		stopWaitingKeys,
 		stopped,
-		func(context.Context) tea.Msg {
-			checked, err := app.checkShares(p)
+		func(ctx context.Context) tea.Msg {
+			checked, err := app.checkShares(ctx, p)
 			return sharesCheckedMsg{checked: checked, err: err, then: then}
 		})
 }

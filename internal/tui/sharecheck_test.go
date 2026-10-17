@@ -141,9 +141,16 @@ func TestShareCheck_SlowCheckDoesNotHoldTheLoop(t *testing.T) {
 
 // Esc stops the check itself, not only the wait for it: the context it
 // reads under is cancelled, so it stops reading rather than going on for a
-// result that will be dropped.
+// result that will be dropped. Ctrl+C does the same, and so does Wicket
+// exiting while a check runs.
 func TestShareCheck_StopCancelsTheCheck(t *testing.T) {
-	for _, tc := range []struct{ name, key string }{{"save", "ctrl+s"}, {"connect", "enter"}} {
+	for _, tc := range []struct{ name, key, stop string }{
+		{"save/esc", "ctrl+s", "esc"},
+		{"save/ctrl+c", "ctrl+s", "ctrl+c"},
+		{"connect/esc", "enter", "esc"},
+		{"connect/ctrl+c", "enter", "ctrl+c"},
+		{"connect/exit", "enter", ""},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			withFakeRDP(t)
 			h, _ := shareHarness(t, secret.NewMemory())
@@ -154,7 +161,7 @@ func TestShareCheck_StopCancelsTheCheck(t *testing.T) {
 				return config.CheckedShares{}, ctx.Err()
 			}
 			m := h.m
-			if tc.name == "save" {
+			if tc.key == "ctrl+s" {
 				m = press(m, "e")
 			}
 			m, cmd := updateKey(m, tc.key)
@@ -162,14 +169,18 @@ func TestShareCheck_StopCancelsTheCheck(t *testing.T) {
 				t.Fatal("no check running")
 			}
 			runCmd(cmd)
-			_, _ = updateKey(m, "esc")
+			if tc.stop == "" {
+				h.m.app.CancelKeyring()
+			} else {
+				_, _ = updateKey(m, tc.stop)
+			}
 			select {
 			case err := <-stopped:
 				if !errors.Is(err, context.Canceled) {
 					t.Fatalf("check stopped with %v", err)
 				}
 			case <-time.After(5 * time.Second):
-				t.Fatal("esc did not cancel the check")
+				t.Fatal("stopping did not cancel the check")
 			}
 		})
 	}

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -309,39 +310,75 @@ func walk(t *testing.T, dir string, homes []string, limit int) string {
 	return linkOut(t.Context(), dir, homes, limit)
 }
 
-// stopAfter is a context that is cancelled once Err has been asked n times,
-// as if the user stopped waiting while the nth folder was read. asked counts
-// the times Err was asked.
+// stopAfter is a context that is cancelled once Err has been asked n
+// times, as if the user stopped waiting part way through a walk. asked
+// counts the times Err was asked.
 type stopAfter struct {
 	context.Context
 	n     int32
 	asked atomic.Int32
+	once  sync.Once
+	done  chan struct{}
+}
+
+func newStopAfter(t *testing.T, n int32) *stopAfter {
+	return &stopAfter{Context: t.Context(), n: n, done: make(chan struct{})}
 }
 
 func (c *stopAfter) Err() error {
 	if c.asked.Add(1) > c.n {
+		c.once.Do(func() { close(c.done) })
 		return context.Canceled
 	}
 	return nil
 }
 
-// A check the user stops waiting for goes no further than the folder it is
-// reading: a tree of many folders is left unread past it, rather than read
-// to the end for a result nobody wants.
+// Done agrees with Err: it is closed once Err has said the context is done.
+func (c *stopAfter) Done() <-chan struct{} { return c.done }
+
+// A check the user stops waiting for reads no further folders: a tree of
+// many folders, with a link to / below all of them, is refused when read
+// to the end, and left unread past the stop when stopped early, rather
+// than read on for a result nobody wants.
 func TestLinkOut_StopsWhenCancelled(t *testing.T) {
 	t.Parallel()
-	tree := map[string]string{}
+	tree := map[string]string{"d0/deep/z:": "/"}
 	for i := range 200 {
 		tree[fmt.Sprintf("d%d/", i)] = ""
 	}
 	dir := linkTree(t, tree)
 	homes := homeNames("/nonexistent/wicket-home", false)
-	ctx := &stopAfter{Context: t.Context(), n: 3}
-	if reason := linkOut(ctx, dir, homes, maxShareEntries); reason != "" {
-		t.Fatalf("reason %q", reason)
+	if got := walk(t, dir, homes, maxShareEntries); !strings.Contains(got, "FreeRDP follows links") {
+		t.Fatalf("read to the end: %q", got)
 	}
-	if n := ctx.asked.Load(); n != 4 {
-		t.Fatalf("asked %d times, want 4: 3 folders read, then stopped", n)
+	ctx := newStopAfter(t, 10)
+	if got := linkOut(ctx, dir, homes, maxShareEntries); got != "" {
+		t.Fatalf("stopped: %q", got)
+	}
+	// Nothing more is looked at once it has seen it is stopped.
+	if n := ctx.asked.Load(); n != 11 {
+		t.Fatalf("asked %d times, want 11: stopped at the first ask after the stop", n)
+	}
+}
+
+// A check stopped while it reads a folder looks at none of the entries
+// left in it: each link in it could lead to another hung mount, and
+// resolving them one after another would keep the stopped check going.
+func TestLinkOut_StopsWithinAFolder(t *testing.T) {
+	t.Parallel()
+	tree := map[string]string{"z:": "/"}
+	for i := range 300 {
+		tree[fmt.Sprintf("l%d", i)] = "/nonexistent/wicket-target"
+	}
+	dir := linkTree(t, tree)
+	homes := homeNames("/nonexistent/wicket-home", false)
+	if got := walk(t, dir, homes, maxShareEntries); !strings.Contains(got, "FreeRDP follows links") {
+		t.Fatalf("read to the end: %q", got)
+	}
+	// Stopped by the time the folder's entries are looked at, the link
+	// to / among them is never reached.
+	if got := linkOut(newStopAfter(t, 3), dir, homes, maxShareEntries); got != "" {
+		t.Fatalf("stopped: %q", got)
 	}
 }
 

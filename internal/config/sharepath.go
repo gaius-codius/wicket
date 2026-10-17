@@ -99,10 +99,12 @@ func shareRefusal(ctx context.Context, path string) string {
 // A dir that does not exist holds nothing, and connect reports it. Names
 // are quoted in the reason, as a file name may hold anything.
 //
-// ctx is asked before each folder is read, and once it is done the walk
-// stops and returns "": a read of a hung automount or NFS folder cannot be
-// interrupted, but the walk goes no further once it answers. The caller
-// asks ctx.Err after it to tell a stopped walk from a passed one.
+// ctx is asked before each folder is read, between the batches of a large
+// one and before each entry, so once it is done the walk stops and returns
+// "": a lookup on a hung automount or NFS folder cannot be interrupted, but
+// the walk starts no other once it answers, not even on the next link in
+// the same folder. The caller asks ctx.Err after it to tell a stopped walk
+// from a passed one.
 func linkOut(ctx context.Context, dir string, homes []string, limit int) string {
 	resolved, err := filepath.EvalSymlinks(dir)
 	if tooLong(err) {
@@ -124,7 +126,7 @@ func linkOut(ctx context.Context, dir string, homes []string, limit int) string 
 		}
 		d := queue[0]
 		queue = queue[1:]
-		entries, err := readDir(d.real, limit-read+1)
+		entries, err := readDir(ctx, d.real, limit-read+1)
 		if err != nil {
 			// Looking up "." in a folder needs leave to enter it, as
 			// FreeRDP's lookups below it would; Join would clean it away.
@@ -141,6 +143,9 @@ func linkOut(ctx context.Context, dir string, homes []string, limit int) string 
 			return fmt.Sprintf("the folder %q in it cannot be listed to check for links that lead out of it", d.rel)
 		}
 		for _, e := range entries {
+			if ctx.Err() != nil {
+				return ""
+			}
 			read++
 			if read > limit {
 				return fmt.Sprintf("holds more than %d files and folders, with those its links lead to, too many to check for links that lead out of it", limit)
@@ -213,15 +218,16 @@ func tooLongReason(rel string) string {
 
 // readDir is the entries of the folder at dir, read a batch at a time and
 // no more than n of them, so a folder of millions is not read whole to be
-// refused.
-func readDir(dir string, n int) ([]fs.DirEntry, error) {
+// refused. Once ctx is done it stops at the batch it has, for the walk to
+// see ctx is done before it looks at any of them.
+func readDir(ctx context.Context, dir string, n int) ([]fs.DirEntry, error) {
 	f, err := os.Open(dir)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
 	var out []fs.DirEntry
-	for len(out) < n {
+	for len(out) < n && ctx.Err() == nil {
 		batch, err := f.ReadDir(min(1024, n-len(out)))
 		out = append(out, batch...)
 		if errors.Is(err, io.EOF) {

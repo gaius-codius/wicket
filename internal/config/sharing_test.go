@@ -357,7 +357,7 @@ func TestCheckShares_CoversOnlyTheSharesItRead(t *testing.T) {
 		Name: "work", Host: "h", User: "u", Client: "sdl-freerdp3", Scale: 100,
 		Shares: []Share{{Path: dir}},
 	}
-	checked, err := CheckShares(p)
+	checked, err := CheckShares(t.Context(), p)
 	if err != nil {
 		t.Fatal(err)
 	}

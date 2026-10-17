@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -259,13 +260,19 @@ func ValidateProfileInUse(p Profile) error {
 // them once and hands the result on. Shares checked does not cover are read
 // now.
 func ValidateCheckedProfile(p Profile, checked CheckedShares) error {
+	return validateCheckedProfile(context.Background(), p, checked)
+}
+
+// validateCheckedProfile is ValidateCheckedProfile, stopped early with
+// ctx's error once ctx is done.
+func validateCheckedProfile(ctx context.Context, p Profile, checked CheckedShares) error {
 	if err := ValidateProfileBeforeShares(p); err != nil {
 		return err
 	}
 	if checked.Covers(p) {
 		return nil
 	}
-	return validateSharesExist(p)
+	return validateSharesExist(ctx, p)
 }
 
 // ValidateProfileBeforeShares is ValidateProfileInUse without reading the
@@ -319,8 +326,11 @@ func sharePaths(p Profile) []string {
 // load does not. It reads each share's tree, and the trees its links lead
 // to, so it can take a while; see ShareRefusal. The rules that need no file
 // system come first, so a profile they refuse is not read at all.
-func CheckShares(p Profile) (CheckedShares, error) {
-	if err := ValidateCheckedProfile(p, CheckedShares{}); err != nil {
+//
+// Once ctx is done the read stops, after the folder it is reading answers,
+// with an error that wraps ctx's; see linkOut.
+func CheckShares(ctx context.Context, p Profile) (CheckedShares, error) {
+	if err := validateCheckedProfile(ctx, p, CheckedShares{}); err != nil {
 		return CheckedShares{}, err
 	}
 	return CheckedShares{paths: sharePaths(p)}, nil
@@ -469,11 +479,14 @@ func checkShareShape(s Share, shareHome bool) (drive, msg string) {
 }
 
 // validateSharesExist is CheckShares without the record of what it checked.
-func validateSharesExist(p Profile) error {
+func validateSharesExist(ctx context.Context, p Profile) error {
 	if err := validateSharesShape(p); err != nil {
 		return err
 	}
 	for i, s := range p.Shares {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("stopped checking the shared folders: %w", err)
+		}
 		expanded, err := ExpandPath(strings.TrimSpace(s.Path))
 		if err != nil {
 			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %v", i+1, err)}
@@ -488,7 +501,11 @@ func validateSharesExist(p Profile) error {
 		if !info.IsDir() {
 			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %s is not a directory", i+1, expanded)}
 		}
-		if reason := ShareRefusal(s.Path); reason != "" {
+		reason := shareRefusal(ctx, s.Path)
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("stopped checking the shared folders: %w", err)
+		}
+		if reason != "" {
 			return &FieldError{Field: "shares", Msg: fmt.Sprintf("entry %d: %s: %s", i+1, expanded, reason)}
 		}
 	}

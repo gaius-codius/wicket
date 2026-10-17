@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -8,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -27,9 +30,9 @@ func shareHarness(t *testing.T, store secret.Store) (*harness, *atomic.Int32) {
 	h := newHarness(t, body, store)
 	var reads atomic.Int32
 	var plant sync.Once
-	h.m.app.CheckShares = func(p config.Profile) (config.CheckedShares, error) {
+	h.m.app.CheckShares = func(ctx context.Context, p config.Profile) (config.CheckedShares, error) {
 		reads.Add(1)
-		checked, err := config.CheckShares(p)
+		checked, err := config.CheckShares(ctx, p)
 		plant.Do(func() {
 			if err := os.Symlink("/", filepath.Join(dir, "z:")); err != nil {
 				t.Error(err)
@@ -90,9 +93,9 @@ func slowShares(t *testing.T, app *App) {
 	t.Helper()
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	app.CheckShares = func(p config.Profile) (config.CheckedShares, error) {
+	app.CheckShares = func(ctx context.Context, p config.Profile) (config.CheckedShares, error) {
 		<-release
-		return config.CheckShares(p)
+		return config.CheckShares(ctx, p)
 	}
 }
 
@@ -136,6 +139,42 @@ func TestShareCheck_SlowCheckDoesNotHoldTheLoop(t *testing.T) {
 	})
 }
 
+// Esc stops the check itself, not only the wait for it: the context it
+// reads under is cancelled, so it stops reading rather than going on for a
+// result that will be dropped.
+func TestShareCheck_StopCancelsTheCheck(t *testing.T) {
+	for _, tc := range []struct{ name, key string }{{"save", "ctrl+s"}, {"connect", "enter"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			withFakeRDP(t)
+			h, _ := shareHarness(t, secret.NewMemory())
+			stopped := make(chan error, 1)
+			h.m.app.CheckShares = func(ctx context.Context, _ config.Profile) (config.CheckedShares, error) {
+				<-ctx.Done()
+				stopped <- ctx.Err()
+				return config.CheckedShares{}, ctx.Err()
+			}
+			m := h.m
+			if tc.name == "save" {
+				m = press(m, "e")
+			}
+			m, cmd := updateKey(m, tc.key)
+			if m.keyring == nil {
+				t.Fatal("no check running")
+			}
+			runCmd(cmd)
+			_, _ = updateKey(m, "esc")
+			select {
+			case err := <-stopped:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("check stopped with %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("esc did not cancel the check")
+			}
+		})
+	}
+}
+
 // A share the check refuses is reported before the password is asked for,
 // as it was when the check ran on the loop.
 func TestShareCheck_RefusalComesBeforeThePrompt(t *testing.T) {
@@ -160,8 +199,8 @@ func TestShareCheck_StoppedSaveDoesNotShareTheFormsShares(t *testing.T) {
 	read := make(chan struct{})
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	h.m.app.CheckShares = func(p config.Profile) (config.CheckedShares, error) {
-		checked, err := config.CheckShares(p)
+	h.m.app.CheckShares = func(ctx context.Context, p config.Profile) (config.CheckedShares, error) {
+		checked, err := config.CheckShares(ctx, p)
 		close(read)
 		// It goes on reading, as a slow walk would, while the form is
 		// edited.

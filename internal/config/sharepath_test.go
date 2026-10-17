@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 )
@@ -280,10 +282,10 @@ func TestLinkOut_Limit(t *testing.T) {
 	t.Parallel()
 	dir := linkTree(t, map[string]string{"a/": "", "b/": "", "a/c/": ""})
 	homes := homeNames("/nonexistent/wicket-home", false)
-	if got := linkOut(dir, homes, 3); got != "" {
+	if got := walk(t, dir, homes, 3); got != "" {
 		t.Errorf("within the limit: %q", got)
 	}
-	if got := linkOut(dir, homes, 2); !strings.Contains(got, "more than 2") {
+	if got := walk(t, dir, homes, 2); !strings.Contains(got, "more than 2") {
 		t.Errorf("past the limit: %q", got)
 	}
 	// A folder larger than one batch is read in several.
@@ -293,11 +295,71 @@ func TestLinkOut_Limit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := linkOut(big, homes, 1500); got != "" {
+	if got := walk(t, big, homes, 1500); got != "" {
 		t.Errorf("1500 entries within the limit: %q", got)
 	}
-	if got := linkOut(big, homes, 1499); !strings.Contains(got, "more than 1499") {
+	if got := walk(t, big, homes, 1499); !strings.Contains(got, "more than 1499") {
 		t.Errorf("1500 entries past the limit: %q", got)
+	}
+}
+
+// walk is linkOut with a context nothing cancels.
+func walk(t *testing.T, dir string, homes []string, limit int) string {
+	t.Helper()
+	return linkOut(t.Context(), dir, homes, limit)
+}
+
+// stopAfter is a context that is cancelled once Err has been asked n times,
+// as if the user stopped waiting while the nth folder was read. asked counts
+// the times Err was asked.
+type stopAfter struct {
+	context.Context
+	n     int32
+	asked atomic.Int32
+}
+
+func (c *stopAfter) Err() error {
+	if c.asked.Add(1) > c.n {
+		return context.Canceled
+	}
+	return nil
+}
+
+// A check the user stops waiting for goes no further than the folder it is
+// reading: a tree of many folders is left unread past it, rather than read
+// to the end for a result nobody wants.
+func TestLinkOut_StopsWhenCancelled(t *testing.T) {
+	t.Parallel()
+	tree := map[string]string{}
+	for i := range 200 {
+		tree[fmt.Sprintf("d%d/", i)] = ""
+	}
+	dir := linkTree(t, tree)
+	homes := homeNames("/nonexistent/wicket-home", false)
+	ctx := &stopAfter{Context: t.Context(), n: 3}
+	if reason := linkOut(ctx, dir, homes, maxShareEntries); reason != "" {
+		t.Fatalf("reason %q", reason)
+	}
+	if n := ctx.asked.Load(); n != 4 {
+		t.Fatalf("asked %d times, want 4: 3 folders read, then stopped", n)
+	}
+}
+
+// A share check whose context is done reports it, wrapped, rather than
+// passing the profile.
+func TestCheckShares_Cancelled(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	p := Profile{
+		Name: "work", Host: "h", User: "u", Client: "sdl-freerdp3", Scale: 100,
+		Shares: []Share{{Path: t.TempDir()}},
+	}
+	if _, err := CheckShares(ctx, p); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err %v", err)
+	}
+	if _, err := CheckShares(t.Context(), p); err != nil {
+		t.Fatalf("not cancelled: %v", err)
 	}
 }
 

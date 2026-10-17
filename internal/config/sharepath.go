@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -52,6 +53,13 @@ const (
 // unknown. FreeRDP follows symlinks inside a share, so a folder whose links
 // lead to any of those is refused too; see linkOut.
 func ShareRefusal(path string) string {
+	return shareRefusal(context.Background(), path)
+}
+
+// shareRefusal is ShareRefusal, stopped early once ctx is done; see
+// linkOut. What it says then is not to be trusted, so the caller asks
+// ctx.Err after it.
+func shareRefusal(ctx context.Context, path string) string {
 	expanded, err := ExpandPath(path)
 	if err != nil {
 		return err.Error()
@@ -69,7 +77,7 @@ func ShareRefusal(path string) string {
 	if holdsHome(expanded, homes) {
 		return RefusedHome
 	}
-	return linkOut(expanded, homes, maxShareEntries)
+	return linkOut(ctx, expanded, homes, maxShareEntries)
 }
 
 // linkOut is why the folder at dir must not be shared for where the links
@@ -90,7 +98,12 @@ func ShareRefusal(path string) string {
 // than limit entries is refused, since what it holds past them is unknown.
 // A dir that does not exist holds nothing, and connect reports it. Names
 // are quoted in the reason, as a file name may hold anything.
-func linkOut(dir string, homes []string, limit int) string {
+//
+// ctx is asked before each folder is read, and once it is done the walk
+// stops and returns "": a read of a hung automount or NFS folder cannot be
+// interrupted, but the walk goes no further once it answers. The caller
+// asks ctx.Err after it to tell a stopped walk from a passed one.
+func linkOut(ctx context.Context, dir string, homes []string, limit int) string {
 	resolved, err := filepath.EvalSymlinks(dir)
 	if tooLong(err) {
 		return tooLongReason("")
@@ -106,6 +119,9 @@ func linkOut(dir string, homes []string, limit int) string {
 	queued := map[string]bool{resolved: true}
 	read := 0
 	for len(queue) > 0 {
+		if ctx.Err() != nil {
+			return ""
+		}
 		d := queue[0]
 		queue = queue[1:]
 		entries, err := readDir(d.real, limit-read+1)

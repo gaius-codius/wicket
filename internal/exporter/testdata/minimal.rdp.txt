@@ -1,0 +1,5 @@
+full address:s:rdp.example.com
+username:s:alice
+screen mode id:i:1
+use multimon:i:0
+redirectclipboard:i:1

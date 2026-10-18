@@ -94,6 +94,7 @@ wicket                 # TUI
 wicket connect work    # named profile, no TUI
 wicket import remmina  # from ~/.local/share/remmina
 wicket import rdp FILE...
+wicket export rdp work # to work.rdp; --all for every profile
 wicket --help
 wicket --version
 ```
@@ -113,7 +114,8 @@ reported and connect exits; save a new one from the TUI.
 Press `?` in the TUI for keys and field help.
 
 `wicket import` brings Remmina (`*.remmina`, RDP only) or Microsoft `.rdp`
-files into wicket profiles. Import only — there is no export or sync.
+files into wicket profiles; `wicket export rdp` writes them back out (see
+below). There is no sync.
 A turned-off clipboard and shared folders come across. "All drives" (`*`,
 `DynamicDrives` in an `.rdp` file), Windows drive letters, the home folder
 (`%`, `~`), any folder that holds it, such as `/home` or `/`, and anything
@@ -128,6 +130,18 @@ no username imports with none, and the TUI asks for one when you connect;
 `--dry-run` to preview, and `--rename` to append `-2`, `-3`… on name
 collisions (otherwise collisions are skipped). It exits 1 when entries were
 found but none was imported.
+
+`wicket export rdp PROFILE...` (or `--all`) writes each profile to an `.rdp`
+file that Windows Remote Desktop and FreeRDP open, named after the profile
+with anything unsafe in a file name turned into `_`. It carries the host,
+user, domain, size, full screen, all monitors, the clipboard and the shared
+folders, with `~` written out in full since FreeRDP does not expand it, and
+imports back into wicket as the same profile. Passwords, the keyring and the
+profile's id are never written, and the files are readable only by you.
+Settings an `.rdp` file can't carry, such as `share_home`, a size in percent,
+the scale or a folder with `;`, `(` or `)` in its path, are named as left out.
+Files go in the current folder, or `--out DIR`. An existing file is kept
+unless you give `--force`; export exits 1 when a profile was not written.
 
 ## Config
 

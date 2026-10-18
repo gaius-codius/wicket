@@ -1,0 +1,9 @@
+full address:s:[2001:db8::7]:3390
+username:s:bob
+domain:s:CORP
+screen mode id:i:2
+desktopwidth:i:1600
+desktopheight:i:900
+use multimon:i:1
+redirectclipboard:i:0
+drivestoredirect:s:/srv/wicket-export-plain;/srv/wicket-export-docs(docs);$HOME/projects(proj)

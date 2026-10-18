@@ -86,6 +86,31 @@ func TestParseRDP_Clipboard(t *testing.T) {
 	}
 }
 
+// use multimon spans every monitor, and Wicket does that only full screen,
+// so it turns both on whatever screen mode id says.
+func TestParseRDP_Multimon(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		lines                string
+		multimon, fullscreen bool
+	}{
+		{"use multimon:i:1\n", true, true},
+		{"use multimon:i:1\nscreen mode id:i:1\n", true, true},
+		{"use multimon:i:0\nscreen mode id:i:2\n", false, true},
+		{"use multimon:i:0\n", false, false},
+		{"use multimon:i:yes\n", false, false},
+		{"", false, false},
+	} {
+		p, _, err := ParseRDP([]byte("full address:s:h\nusername:s:u\n"+tc.lines), "x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Multimon != tc.multimon || p.Fullscreen != tc.fullscreen {
+			t.Errorf("%q: multimon %v fullscreen %v, want %v %v", tc.lines, p.Multimon, p.Fullscreen, tc.multimon, tc.fullscreen)
+		}
+	}
+}
+
 // drives.rdp names folders in each form FreeRDP reads, among entries that are
 // not one local folder and are refused with the reason: "*", DynamicDrives,
 // "%", a drive letter, a relative path and a path with a comma. An empty

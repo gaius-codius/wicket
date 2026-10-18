@@ -43,12 +43,14 @@ func TestSave_KeepsTheFileAsWritten(t *testing.T) {
 		save func(t *testing.T, c *Config)
 	}{
 		{"edit", func(t *testing.T, c *Config) {
+			t.Helper()
 			p, _ := c.Profile("work")
 			p.User = "alice"
 			p.Scale = 180
 			upsert(t, c, p, "work")
 		}},
 		{"edit-keys", func(t *testing.T, c *Config) {
+			t.Helper()
 			// Clearing domain drops its line; a new size and a non-default
 			// setting go after the profile's last key.
 			p, _ := c.Profile("work")
@@ -58,19 +60,30 @@ func TestSave_KeepsTheFileAsWritten(t *testing.T) {
 			upsert(t, c, p, "work")
 		}},
 		{"rename-lab", func(t *testing.T, c *Config) {
+			t.Helper()
 			p, _ := c.Profile("lab")
 			p.Name = "lab-2"
 			upsert(t, c, p, "lab")
 		}},
 		{"add", func(t *testing.T, c *Config) {
+			t.Helper()
 			upsert(t, c, Profile{
 				Name: "new", Host: "h", User: "u", Client: DefaultClient,
 				DynamicResolution: true, Scale: 100, Clipboard: true,
 			}, "")
 		}},
-		{"delete-middle", func(t *testing.T, c *Config) { remove(t, c, "lab") }},
-		{"delete-first", func(t *testing.T, c *Config) { remove(t, c, "work") }},
-		{"delete-last", func(t *testing.T, c *Config) { remove(t, c, "spare") }},
+		{"delete-middle", func(t *testing.T, c *Config) {
+			t.Helper()
+			remove(t, c, "lab")
+		}},
+		{"delete-first", func(t *testing.T, c *Config) {
+			t.Helper()
+			remove(t, c, "work")
+		}},
+		{"delete-last", func(t *testing.T, c *Config) {
+			t.Helper()
+			remove(t, c, "spare")
+		}},
 	}
 	src, err := os.ReadFile(filepath.Join("testdata", "preserve", "hand.toml"))
 	if err != nil {
@@ -302,19 +315,28 @@ func TestSave_ReviewCases(t *testing.T) {
 			// about what follows, not about the profile deleted before it.
 			name: "delete keeps the next section's divider",
 			src:  "[general]\n\n# --- Work ---\n\n" + prof("a") + "\n# --- Home ---\n\n# the NAS\n" + prof("b"),
-			save: func(t *testing.T, c *Config) { remove(t, c, "a") },
+			save: func(t *testing.T, c *Config) {
+				t.Helper()
+				remove(t, c, "a")
+			},
 			want: "[general]\n\n# --- Work ---\n\n# --- Home ---\n\n# the NAS\n" + prof("b"),
 		},
 		{
 			name: "delete keeps a note on the table after it",
 			src:  "[general]\n\n" + prof("a") + "\n" + prof("b") + "\n# theme can also come from WICKET_THEME\n\n[ui]\ntheme = \"auto\"\n",
-			save: func(t *testing.T, c *Config) { remove(t, c, "b") },
+			save: func(t *testing.T, c *Config) {
+				t.Helper()
+				remove(t, c, "b")
+			},
 			want: "[general]\n\n" + prof("a") + "\n# theme can also come from WICKET_THEME\n\n[ui]\ntheme = \"auto\"\n",
 		},
 		{
 			name: "delete keeps the file's own header comment",
 			src:  "# my wicket config\n" + prof("a") + "\n" + prof("b"),
-			save: func(t *testing.T, c *Config) { remove(t, c, "a") },
+			save: func(t *testing.T, c *Config) {
+				t.Helper()
+				remove(t, c, "a")
+			},
 			want: "# my wicket config\n" + prof("b"),
 		},
 		{
@@ -322,13 +344,17 @@ func TestSave_ReviewCases(t *testing.T) {
 			// so deleting the second keeps it.
 			name: "delete keeps a comment flush under the profile before",
 			src:  prof("a") + "# trailing note on a\n" + prof("b"),
-			save: func(t *testing.T, c *Config) { remove(t, c, "b") },
+			save: func(t *testing.T, c *Config) {
+				t.Helper()
+				remove(t, c, "b")
+			},
 			want: prof("a") + "# trailing note on a\n",
 		},
 		{
 			name: "add goes after a comment flush under the last profile",
 			src:  prof("a") + "# about a\n\n[ui]\ntheme = \"auto\"\n",
 			save: func(t *testing.T, c *Config) {
+				t.Helper()
 				upsert(t, c, Profile{
 					Name: "b", Host: "h", User: "u", Client: DefaultClient,
 					DynamicResolution: true, Scale: 100, Clipboard: true,
@@ -344,6 +370,7 @@ func TestSave_ReviewCases(t *testing.T) {
 			name: "nan elsewhere",
 			src:  "# keep me\nnote = nan\n\n" + prof("a"),
 			save: func(t *testing.T, c *Config) {
+				t.Helper()
 				p, _ := c.Profile("a")
 				p.User = "u2"
 				upsert(t, c, p, "a")
@@ -354,6 +381,7 @@ func TestSave_ReviewCases(t *testing.T) {
 			name: "quoted key with an escape",
 			src:  "# keep me\n\"a\\tb\" = 1\n\n" + prof("a"),
 			save: func(t *testing.T, c *Config) {
+				t.Helper()
 				p, _ := c.Profile("a")
 				p.User = "u2"
 				upsert(t, c, p, "a")
@@ -366,6 +394,7 @@ func TestSave_ReviewCases(t *testing.T) {
 			name: "crlf only inside a string",
 			src:  "note = \"\"\"a\r\nb\"\"\"\n\n" + prof("a"),
 			save: func(t *testing.T, c *Config) {
+				t.Helper()
 				p, _ := c.Profile("a")
 				p.Size = "100%"
 				upsert(t, c, p, "a")
@@ -378,6 +407,7 @@ func TestSave_ReviewCases(t *testing.T) {
 			name: "new key after a removed secret on the last line",
 			src:  strings.TrimSuffix(prof("a"), "\n") + "\npassword = \"x\"",
 			save: func(t *testing.T, c *Config) {
+				t.Helper()
 				p, _ := c.Profile("a")
 				p.Size = "100%"
 				upsert(t, c, p, "a")

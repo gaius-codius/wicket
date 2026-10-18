@@ -253,14 +253,7 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	_ = os.Setenv("DBUS_SESSION_BUS_ADDRESS", addr)
-	t.Cleanup(func() {
-		if userAddr == "" {
-			_ = os.Unsetenv("DBUS_SESSION_BUS_ADDRESS")
-		} else {
-			_ = os.Setenv("DBUS_SESSION_BUS_ADDRESS", userAddr)
-		}
-	})
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", addr)
 	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == userAddr && userAddr != "" {
 		t.Fatal("isolated bus address equals user session bus")
 	}

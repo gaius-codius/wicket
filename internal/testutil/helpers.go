@@ -19,7 +19,7 @@ type FakeRecord struct {
 var (
 	fakeOnce sync.Once
 	fakeDir  string
-	fakeErr  error
+	errFake  error
 )
 
 // FakeRDPDir returns a directory containing a `sdl-freerdp3` (and `xfreerdp3`)
@@ -28,9 +28,9 @@ var (
 func FakeRDPDir(t *testing.T) string {
 	t.Helper()
 	fakeOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "wicket-fakerdp-")
+		dir, err := os.MkdirTemp("", "wicket-fakerdp-") //nolint:usetesting // built once and shared by every test in the run; a per-test t.TempDir would be removed after the first
 		if err != nil {
-			fakeErr = err
+			errFake = err
 			return
 		}
 		fakeDir = dir
@@ -39,20 +39,20 @@ func FakeRDPDir(t *testing.T) string {
 		cmd.Dir = moduleRoot(t)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			fakeErr = err
+			errFake = err
 			t.Logf("go build fakerdp: %s", out)
 			return
 		}
 		for _, name := range []string{"sdl-freerdp3", "xfreerdp3", "wlfreerdp3", "myrdp"} {
 			link := filepath.Join(dir, name)
 			if err := os.Symlink(bin, link); err != nil {
-				fakeErr = err
+				errFake = err
 				return
 			}
 		}
 	})
-	if fakeErr != nil {
-		t.Fatal(fakeErr)
+	if errFake != nil {
+		t.Fatal(errFake)
 	}
 	return fakeDir
 }

@@ -34,11 +34,13 @@ blocked-by links, then put it on the board. The commands are in
 
 - [mise](https://mise.jdx.dev). `mise.toml` pins Go (1.27.2, matching the
   `toolchain` line in `go.mod`), golangci-lint, govulncheck, deadcode, gopls, shellcheck and lefthook. Run
-  `mise install` after cloning and whenever `mise.toml` changes, then
-  `lefthook install` once to set up the git hooks: on commit they format and
-  lint the staged packages, on push they run the tests. Put hooks of your own
-  in `lefthook-local.yml`, which git ignores. Building needs Go 1.26.9 or
-  newer; the pins are what CI runs.
+  `mise install` after cloning and whenever `mise.toml` changes. The shared
+  git hooks are installed locally, once per clone and worktree, into
+  `lefthook-local.yml`, which git ignores: on commit they format and lint the
+  staged packages, on push they run the tests. `lefthook.yml` holds none, so
+  without them no hooks run; `lefthook dump` shows what is loaded. Put hooks
+  of your own in `lefthook-local.yml` too. Building needs Go 1.26.9 or newer;
+  the pins are what CI runs.
 - Linux or macOS. Linux uses the Secret Service keyring; macOS uses Keychain
   (cgo). The BSDs still compile against the D-Bus store but have no session
   bus integration tests.

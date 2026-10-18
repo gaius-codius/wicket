@@ -25,7 +25,7 @@ import (
 var (
 	wicketOnce sync.Once
 	wicketBin  string
-	wicketErr  error
+	errWicket  error
 )
 
 // buildWicket builds the wicket binary once per test run, for tests that
@@ -33,19 +33,19 @@ var (
 func buildWicket(t *testing.T) string {
 	t.Helper()
 	wicketOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "wicket-bin-")
+		dir, err := os.MkdirTemp("", "wicket-bin-") //nolint:usetesting // built once and shared by every test in the run; a per-test t.TempDir would be removed after the first
 		if err != nil {
-			wicketErr = err
+			errWicket = err
 			return
 		}
 		wicketBin = filepath.Join(dir, "wicket")
 		out, err := exec.CommandContext(context.Background(), "go", "build", "-o", wicketBin, "github.com/gaius-codius/wicket/cmd/wicket").CombinedOutput()
 		if err != nil {
-			wicketErr = errors.New(string(out))
+			errWicket = errors.New(string(out))
 		}
 	})
-	if wicketErr != nil {
-		t.Fatal(wicketErr)
+	if errWicket != nil {
+		t.Fatal(errWicket)
 	}
 	return wicketBin
 }

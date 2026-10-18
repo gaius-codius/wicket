@@ -322,6 +322,7 @@ type stopAfter struct {
 }
 
 func newStopAfter(t *testing.T, n int32) *stopAfter {
+	t.Helper()
 	return &stopAfter{Context: t.Context(), n: n, done: make(chan struct{})}
 }
 

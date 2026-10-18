@@ -1,5 +1,4 @@
-remotes:
-  - git_url: https://github.com/gaius-codius/go-ci
-    ref: v1.2.1 # the release ci.yml pins
-    configs:
-      - lefthook/go.yml
+# Wicket's own git hooks go here; it has none at the moment.
+# The shared Go hooks (format and lint the staged packages on commit, run the
+# tests on push) are installed locally, into the git-ignored
+# lefthook-local.yml, once per clone and worktree. See CONTRIBUTING.md.

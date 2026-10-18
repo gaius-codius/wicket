@@ -58,7 +58,7 @@ func RDP(p config.Profile) (string, []Omission) {
 		line("desktopwidth", "i", strconv.Itoa(w))
 		line("desktopheight", "i", strconv.Itoa(h))
 	} else if s := strings.TrimSpace(p.Size); s != "" {
-		omitted = append(omitted, Omission{"size " + s, ".rdp sets a size only in pixels"})
+		omitted = append(omitted, Omission{"size " + s, ".rdp sets a size only in pixels, at most 65535"})
 	}
 	line("use multimon", "i", flag(p.Multimon))
 	line("redirectclipboard", "i", flag(p.Clipboard))
@@ -81,8 +81,12 @@ func RDP(p config.Profile) (string, []Omission) {
 	return b.String(), omitted
 }
 
-// dimensions reads a size of WxH pixels. A size in percent, or none, is not
-// one .rdp can hold.
+// maxDimension is the widest or tallest size FreeRDP and wicket's import
+// take. A config can still load with more, and connect refuses it.
+const maxDimension = 65535
+
+// dimensions reads a size of WxH pixels. A size in percent, none, or one
+// over maxDimension is not one an .rdp file can carry and import back.
 func dimensions(size string) (w, h int, ok bool) {
 	ws, hs, ok := strings.Cut(strings.ToLower(strings.TrimSpace(size)), "x")
 	if !ok {
@@ -90,7 +94,7 @@ func dimensions(size string) (w, h int, ok bool) {
 	}
 	w, errW := strconv.Atoi(ws)
 	h, errH := strconv.Atoi(hs)
-	if errW != nil || errH != nil || w < 1 || h < 1 {
+	if errW != nil || errH != nil || w < 1 || h < 1 || w > maxDimension || h > maxDimension {
 		return 0, 0, false
 	}
 	return w, h, true
@@ -100,13 +104,19 @@ func dimensions(size string) (w, h int, ok bool) {
 // path(name), the form FreeRDP reads without guessing which part is the
 // folder. FreeRDP expands neither ~ nor anything else, so a ~/… path is
 // written out in full. The list has no escaping, so a path with ';', '(' or
-// ')' in it cannot be written and is left out.
+// ')' in it cannot be written and is left out. A share that save and connect
+// would refuse, such as one holding home, is left out too: a config can load
+// with one, and FreeRDP opening the file would share it without asking.
 func drives(shares []config.Share) (string, []Omission) {
 	var (
 		entries []string
 		omitted []Omission
 	)
 	for _, s := range shares {
+		if reason := config.ShareRefusal(s.Path); reason != "" {
+			omitted = append(omitted, Omission{"share " + strconv.Quote(s.Path), reason})
+			continue
+		}
 		path, err := config.ExpandPath(s.Path)
 		if err != nil {
 			omitted = append(omitted, Omission{"share " + strconv.Quote(s.Path), err.Error()})

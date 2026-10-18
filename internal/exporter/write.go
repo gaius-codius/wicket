@@ -52,6 +52,11 @@ func replaceFile(path string, data []byte) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	// Syncing the folder makes the rename itself durable.
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 	return nil
 }
 

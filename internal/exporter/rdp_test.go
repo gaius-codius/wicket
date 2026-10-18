@@ -143,7 +143,7 @@ func TestRDP_WritesNoSecretOrID(t *testing.T) {
 // What .rdp cannot hold is named, so the export can report it, and the rest
 // of the profile is still written.
 func TestRDP_Omissions(t *testing.T) {
-	t.Setenv("HOME", "")
+	t.Parallel()
 	p := minimalProfile()
 	p.Size = "80%"
 	p.ShareHome = true
@@ -153,24 +153,76 @@ func TestRDP_Omissions(t *testing.T) {
 		{Path: "/srv/a;b"},
 		{Path: "/srv/(x)"},
 		{Path: "/srv/kept", Name: "kept"},
-		{Path: "~/nohome"},
+		{Path: "~"},
+		{Path: "/"},
+		{Path: "/proc/self/cwd"},
 	}
 	text, omitted := RDP(p)
 	var got []string
 	for _, o := range omitted {
 		got = append(got, o.Setting)
 	}
-	want := []string{"size 80%", `share "/srv/a;b"`, `share "/srv/(x)"`, `share "~/nohome"`, "share_home", "scale 140", "dynamic resolution off"}
+	want := []string{"size 80%", `share "/srv/a;b"`, `share "/srv/(x)"`, `share "~"`, `share "/"`, `share "/proc/self/cwd"`, "share_home", "scale 140", "dynamic resolution off"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("omitted %q, want %q", got, want)
 	}
 	if !strings.Contains(text, "drivestoredirect:s:/srv/kept(kept)\n") {
 		t.Errorf("kept share missing:\n%s", text)
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(text, home) || strings.Contains(text, ":/;") || strings.HasSuffix(text, ":/\n") || strings.Contains(text, "/proc") {
+		t.Errorf("a refused share written:\n%s", text)
+	}
 	for _, bad := range []string{"desktopwidth", "%", "a;b", "(x)"} {
 		if strings.Contains(text, bad) {
 			t.Errorf("%q written:\n%s", bad, text)
 		}
+	}
+}
+
+// With the home folder unknown nothing tells home from any other folder, so
+// no share is written, as connect would share none.
+func TestRDP_NoHomeWritesNoShares(t *testing.T) {
+	t.Setenv("HOME", "")
+	p := minimalProfile()
+	p.Shares = []config.Share{{Path: "/srv/data"}, {Path: "~/docs"}}
+	text, omitted := RDP(p)
+	if strings.Contains(text, "drivestoredirect") || len(omitted) != 2 {
+		t.Fatalf("omitted %v, text:\n%s", omitted, text)
+	}
+}
+
+// Multimon writes full screen even on a profile built without it, which only
+// a caller in Go can make: a loaded config turns full screen on beside it.
+// A size wicket's import would refuse is left out, so the file still
+// imports back.
+func TestRDP_OversizeIsLeftOut(t *testing.T) {
+	t.Parallel()
+	for _, size := range []string{"70000x1080", "1920x65536"} {
+		p := minimalProfile()
+		p.Size = size
+		text, omitted := RDP(p)
+		if strings.Contains(text, "desktopwidth") || len(omitted) != 1 || omitted[0].Setting != "size "+size {
+			t.Errorf("%s: omitted %v, text:\n%s", size, omitted, text)
+		}
+	}
+	p := minimalProfile()
+	p.Size = "65535x65535"
+	if text, omitted := RDP(p); !strings.Contains(text, "desktopwidth:i:65535\n") || len(omitted) != 0 {
+		t.Errorf("65535x65535: omitted %v, text:\n%s", omitted, text)
+	}
+}
+
+func TestRDP_MultimonIsFullScreen(t *testing.T) {
+	t.Parallel()
+	p := minimalProfile()
+	p.Multimon = true
+	text, _ := RDP(p)
+	if !strings.Contains(text, "screen mode id:i:2\n") || !strings.Contains(text, "use multimon:i:1\n") {
+		t.Fatalf("text:\n%s", text)
 	}
 }
 

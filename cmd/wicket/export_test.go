@@ -290,6 +290,7 @@ func TestExport_Usage(t *testing.T) {
 		{"export", "rdp", "--all", "work"},
 		{"export", "rdp", "work", "--out"},
 		{"export", "rdp", "work", "--out="},
+		{"export", "rdp", "work", "--out", "--force"},
 		{"export", "rdp", "work", "--bogus"},
 	} {
 		if got := runCLI(t, args); got.code != 2 || !strings.Contains(got.stderr, "usage: wicket export") {

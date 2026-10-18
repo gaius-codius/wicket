@@ -47,7 +47,9 @@ func parseExportFlags(args []string) (flags exportFlags, rest []string, err erro
 		case a == "--force":
 			flags.force = true
 		case a == "--out":
-			if i+1 == len(args) {
+			// A folder that starts with '-' is given as --out=DIR, so a
+			// forgotten folder does not swallow the next flag.
+			if i+1 == len(args) || strings.HasPrefix(args[i+1], "-") {
 				return flags, nil, errors.New("--out needs a folder")
 			}
 			i++

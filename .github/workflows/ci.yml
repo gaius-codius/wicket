@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   verify:
-    uses: gaius-codius/go-ci/.github/workflows/go.yml@05dd058409dcfcc3226f284b8acc7472b49fd57f # v1.2.1
+    uses: gaius-codius/go-ci/.github/workflows/go.yml@a51a90f115371e443addbf1b2620246001e3934c # v2.0.0
     with:
       runs-on: '["ubuntu-latest"]'
       mise-cache: true

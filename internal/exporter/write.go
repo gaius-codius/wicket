@@ -21,7 +21,7 @@ func WriteFile(path string, data []byte, force bool) error {
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("create the file: %w", err)
 	}
 	if err := writeAndClose(f, data); err != nil {
 		_ = os.Remove(path)
@@ -36,13 +36,13 @@ func replaceFile(path string, data []byte) error {
 	}
 	f, err := os.CreateTemp(filepath.Dir(path), ".wicket-*.rdp")
 	if err != nil {
-		return err
+		return fmt.Errorf("create a temporary file: %w", err)
 	}
 	tmp := f.Name()
 	if err := f.Chmod(0o600); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
-		return err
+		return fmt.Errorf("chmod %s: %w", tmp, err)
 	}
 	if err := writeAndClose(f, data); err != nil {
 		_ = os.Remove(tmp)
@@ -50,7 +50,7 @@ func replaceFile(path string, data []byte) error {
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return err
+		return fmt.Errorf("replace the file: %w", err)
 	}
 	// Syncing the folder makes the rename itself durable.
 	if d, err := os.Open(filepath.Dir(path)); err == nil {
@@ -71,5 +71,8 @@ func writeAndClose(f *os.File, data []byte) error {
 		_ = f.Close()
 		return fmt.Errorf("sync %s: %w", f.Name(), err)
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", f.Name(), err)
+	}
+	return nil
 }

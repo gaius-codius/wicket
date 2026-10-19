@@ -1,4 +1,15 @@
-# Wicket's own git hooks go here; it has none at the moment.
 # The shared Go hooks (format and lint the staged packages on commit, run the
 # tests on push) are installed locally, into the git-ignored
 # lefthook-local.yml, once per clone and worktree. See CONTRIBUTING.md.
+#
+# Wicket's own job only checks that they are: git hooks are shared by every
+# worktree, so without lefthook-local.yml a commit would run nothing at all.
+pre-commit:
+  jobs:
+    - name: shared hooks loaded
+      run: ./scripts/check-shared-hooks.sh
+
+pre-push:
+  jobs:
+    - name: shared hooks loaded
+      run: ./scripts/check-shared-hooks.sh

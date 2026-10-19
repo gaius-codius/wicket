@@ -20,7 +20,8 @@ import (
 const importUsage = `usage: wicket import remmina [DIR]
        wicket import rdp FILE...
 
-Import RDP connections into wicket profiles (no export).
+Import RDP connections into wicket profiles. wicket export rdp writes them
+back out.
 
 Flags:
   --dry-run   parse and report without writing

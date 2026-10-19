@@ -150,9 +150,10 @@ linters:
           - gosec
           - wrapcheck
       # These packages read the config, state and theme files the user's own
-      # environment names, and the .rdp and Remmina files the user asks to
-      # import. Reading a path from a variable is their job.
-      - path: internal/(config|importer|theme)/
+      # environment names, the .rdp and Remmina files the user asks to
+      # import, and the .rdp files the user asks to export into a folder they
+      # name. Opening a path from a variable is their job.
+      - path: internal/(config|importer|exporter|theme)/
         linters:
           - gosec
         text: G304

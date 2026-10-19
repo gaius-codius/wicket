@@ -66,6 +66,11 @@ func ParseRDP(data []byte, name string) (config.Import, Skip, error) {
 			p.Fullscreen = true
 		}
 	}
+	// use multimon spans every monitor, which Wicket does only full screen.
+	if on, ok := rdpFlag(vals["use multimon"]); ok && on {
+		p.Multimon = true
+		p.Fullscreen = true
+	}
 	w := strings.TrimSpace(vals["desktopwidth"])
 	h := strings.TrimSpace(vals["desktopheight"])
 	if w != "" && h != "" {
@@ -77,7 +82,7 @@ func ParseRDP(data []byte, name string) (config.Import, Skip, error) {
 	}
 	// A file that leaves the clipboard out gets Wicket's default, as it
 	// would get FreeRDP's.
-	if on, ok := rdpClipboard(vals["redirectclipboard"]); ok {
+	if on, ok := rdpFlag(vals["redirectclipboard"]); ok {
 		p.Clipboard = on
 	}
 	var refused []config.DroppedShare
@@ -85,9 +90,10 @@ func ParseRDP(data []byte, name string) (config.Import, Skip, error) {
 	return config.Import{Profile: p, Refused: refused}, Skip{}, nil
 }
 
-// rdpClipboard reads redirectclipboard: 0 is off and any other number on,
-// as FreeRDP reads it. ok is false when the value is missing or not a number.
-func rdpClipboard(v string) (on, ok bool) {
+// rdpFlag reads an on/off key such as redirectclipboard: 0 is off and any
+// other number on, as FreeRDP reads it. ok is false when the value is missing
+// or not a number.
+func rdpFlag(v string) (on, ok bool) {
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil {
 		return false, false

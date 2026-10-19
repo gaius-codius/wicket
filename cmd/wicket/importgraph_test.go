@@ -79,6 +79,18 @@ func TestImportGraph(t *testing.T) {
 					t.Errorf("internal/importer imports a Charm library (%s)", imp)
 				}
 			}
+		case path == internalPrefix+"exporter" || strings.HasPrefix(path, internalPrefix+"exporter/"):
+			// Export reads profiles and nothing else: with no way to the
+			// keyring, no password can reach an exported file.
+			for imp := range imports {
+				switch {
+				case imp == internalPrefix+"config" || strings.HasPrefix(imp, internalPrefix+"config/"):
+				case strings.HasPrefix(imp, internalPrefix):
+					t.Errorf("internal/exporter imports %s; may import only config among internal packages", imp)
+				case isCharm(imp):
+					t.Errorf("internal/exporter imports a Charm library (%s)", imp)
+				}
+			}
 		case path == internalPrefix+"rdp" || strings.HasPrefix(path, internalPrefix+"rdp/"):
 			for imp := range imports {
 				switch {

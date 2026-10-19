@@ -24,7 +24,7 @@ Commands:
   connect <profile>   Connect to a named profile without the TUI
                       (requires a stored password when stdin is not a terminal)
   import remmina|rdp  Import RDP connections from Remmina or .rdp files
-                      (import only; no export)
+  export rdp          Write profiles to .rdp files (never their passwords)
 
 Options:
   -h, --help          Show this help
@@ -102,6 +102,8 @@ func run(args []string, stdout, stderr io.Writer, runTUI func() error) int {
 		return runConnect(args[1:], stdout, stderr)
 	case "import":
 		return runImport(args[1:], stdout, stderr)
+	case "export":
+		return runExport(args[1:], stdout, stderr)
 	default:
 		if strings.HasPrefix(args[0], "-") {
 			fmt.Fprintf(stderr, "unknown flag: %s\n", args[0])

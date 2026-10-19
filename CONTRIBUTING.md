@@ -37,9 +37,12 @@ blocked-by links, then put it on the board. The commands are in
   `mise install` after cloning and whenever `mise.toml` changes. The shared
   git hooks are installed locally, once per clone and worktree, into
   `lefthook-local.yml`, which git ignores: on commit they format and lint the
-  staged packages, on push they run the tests. `lefthook.yml` holds none, so
-  without them no hooks run; `lefthook dump` shows what is loaded. Put hooks
-  of your own in `lefthook-local.yml` too. Building needs Go 1.26.9 or newer;
+  staged packages, on push they run the tests. `lefthook.yml` holds only a
+  check that they are loaded, which stops a commit or push without them;
+  `lefthook dump` shows what is loaded. If you can't install them, skip that
+  check with `LEFTHOOK_EXCLUDE="shared hooks loaded"` and run the checks
+  under "Before you push" yourself. Put hooks of your own in
+  `lefthook-local.yml` too. Building needs Go 1.26.9 or newer;
   the pins are what CI runs.
 - Linux or macOS. Linux uses the Secret Service keyring; macOS uses Keychain
   (cgo). The BSDs still compile against the D-Bus store but have no session

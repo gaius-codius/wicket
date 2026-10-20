@@ -85,6 +85,12 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// On a terminal Wicket owns, the client gets it, so FreeRDP can show a
+	// server certificate it has not been told to trust, new or changed, and
+	// ask the user about it. Elsewhere it cannot ask, and refuses one.
+	if in := stdinFile(); rdp.OwnsTerminal(in) {
+		launcher.Terminal = in
+	}
 	sess, err := launcher.Start(plan, cred)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -102,6 +108,9 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 	if out.StartErr != nil {
 		fmt.Fprintln(stderr, out.StartErr)
 		return 2
+	}
+	if out.MaybeCertificate() && launcher.Terminal == nil {
+		fmt.Fprintf(stderr, "%s: TLS connection failed. If the server's certificate is new or has changed, run `wicket connect %s` in a terminal: FreeRDP shows the certificate there and asks before trusting it.\n", plan.Client, name)
 	}
 	return out.ExitStatus()
 }

@@ -110,6 +110,7 @@ func helpKeys(v view) []hint {
 	case viewRetry:
 		return []hint{
 			{"enter", "retry"},
+			{"c", "retry in the terminal, to check a new or changed certificate"},
 			{"n", "new password"},
 			{"esc", "dismiss"},
 			{"?", "help"},

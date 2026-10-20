@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -455,7 +456,9 @@ const sessionWaitDelay = 2 * time.Second
 
 // Session is a client started from the TUI and not yet collected.
 type Session struct {
-	rdp    *rdp.Session
+	rdp *rdp.Session
+	// output keeps the end of what the client logged; nil for a client
+	// that wrote to the terminal.
 	output *rdp.Tail
 }
 
@@ -465,6 +468,32 @@ type Session struct {
 // Bubble Tea is drawing, and its password to a private pipe as always.
 // checked is what checkShares found for p's shares.
 func (a *App) Start(p config.Profile, cred rdp.Credential, checked config.CheckedShares) (*Session, error) {
+	out := rdp.NewTail(rdp.OutputLimit)
+	return a.start(p, cred, checked, out, func(l *rdp.Launcher) {
+		l.Stdout, l.Stderr = out, out
+		// The TUI owns Ctrl+C and SIGINT while a session runs, and stops
+		// the client through the session itself.
+		l.OwnSignals = true
+	})
+}
+
+// StartInTerminal is Start for a client given the terminal tty, which
+// Bubble Tea has released, so FreeRDP can show the user a server certificate
+// it does not yet trust and ask whether to. The client writes to stdout and
+// stderr as it would started from a shell, and Ctrl+C reaches it from the
+// keyboard. Wicket's model is not running meanwhile, so the launcher passes
+// a SIGTERM or SIGHUP sent to Wicket on to the client itself.
+func (a *App) StartInTerminal(p config.Profile, cred rdp.Credential, checked config.CheckedShares, tty *os.File, stdout, stderr io.Writer) (*Session, error) {
+	return a.start(p, cred, checked, nil, func(l *rdp.Launcher) {
+		l.Terminal = tty
+		l.Stdout, l.Stderr = stdout, stderr
+		l.OwnSignals = false
+	})
+}
+
+// start launches the client for p with the launcher set up by setup, and
+// publishes the session. out is where its output is kept, if anywhere.
+func (a *App) start(p config.Profile, cred rdp.Credential, checked config.CheckedShares, out *rdp.Tail, setup func(*rdp.Launcher)) (*Session, error) {
 	plan, err := rdp.BuildCheckedPlan(p, checked)
 	if err != nil {
 		return nil, err
@@ -473,12 +502,8 @@ func (a *App) Start(p config.Profile, cred rdp.Credential, checked config.Checke
 	if a.Launcher != nil {
 		l = *a.Launcher
 	}
-	out := rdp.NewTail(rdp.OutputLimit)
-	l.Stdout, l.Stderr = out, out
-	// The TUI owns Ctrl+C and SIGINT while a session runs, and stops the
-	// client through the session itself.
-	l.OwnSignals = true
 	l.WaitDelay = sessionWaitDelay
+	setup(&l)
 	rs, err := l.Start(plan, cred)
 	if err != nil {
 		return nil, err
@@ -513,7 +538,10 @@ func (a *App) Wait(s *Session) ConnectResult {
 	}
 	a.mu.Unlock()
 	cl := rdp.Classify(out)
-	res := ConnectResult{Class: cl, Outcome: out, Output: s.output.Bytes()}
+	res := ConnectResult{Class: cl, Outcome: out}
+	if s.output != nil {
+		res.Output = s.output.Bytes()
+	}
 	switch cl {
 	case rdp.ClassStartError:
 		res.Status = "failed to start"

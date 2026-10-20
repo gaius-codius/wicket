@@ -231,6 +231,21 @@ func (o Outcome) PreConnectFailed() bool {
 	return ok && o.ExitCode == exitPreConnectFailed
 }
 
+// exitTLSConnectFailed is ERRCONNECT_TLS_CONNECT_FAILED. A FreeRDP client
+// that refuses the server's certificate ends with it, and so do other TLS
+// failures: the code cannot tell them apart.
+const exitTLSConnectFailed = 143
+
+// MaybeCertificate reports whether a FreeRDP client's TLS connection failed,
+// which is how it ends when it refuses a server certificate it could not
+// ask the user about: one it has never seen, or one that has changed since
+// it was trusted. Given a terminal, the client asks instead; see
+// Launcher.Terminal.
+func (o Outcome) MaybeCertificate() bool {
+	_, ok := o.meaning()
+	return ok && o.ExitCode == exitTLSConnectFailed
+}
+
 // meaning looks up o's exit code, when the client is FreeRDP's and the code
 // one it documents.
 func (o Outcome) meaning() (exitMeaning, bool) {

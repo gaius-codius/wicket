@@ -10,10 +10,25 @@ import (
 	"testing"
 )
 
+// FakeRecord is what the fake client was given; see fakerdp's record.
 type FakeRecord struct {
-	Argv    []string          `json:"argv"`
-	Environ map[string]string `json:"environ"`
-	Stdin   string            `json:"stdin"`
+	// RawArgv is the command line as the process table shows it.
+	RawArgv []string `json:"raw_argv"`
+	// Argv is the arguments as FreeRDP reads them, from the command line or
+	// fd 3, less the password.
+	Argv []string `json:"argv"`
+	// Password is the /p: argument read from fd 3; HasPassword says there
+	// was one.
+	Password    string            `json:"password"`
+	HasPassword bool              `json:"has_password"`
+	Environ     map[string]string `json:"environ"`
+	Stdin       string            `json:"stdin"`
+	StdinTTY    bool              `json:"stdin_tty"`
+	Foreground  bool              `json:"foreground"`
+	// CertAnswer is the answer the client read when it asked about a
+	// certificate (FAKERDP_CERT), "EOF" for none, or "" when it trusted the
+	// certificate without asking.
+	CertAnswer string `json:"cert_answer"`
 }
 
 var (

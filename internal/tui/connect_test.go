@@ -60,10 +60,10 @@ func TestConnect_StoredSecretNoModal(t *testing.T) {
 	if strings.Join(got.Argv[1:], "\n") != strings.Join(plan.Args, "\n") {
 		t.Fatalf("argv %v want %v", got.Argv[1:], plan.Args)
 	}
-	if got.Stdin != sentinel+"\n" {
-		t.Fatalf("stdin %q", got.Stdin)
+	if !got.HasPassword || got.Password != sentinel {
+		t.Fatalf("password %q (present %v), want the sentinel", got.Password, got.HasPassword)
 	}
-	for _, a := range got.Argv {
+	for _, a := range got.RawArgv {
 		if strings.Contains(a, sentinel) || strings.Contains(a, "/p:") {
 			t.Fatal(a)
 		}
@@ -93,8 +93,8 @@ func TestConnect_RestartSharedStore(t *testing.T) {
 		t.Fatal("restart should not show modal")
 	}
 	got := testutil.ReadRecord(t, rec)
-	if got.Stdin != sentinel+"\n" {
-		t.Fatalf("stdin %q", got.Stdin)
+	if !got.HasPassword || got.Password != sentinel {
+		t.Fatalf("password %q (present %v), want the sentinel", got.Password, got.HasPassword)
 	}
 }
 
@@ -165,8 +165,8 @@ func TestConnect_AccountChangeKeepsThePassword(t *testing.T) {
 			if h.m.view == viewModal {
 				t.Fatal("asked for a password the edit should have kept")
 			}
-			if got := testutil.ReadRecord(t, rec); got.Stdin != sentinel+"\n" {
-				t.Fatalf("stdin %q", got.Stdin)
+			if got := testutil.ReadRecord(t, rec); !got.HasPassword || got.Password != sentinel {
+				t.Fatalf("password %q (present %v), want the sentinel", got.Password, got.HasPassword)
 			}
 		})
 	}

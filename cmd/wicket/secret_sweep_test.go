@@ -115,15 +115,16 @@ func TestCLISecretSweep_TTY(t *testing.T) {
 	}
 	assertNoSweep(t, stb, "state.toml")
 	got := testutil.ReadRecord(t, rec)
-	for _, a := range got.Argv {
+	for _, a := range got.RawArgv {
 		assertNoSweep(t, []byte(a), "argv")
 	}
 	for k, v := range got.Environ {
 		assertNoSweep(t, []byte(k+"="+v), "environ-record")
 	}
-	if got.Stdin != sweepSentinel+"\n" {
-		t.Fatalf("stdin %q", got.Stdin)
+	if !got.HasPassword || got.Password != sweepSentinel {
+		t.Fatalf("password %q (present %v), want the sentinel", got.Password, got.HasPassword)
 	}
+	assertNoSweep(t, []byte(got.Stdin), "client stdin")
 }
 
 func runPTYConnectCapture(t *testing.T, mem *secret.Memory, password, yn string, stdout, stderr *bytes.Buffer) int {

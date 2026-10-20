@@ -48,8 +48,9 @@ func TestNewPassword_RejectsOneTheClientWouldCutShort(t *testing.T) {
 	if _, err := NewPassword(strings.Repeat("a", 512)); !errors.Is(err, ErrTooLong) {
 		t.Fatalf("err = %v, want ErrTooLong", err)
 	}
-	// The password is written to the client's stdin before the child is
-	// known to be reading, so it has to stay well inside the pipe buffer.
+	// The password is written to the client's arguments pipe before the
+	// child is known to be reading, so it has to stay well inside the pipe
+	// buffer, with the arguments that go before it.
 	if maxPasswordLen >= 65536 {
 		t.Fatalf("limit %d is not below the 64 KiB pipe buffer", maxPasswordLen)
 	}

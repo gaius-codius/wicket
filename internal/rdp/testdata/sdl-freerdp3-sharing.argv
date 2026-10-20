@@ -6,4 +6,3 @@ sdl-freerdp3
 +dynamic-resolution
 -clipboard
 +home-drive
-/from-stdin:force

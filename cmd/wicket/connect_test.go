@@ -141,10 +141,10 @@ func TestConnect_StoredSecret(t *testing.T) {
 		t.Fatalf("exit %d stderr %q", got.code, got.stderr)
 	}
 	r := testutil.ReadRecord(t, rec)
-	if r.Stdin != "s3cret\n" {
-		t.Fatalf("stdin %q", r.Stdin)
+	if !r.HasPassword || r.Password != "s3cret" {
+		t.Fatalf("password %q (present %v), want s3cret", r.Password, r.HasPassword)
 	}
-	joined := strings.Join(r.Argv, " ")
+	joined := strings.Join(r.RawArgv, " ")
 	if strings.Contains(joined, "s3cret") {
 		t.Fatal("password on argv")
 	}
@@ -395,8 +395,8 @@ func TestConnect_KeyringErrors(t *testing.T) {
 					t.Errorf("client started: %v", err)
 				}
 			} else if tc.tty {
-				if rr := testutil.ReadRecord(t, rec); rr.Stdin != "typed\n" {
-					t.Errorf("client stdin %q, want the typed password", rr.Stdin)
+				if rr := testutil.ReadRecord(t, rec); !rr.HasPassword || rr.Password != "typed" {
+					t.Errorf("client password %q, want the typed password", rr.Password)
 				}
 			}
 		})
@@ -498,8 +498,8 @@ func TestConnect_DismissedUnlock(t *testing.T) {
 			if got.code != 0 {
 				t.Fatalf("exit %d stderr %q", got.code, got.stderr)
 			}
-			if rr := testutil.ReadRecord(t, rec); rr.Stdin != "typed\n" {
-				t.Errorf("client stdin %q, want the typed password", rr.Stdin)
+			if rr := testutil.ReadRecord(t, rec); !rr.HasPassword || rr.Password != "typed" {
+				t.Errorf("client password %q, want the typed password", rr.Password)
 			}
 		})
 	}

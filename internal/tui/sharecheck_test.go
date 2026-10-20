@@ -78,8 +78,8 @@ func TestShareCheck_ConnectReadsEachShareOnce(t *testing.T) {
 			if m.statusKind == statusError {
 				t.Fatalf("status %q", m.status)
 			}
-			if got := testutil.ReadRecord(t, rec); got.Stdin != sentinel+"\n" {
-				t.Fatalf("stdin %q", got.Stdin)
+			if got := testutil.ReadRecord(t, rec); !got.HasPassword || got.Password != sentinel {
+				t.Fatalf("password %q (present %v), want the sentinel", got.Password, got.HasPassword)
 			}
 			if n := reads.Load(); n != 1 {
 				t.Fatalf("shares read %d times, want 1", n)

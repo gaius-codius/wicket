@@ -300,8 +300,8 @@ func TestKeyring_StalledDialogSaveFallsBackToConnectOnce(t *testing.T) {
 		t.Fatalf("view %v:\n%s", m.view, out)
 	}
 	m = press(m, "enter")
-	if got := testutil.ReadRecord(t, rec); got.Stdin != sentinel+"\n" {
-		t.Fatalf("stdin %q", got.Stdin)
+	if got := testutil.ReadRecord(t, rec); !got.HasPassword || got.Password != sentinel {
+		t.Fatalf("password %q (present %v), want the sentinel", got.Password, got.HasPassword)
 	}
 }
 

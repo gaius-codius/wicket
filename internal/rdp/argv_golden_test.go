@@ -119,8 +119,11 @@ func TestBuildPlan_FolderShares(t *testing.T) {
 	i := strings.Index(joined, "+home-drive")
 	j := strings.Index(joined, wantDocs)
 	k := strings.Index(joined, wantProj)
-	l := strings.Index(joined, "/from-stdin:force")
-	if i >= j || j >= k || k >= l {
+	if i >= j || j >= k {
 		t.Fatalf("order: %v", plan.Args)
+	}
+	// The shares close the plan: nothing may follow the last drive.
+	if last := plan.Args[len(plan.Args)-1]; last != wantProj {
+		t.Fatalf("last arg %q, want the last drive %q", last, wantProj)
 	}
 }

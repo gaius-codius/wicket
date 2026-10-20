@@ -3,6 +3,7 @@ package rdp
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 	"github.com/gaius-codius/wicket/internal/testutil"
 )
 
-func TestStdinPasswordOnly(t *testing.T) {
+func TestPasswordOnlyOnArgsPipe(t *testing.T) {
 	dir := testutil.FakeRDPDir(t)
 	testutil.PrependPATH(t, dir)
 	rec := filepath.Join(t.TempDir(), "rec.json")
@@ -36,10 +37,16 @@ func TestStdinPasswordOnly(t *testing.T) {
 	}
 	_ = sess.Wait()
 	r := testutil.ReadRecord(t, rec)
-	if r.Stdin != sentinel+"\n" {
-		t.Fatalf("stdin %q", r.Stdin)
+	if !r.HasPassword || r.Password != sentinel {
+		t.Fatalf("password %q (present %v), want it on the args pipe", r.Password, r.HasPassword)
 	}
-	blob := strings.Join(r.Argv, " ") + " "
+	if len(r.RawArgv) < 2 || !slices.Equal(r.RawArgv[1:], []string{"/args-from:fd:3"}) {
+		t.Fatalf("command line %q, want only /args-from:fd:3", r.RawArgv)
+	}
+	if strings.Contains(r.Stdin, sentinel) {
+		t.Fatal("sentinel on the client's stdin")
+	}
+	blob := strings.Join(r.RawArgv, " ") + " "
 	for k, v := range r.Environ {
 		blob += k + "=" + v + " "
 	}

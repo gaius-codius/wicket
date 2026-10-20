@@ -123,15 +123,16 @@ func assertTUISweep(t *testing.T, save bool) {
 	assertNoSentinel(t, h.stderr.Bytes(), "stderr")
 
 	got := testutil.ReadRecord(t, rec)
-	for _, a := range got.Argv {
+	for _, a := range got.RawArgv {
 		assertNoSentinel(t, []byte(a), "argv")
 	}
 	for k, v := range got.Environ {
 		assertNoSentinel(t, []byte(k+"="+v), "environ-record")
 	}
-	if got.Stdin != sentinel+"\n" {
-		t.Fatalf("stdin not delivered: %q", got.Stdin)
+	if !got.HasPassword || got.Password != sentinel {
+		t.Fatalf("password %q (present %v), want the sentinel", got.Password, got.HasPassword)
 	}
+	assertNoSentinel(t, []byte(got.Stdin), "client stdin")
 }
 
 func assertNoSentinel(t *testing.T, b []byte, label string) {

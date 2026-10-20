@@ -41,8 +41,8 @@ func TestModal_SavedPasswordTooLongCanBeReplaced(t *testing.T) {
 	}
 	h.m = typeInto(h.m, sentinel)
 	h.m = press(h.m, "ctrl+s")
-	if got := testutil.ReadRecord(t, rec); got.Stdin != sentinel+"\n" {
-		t.Fatalf("stdin %q", got.Stdin)
+	if got := testutil.ReadRecord(t, rec); !got.HasPassword || got.Password != sentinel {
+		t.Fatalf("password %q (present %v), want the sentinel", got.Password, got.HasPassword)
 	}
 	p, _ := h.m.app.Cfg.Profile("work")
 	if _, err := inner.Lookup(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p)); err != nil {
@@ -61,8 +61,8 @@ func TestModal_UseOnceDoesNotStore(t *testing.T) {
 	h.m = typeInto(h.m, sentinel)
 	h.m = press(h.m, "enter")
 	got := testutil.ReadRecord(t, rec)
-	if got.Stdin != sentinel+"\n" {
-		t.Fatalf("stdin %q", got.Stdin)
+	if !got.HasPassword || got.Password != sentinel {
+		t.Fatalf("password %q (present %v), want the sentinel", got.Password, got.HasPassword)
 	}
 	p, _ := h.m.app.Cfg.Profile("work")
 	if _, err := store.Lookup(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p)); err == nil {
@@ -95,8 +95,8 @@ func TestModal_StoreFailureStillConnects(t *testing.T) {
 	h.m = typeInto(h.m, sentinel)
 	h.m = press(h.m, "ctrl+s")
 	got := testutil.ReadRecord(t, rec)
-	if got.Stdin != sentinel+"\n" {
-		t.Fatalf("stdin %q", got.Stdin)
+	if !got.HasPassword || got.Password != sentinel {
+		t.Fatalf("password %q (present %v), want the sentinel", got.Password, got.HasPassword)
 	}
 	if !strings.Contains(h.m.status, "password not saved") {
 		t.Fatalf("status %q", h.m.status)
@@ -147,8 +147,8 @@ func TestRetry_UseOnceUntilDismiss(t *testing.T) {
 	_ = os.Remove(rec)
 	h.m = press(h.m, "enter")
 	got := testutil.ReadRecord(t, rec)
-	if got.Stdin != sentinel+"\n" {
-		t.Fatalf("retry stdin %q", got.Stdin)
+	if !got.HasPassword || got.Password != sentinel {
+		t.Fatalf("retry password %q (present %v), want the sentinel", got.Password, got.HasPassword)
 	}
 	h.m = press(h.m, "esc")
 	if h.m.useOnce != nil {

@@ -396,15 +396,20 @@ func runPrompt(ctx context.Context, conn *dbus.Conn, prompt dbus.ObjectPath) err
 	}
 	defer func() { _ = conn.RemoveMatchSignal(match...) }()
 
-	if call := conn.Object(ssBus, prompt).CallWithContext(ctx, ssPromptIface+".Prompt", 0, ""); call.Err != nil {
-		return unavailable(ctx, call.Err)
-	}
 	dismiss := func() {
 		// ctx may be over, so the dismissal gets a moment of its own; dial
 		// keeps the connection open that long.
 		dctx, cancel := context.WithTimeout(context.Background(), dismissGrace)
 		defer cancel()
 		_ = conn.Object(ssBus, prompt).CallWithContext(dctx, ssPromptIface+".Dismiss", 0).Err
+	}
+	if call := conn.Object(ssBus, prompt).CallWithContext(ctx, ssPromptIface+".Prompt", 0, ""); call.Err != nil {
+		// The service shows the dialog when it receives Prompt, before it
+		// replies, so a caller that gave up while the reply was on its way
+		// leaves the dialog on screen unless it is dismissed here. After a
+		// lost bus or an error reply the dismissal does nothing.
+		dismiss()
+		return unavailable(ctx, call.Err)
 	}
 	deadline := time.NewTimer(promptTimeout)
 	defer deadline.Stop()

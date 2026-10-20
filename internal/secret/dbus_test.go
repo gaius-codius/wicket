@@ -489,11 +489,13 @@ func TestDBus_CancelledPromptIsDismissed(t *testing.T) {
 	}
 	srv.SetPrompt(fakesecret.PromptStall)
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		cancel()
-	}()
-	err = NewDBus().Upsert(ctx, id, pw)
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() { errc <- NewDBus().Upsert(ctx, id, pw) }()
+	// A cancel before the dialog is up would leave nothing to dismiss.
+	waitForPrompt(t, srv)
+	cancel()
+	err = <-errc
 	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want ErrUnavailable and the cancellation", err)
 	}
@@ -508,18 +510,18 @@ func TestDBus_CancelledPromptIsDismissed(t *testing.T) {
 	}
 }
 
-// waitForCall waits until the fake has seen method, so a test can act while
+// waitForPrompt waits until the fake has seen Prompt, so a test can act while
 // the client is in the middle of an operation, a prompt on screen.
-func waitForCall(t *testing.T, srv *fakesecret.Server, method string) {
+func waitForPrompt(t *testing.T, srv *fakesecret.Server) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if slices.Contains(srv.Calls(), method) {
+		if slices.Contains(srv.Calls(), "Prompt") {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("the client never called %s; calls: %v", method, srv.Calls())
+	t.Fatalf("the client never called Prompt; calls: %v", srv.Calls())
 }
 
 // gnome-keyring does not prompt for a write to a locked collection or a
@@ -655,7 +657,7 @@ func TestDBus_LostBusDuringAPromptIsUnavailable(t *testing.T) {
 				}
 				errc <- store.Upsert(bg, id, pw)
 			}()
-			waitForCall(t, srv, "Prompt")
+			waitForPrompt(t, srv)
 			cleanup()
 			select {
 			case err := <-errc:
@@ -687,7 +689,7 @@ func TestDBus_PromptIgnoresACompletedFromAnotherSender(t *testing.T) {
 	srv.SetPrompt(fakesecret.PromptStall)
 	errc := make(chan error, 1)
 	go func() { errc <- NewDBus().Upsert(bg, id, pw) }()
-	waitForCall(t, srv, "Prompt")
+	waitForPrompt(t, srv)
 
 	forger, err := dbus.ConnectSessionBus()
 	if err != nil {
@@ -746,7 +748,7 @@ func TestDBus_CancelledLookupPromptIsNotLocked(t *testing.T) {
 	defer cancel()
 	errc := make(chan error, 1)
 	go func() { _, err := store.Lookup(ctx, id); errc <- err }()
-	waitForCall(t, srv, "Prompt")
+	waitForPrompt(t, srv)
 	cancel()
 	err = <-errc
 	if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) {
@@ -754,6 +756,54 @@ func TestDBus_CancelledLookupPromptIsNotLocked(t *testing.T) {
 	}
 	if n := srv.Dismissed(); n != 1 {
 		t.Fatalf("prompt dismissed %d times, want 1", n)
+	}
+}
+
+// The service shows a prompt's dialog when it receives Prompt, before it
+// replies. A caller that gives up in between gets ctx's error from the call
+// itself, not from the wait for Completed, and the dialog must still be
+// dismissed: it is on screen, and the user pressed esc. The fake holds the
+// reply for good, so the cancel always lands there.
+func TestDBus_CancelBeforeThePromptRepliesDismisses(t *testing.T) {
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		setup func(*fakesecret.Server)
+		op    func(context.Context, *DBus) error
+	}{
+		{"lookup", func(srv *fakesecret.Server) {
+			srv.Seed(id.Attrs(), "s3cret", 100)
+			srv.SetLocked(true)
+		}, func(ctx context.Context, d *DBus) error { _, err := d.Lookup(ctx, id); return err }},
+		{"upsert", func(*fakesecret.Server) {}, func(ctx context.Context, d *DBus) error { return d.Upsert(ctx, id, pw) }},
+		{"delete", func(srv *fakesecret.Server) {
+			srv.Seed(id.Attrs(), "s3cret", 100)
+		}, func(ctx context.Context, d *DBus) error { return d.Delete(ctx, id) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, srv, cleanup := fakesecret.Start(t)
+			defer cleanup()
+			tc.setup(srv)
+			srv.SetPrompt(fakesecret.PromptHang)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			errc := make(chan error, 1)
+			go func() { errc <- tc.op(ctx, NewDBus()) }()
+			waitForPrompt(t, srv)
+			cancel()
+			err := <-errc
+			if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) || errors.Is(err, ErrPromptDismissed) {
+				t.Fatalf("err = %v, want ErrUnavailable and the cancellation, not the user refusing", err)
+			}
+			if n := srv.Dismissed(); n != 1 {
+				t.Fatalf("prompt dismissed %d times, want 1", n)
+			}
+		})
 	}
 }
 

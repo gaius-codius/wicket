@@ -8,13 +8,14 @@ import (
 	"strings"
 )
 
-// maxPasswordLen is the longest password the client can be handed whole.
-// FreeRDP reads it into a 512-byte buffer (client/common/cmdline.c), and with
-// FREERDP_ASKPASS set, fgets keeps only 511 bytes of that
-// (libfreerdp/utils/passphrase.c). Anything longer is cut short and the user
-// sees only a failed login. It also keeps the write to the client's stdin well
-// inside the pipe buffer: the write happens before the child is known to be
-// reading, and a value larger than the buffer would deadlock the launch.
+// maxPasswordLen is the longest password Wicket hands a client. FreeRDP read
+// a password from stdin into a 512-byte buffer (client/common/cmdline.c), and
+// passwords were saved under that limit while it was the way in; it stays, so
+// a saved password and a typed one obey the same rule. It also keeps the
+// write to the client's arguments pipe inside the pipe buffer, with room set
+// aside for it (rdp.maxArgsBytes): the write happens before the child is
+// known to be reading, and a value larger than the buffer would hold the
+// launch.
 const maxPasswordLen = 511
 
 var (
@@ -60,7 +61,8 @@ func (p Password) MarshalText() ([]byte, error) {
 	return nil, errors.New("password must not be marshaled")
 }
 
-// WriteLine writes the secret plus a single newline, then the caller must close the pipe.
+// WriteLine writes the secret plus a single newline: the value of the /p:
+// argument the launcher has begun. The caller closes the pipe after it.
 func (p Password) WriteLine(w io.Writer) error {
 	_, err := io.WriteString(w, p.v+"\n")
 	return err

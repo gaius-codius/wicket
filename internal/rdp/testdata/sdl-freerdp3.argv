@@ -4,4 +4,3 @@ sdl-freerdp3
 /d:CORP
 /size:100%
 +dynamic-resolution
-/from-stdin:force

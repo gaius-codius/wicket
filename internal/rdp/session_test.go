@@ -405,7 +405,8 @@ func TestSession_LeavesNoGoroutines(t *testing.T) {
 }
 
 // The client's output goes to the launcher's writers and never mixes with
-// the password, which only ever travels on the client's stdin.
+// the password, which only ever travels on the pipe the client reads its
+// arguments from.
 func TestSession_OutputCapturedWithoutThePassword(t *testing.T) {
 	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
 	t.Setenv("FAKERDP_OUTPUT", "hello from the client")

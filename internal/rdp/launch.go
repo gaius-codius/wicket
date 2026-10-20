@@ -18,9 +18,41 @@ import (
 var (
 	ErrClientNotFound     = errors.New("rdp client not found")
 	ShortSessionThreshold = 3 * time.Second
+	// ErrArgument is an argument the client could not be handed whole: its
+	// arguments travel a line each, so a line break would split one in two
+	// and an empty one would end them early.
+	ErrArgument = errors.New("client argument cannot be passed")
+	// ErrArgsTooLong is a set of arguments too long to hand over safely;
+	// see maxArgsBytes.
+	ErrArgsTooLong = errors.New("client arguments too long")
 )
 
-// Credential writes one password line to the child stdin pipe.
+// argsFrom is the only argument on the client's command line. FreeRDP 3
+// reads the rest, the password with them, a line each from the pipe Wicket
+// leaves on fd 3, until the pipe closes. The password stays out of the
+// process table as it did on stdin, and stdin is left to FreeRDP's own
+// questions: it refuses an unknown or changed server certificate without
+// asking whenever /from-stdin is set (client/common/client.c), which left a
+// user whose server had a new certificate with nothing but "TLS connection
+// failed".
+const argsFrom = "/args-from:fd:3"
+
+// maxArgsBytes bounds what is written to the pipe before the client is
+// known to be reading it, the password included. It fits in a single page,
+// the smallest buffer a pipe gets: Linux gives new pipes one or two pages
+// once a user has more pipe buffers than fs.pipe-user-pages-soft allows. A
+// client that never reads fd 3 therefore cannot hold the launch, which runs
+// on the TUI's update loop: the write completes, and the client fails on its
+// own.
+const maxArgsBytes = 4 << 10
+
+// passwordReserve is the room kept in maxArgsBytes for "/p:", the longest
+// password a credential holds (secret.NewPassword's 511 bytes) and its line
+// break.
+const passwordReserve = 3 + 511 + 1
+
+// Credential writes one password line to the pipe the client reads its
+// arguments from, after the "/p:" the launcher has written.
 type Credential interface {
 	WriteLine(w io.Writer) error
 }
@@ -79,6 +111,14 @@ type Launcher struct {
 	// so a helper the client left running would otherwise hold Wait open.
 	// Zero waits for as long as it takes, as exec.Cmd does.
 	WaitDelay time.Duration
+	// Terminal, when set, is the controlling terminal the client is given as
+	// its stdin, with its process group made the terminal's foreground group
+	// for as long as it runs, so FreeRDP can ask the user to review a server
+	// certificate, and Ctrl+C reaches it as it would a client started from a
+	// shell. Wicket's own group gets the terminal back when the client exits.
+	// Without it the client's stdin is the null device, and FreeRDP refuses
+	// any certificate it would have asked about.
+	Terminal *os.File
 }
 
 // DefaultStopGrace is how long a forwarded SIGTERM or SIGHUP gives the client
@@ -133,6 +173,9 @@ type Session struct {
 	stage int
 	// stopped is the first SIGTERM or SIGHUP Wicket received and passed on.
 	stopped os.Signal
+	// release hands the terminal back once the client has exited; nil when
+	// the client was not given one.
+	release func()
 }
 
 // stopSignals are the signals a stop sends, in order. They are indexed
@@ -248,13 +291,18 @@ func (l *Launcher) LookupClient(client string) (string, error) {
 	return path, nil
 }
 
-// Start looks up the client, spawns it in its own process group, writes the credential to stdin, and returns.
+// Start looks up the client, spawns it in its own process group, writes its
+// arguments and the credential to the pipe on its fd 3, and returns.
 func (l *Launcher) Start(plan Plan, cred Credential) (*Session, error) {
 	path, err := l.LookupClient(plan.Client)
 	if err != nil {
 		return nil, err
 	}
-	cmd := l.runner().Command(path, plan.Args...)
+	args, err := encodeArgs(plan.Args)
+	if err != nil {
+		return nil, err
+	}
+	cmd := l.runner().Command(path, argsFrom)
 	cmd.Stdout = l.Stdout
 	if cmd.Stdout == nil {
 		cmd.Stdout = os.Stdout
@@ -263,11 +311,27 @@ func (l *Launcher) Start(plan Plan, cred Credential) (*Session, error) {
 	if cmd.Stderr == nil {
 		cmd.Stderr = os.Stderr
 	}
-	stdin, err := cmd.StdinPipe()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var release func()
+	if l.Terminal != nil {
+		owner, err := foregroundGroup(l.Terminal)
+		if err != nil {
+			return nil, fmt.Errorf("cannot hand the terminal to %s: %w", plan.Client, err)
+		}
+		cmd.Stdin = l.Terminal
+		// The child makes its own group the foreground one before it
+		// runs, so it never reads the terminal from the background, which
+		// would stop it with SIGTTIN.
+		cmd.SysProcAttr.Foreground = true
+		cmd.SysProcAttr.Ctty = int(l.Terminal.Fd())
+		release = func() { returnTerminal(l.Terminal, owner) }
+	}
+	// Both ends are close-on-exec; only the read end is passed on, as fd 3.
+	argsR, argsW, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.ExtraFiles = []*os.File{argsR}
 	cmd.WaitDelay = l.WaitDelay
 	// The handler goes in before the client starts. Installed after, a
 	// SIGTERM or SIGHUP that landed while the client was starting, or while
@@ -280,11 +344,33 @@ func (l *Launcher) Start(plan Plan, cred Credential) (*Session, error) {
 		sigs = make(chan os.Signal, 4)
 		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	}
-	if err := cmd.Start(); err != nil {
-		_ = stdin.Close()
+	if l.Terminal != nil {
+		// The client keeps the terminal's foreground for the whole session,
+		// and Wicket waits only for it to exit. Ctrl+Z there would stop it
+		// with nothing left to resume it: the shell knows only Wicket's job.
+		// It starts with SIGTSTP ignored, which survives exec and which
+		// FreeRDP leaves alone (libfreerdp/utils/signal.c skips a signal
+		// that is ignored), so Ctrl+Z does nothing while it runs.
+		signal.Ignore(syscall.SIGTSTP)
+	}
+	err = cmd.Start()
+	if l.Terminal != nil {
+		signal.Reset(syscall.SIGTSTP)
+	}
+	// The client has its own copy of the read end now, or never will. Ours
+	// would keep the pipe open after the client exits, and a write to a
+	// client that died would block rather than fail.
+	_ = argsR.Close()
+	if err != nil {
+		_ = argsW.Close()
 		if sigs != nil {
 			// Nothing was started, so there is nothing to stop.
 			signal.Stop(sigs)
+		}
+		if release != nil {
+			// A failed exec can still have moved the terminal to a group
+			// that is gone.
+			release()
 		}
 		return nil, err
 	}
@@ -296,6 +382,7 @@ func (l *Launcher) Start(plan Plan, cred Credential) (*Session, error) {
 		client:    filepath.Base(plan.Client),
 		done:      make(chan struct{}),
 		interrupt: sigs,
+		release:   release,
 	}
 	if sigs != nil {
 		grace := l.stopGrace()
@@ -317,27 +404,62 @@ func (l *Launcher) Start(plan Plan, cred Credential) (*Session, error) {
 	// password is being written sees the client exit, and nothing signals
 	// its group once it has been collected.
 	go sess.reap()
-	if cred != nil {
-		// A credential that cannot reach the child is fatal: the client would
-		// otherwise sit at a prompt it can never satisfy, and the caller would
-		// blame the password.
-		if err := cred.WriteLine(stdin); err != nil {
-			_ = stdin.Close()
-			sess.signal(syscall.SIGKILL)
-			out := sess.Wait()
-			if out.Stopped != nil {
-				// Wicket was told to stop while the password was on its
-				// way, and stopping the client is what broke the pipe: the
-				// session says so, and the caller exits as told.
-				return sess, nil
-			}
-			return nil, fmt.Errorf("could not send the password to %s: %w", plan.Client, err)
+	// Arguments or a credential that cannot reach the child are fatal: the
+	// client would otherwise run without them, or sit at a prompt for a
+	// password it can never be given, and the caller would blame the
+	// password.
+	if err := writeArgs(argsW, args, cred); err != nil {
+		_ = argsW.Close()
+		sess.signal(syscall.SIGKILL)
+		out := sess.Wait()
+		if out.Stopped != nil {
+			// Wicket was told to stop while the password was on its
+			// way, and stopping the client is what broke the pipe: the
+			// session says so, and the caller exits as told.
+			return sess, nil
 		}
+		return nil, fmt.Errorf("could not send the arguments and password to %s: %w", plan.Client, err)
 	}
-	_ = stdin.Close()
+	// Closing the pipe ends the arguments: FreeRDP reads until it is closed.
+	_ = argsW.Close()
 	// The reaper is the only caller of cmd.Wait, so Wait, Done and a stop
 	// racing the exit all see one outcome.
 	return sess, nil
+}
+
+// encodeArgs is args as the client reads them from fd 3: a line each. An
+// argument with a line break in it would reach the client as two, the
+// second of them anything at all, so it is refused rather than split; so is
+// an empty one, which FreeRDP takes for the end of its arguments.
+func encodeArgs(args []string) (string, error) {
+	var b strings.Builder
+	for _, a := range args {
+		if a == "" || strings.ContainsAny(a, "\r\n") {
+			return "", fmt.Errorf("%w: %q", ErrArgument, a)
+		}
+		b.WriteString(a)
+		b.WriteByte('\n')
+	}
+	// The password is still to come.
+	if b.Len() > maxArgsBytes-passwordReserve {
+		return "", ErrArgsTooLong
+	}
+	return b.String(), nil
+}
+
+// writeArgs writes the encoded arguments, then the credential as FreeRDP's
+// /p: argument, to w.
+func writeArgs(w io.Writer, args string, cred Credential) error {
+	if _, err := io.WriteString(w, args); err != nil {
+		return fmt.Errorf("writing the arguments: %w", err)
+	}
+	if cred == nil {
+		return nil
+	}
+	if _, err := io.WriteString(w, "/p:"); err != nil {
+		return fmt.Errorf("writing the arguments: %w", err)
+	}
+	return cred.WriteLine(w)
 }
 
 // Wait blocks until the client has exited and returns how it ended.
@@ -434,6 +556,18 @@ func (s *Session) signalLocked(sig syscall.Signal) bool {
 	return syscall.Kill(-s.pgid, sig) == nil
 }
 
+// returnTerminal gives the terminal back to the group that had it before
+// the client started, once; later calls do nothing.
+func (s *Session) returnTerminal() {
+	s.mu.Lock()
+	release := s.release
+	s.release = nil
+	s.mu.Unlock()
+	if release != nil {
+		release()
+	}
+}
+
 func (s *Session) reap() {
 	// Wait for the exit without collecting it. Until the zombie is
 	// collected its pid, and so the group id, cannot be reused, which is
@@ -445,6 +579,9 @@ func (s *Session) reap() {
 	var end time.Time
 	if waitExited(s.pgid) {
 		end = s.clock.Now()
+		// The terminal goes back as soon as the client has gone, before
+		// its helpers are cleared away: they are killed, not asked.
+		s.returnTerminal()
 		s.mu.Lock()
 		// Start put the client in a group of its own, so anything still in
 		// it is a helper the client left behind. It goes with the client,
@@ -459,6 +596,7 @@ func (s *Session) reap() {
 	if end.IsZero() {
 		end = s.clock.Now()
 	}
+	s.returnTerminal()
 	s.mu.Lock()
 	s.reaped = true
 	s.mu.Unlock()

@@ -85,25 +85,73 @@ func runConnect(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// On a terminal Wicket owns, the client gets it, so FreeRDP can show a
+	// server certificate it has not been told to trust, new or changed, and
+	// ask the user about it. Elsewhere it cannot ask, and refuses one. Its
+	// output must reach the terminal too: a question written to a log file
+	// would leave the user facing a terminal that waits for an answer to
+	// nothing.
+	if in := stdinFile(); rdp.OwnsTerminal(in) && writesTo(stdout, in) {
+		launcher.Terminal = in
+	}
 	sess, err := launcher.Start(plan, cred)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	// While the client holds the terminal, Wicket is in the background, and
+	// a write there stops it under "stty tostop"; a warning waits until the
+	// client is done.
+	var warning string
 	st, sterr := config.OpenState(paths.State, nil)
 	if sterr != nil {
-		fmt.Fprintln(stderr, "warning: last_used:", sterr)
+		warning = fmt.Sprint("warning: last_used: ", sterr)
 	} else if err := st.Record(name); err != nil {
-		fmt.Fprintln(stderr, "warning: last_used:", err)
+		warning = fmt.Sprint("warning: last_used: ", err)
+	}
+	if warning != "" && launcher.Terminal == nil {
+		fmt.Fprintln(stderr, warning)
+		warning = ""
 	}
 	// A SIGTERM or SIGHUP from here on stops the client's whole process
 	// group and ends Wait; see rdp.Launcher.OwnSignals.
 	out := sess.Wait()
+	if warning != "" {
+		fmt.Fprintln(stderr, warning)
+	}
 	if out.StartErr != nil {
 		fmt.Fprintln(stderr, out.StartErr)
 		return 2
 	}
+	if out.MaybeCertificate() && launcher.Terminal == nil {
+		fmt.Fprintf(stderr, "%s: TLS connection failed. If the server's certificate is new or has changed, run `wicket connect %s` in the foreground of a terminal, with its output on the terminal: FreeRDP shows the certificate there and asks before trusting it.\n", plan.Client, shellQuote(name))
+	}
 	return out.ExitStatus()
+}
+
+// writesTo reports whether w is the terminal tty, as os.Stdout is when
+// nothing redirected it.
+func writesTo(w io.Writer, tty *os.File) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	a, errA := f.Stat()
+	b, errB := tty.Stat()
+	return errA == nil && errB == nil && os.SameFile(a, b)
+}
+
+// shellQuote quotes s for a POSIX shell when it needs it, so a command
+// Wicket suggests can be pasted as it is: a profile name may hold spaces or
+// quotes.
+func shellQuote(s string) string {
+	plain := func(r rune) bool {
+		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("-_.,:@%+=/", r)
+	}
+	if s != "" && strings.IndexFunc(s, func(r rune) bool { return !plain(r) }) < 0 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // resolveCLICredential finds the password for id, asking on a terminal when

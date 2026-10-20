@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +65,7 @@ func TestClassify_Boundaries(t *testing.T) {
 	}
 }
 
-func TestStart_WaitExitCodeAndStdin(t *testing.T) {
+func TestStart_WaitExitCodeAndPassword(t *testing.T) {
 	dir := testutil.FakeRDPDir(t)
 	testutil.PrependPATH(t, dir)
 	rec := filepath.Join(t.TempDir(), "rec.json")
@@ -95,10 +96,16 @@ func TestStart_WaitExitCodeAndStdin(t *testing.T) {
 		t.Fatalf("class %v", Classify(o))
 	}
 	r := testutil.ReadRecord(t, rec)
-	if r.Stdin != pw+"\n" {
-		t.Fatalf("stdin %q", r.Stdin)
+	if !r.HasPassword || r.Password != pw {
+		t.Fatalf("password %q (present %v), want %q", r.Password, r.HasPassword, pw)
 	}
-	joined := strings.Join(r.Argv, "\x00")
+	if len(r.RawArgv) < 2 || !slices.Equal(r.RawArgv[1:], []string{"/args-from:fd:3"}) {
+		t.Fatalf("command line %q, want only /args-from:fd:3", r.RawArgv)
+	}
+	if strings.Contains(r.Stdin, pw) {
+		t.Fatal("password on the client's stdin")
+	}
+	joined := strings.Join(r.RawArgv, "\x00")
 	if strings.Contains(joined, pw) {
 		t.Fatal("password on argv")
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,16 +9,41 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
+// record is what the client was given. It mirrors testutil.FakeRecord.
 type record struct {
-	Argv    []string          `json:"argv"`
-	Environ map[string]string `json:"environ"`
-	Stdin   string            `json:"stdin"`
+	// RawArgv is the command line as the process table shows it.
+	RawArgv []string `json:"raw_argv"`
+	// Argv is the arguments as FreeRDP would read them: the command line,
+	// or, under /args-from:fd:3, the program name and the lines read from
+	// fd 3, less the /p: line.
+	Argv        []string `json:"argv"`
+	Password    string   `json:"password"`
+	HasPassword bool     `json:"has_password"`
+	// ArgsLines is every line read from fd 3, the /p: line included and in
+	// the order they came.
+	ArgsLines []string          `json:"args_lines"`
+	Environ   map[string]string `json:"environ"`
+	Stdin     string            `json:"stdin"`
+	// StdinTTY says stdin was a terminal, and Foreground that the client's
+	// process group was the terminal's foreground group.
+	StdinTTY   bool `json:"stdin_tty"`
+	Foreground bool `json:"foreground"`
+	// CertAnswer is what the client read when it asked about a
+	// certificate, or "" when it did not ask.
+	CertAnswer string `json:"cert_answer"`
 }
+
+// argsFromFD is the argument under which FreeRDP reads the rest from fd 3.
+const argsFromFD = "/args-from:fd:3"
 
 func main() {
 	if os.Getenv("FAKERDP_ROLE") == "helper" {
@@ -28,6 +54,7 @@ func main() {
 		_ = os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600)
 	}
 	rec := record{
+		RawArgv: os.Args,
 		Argv:    os.Args,
 		Environ: map[string]string{},
 	}
@@ -39,28 +66,38 @@ func main() {
 		rec.Environ[k] = v
 	}
 
-	delay := os.Getenv("FAKERDP_DELAY_STDIN")
-	if delay != "" {
-		if d, err := time.ParseDuration(delay); err == nil {
-			time.Sleep(d)
+	// FAKERDP_DELAY_ARGS plays a client slow to read its arguments.
+	if d, err := time.ParseDuration(os.Getenv("FAKERDP_DELAY_ARGS")); err == nil {
+		time.Sleep(d)
+	}
+	if len(os.Args) == 2 && os.Args[1] == argsFromFD {
+		readArgs(&rec)
+	}
+	rec.StdinTTY, rec.Foreground = terminalState()
+	// FAKERDP_CERT plays FreeRDP meeting a server certificate it has not
+	// been told to trust: see certPrompt. It reads its answer from stdin, so
+	// stdin is read whole only otherwise.
+	if presented := os.Getenv("FAKERDP_CERT"); presented != "" {
+		if !certPrompt(&rec, presented) {
+			writeRecord(rec)
+			os.Exit(exitTLSConnectFailed)
 		}
+	} else if !rec.StdinTTY {
+		in, _ := io.ReadAll(os.Stdin)
+		rec.Stdin = string(in)
 	}
-	in, _ := io.ReadAll(os.Stdin)
-	rec.Stdin = string(in)
 
-	if path := os.Getenv("FAKERDP_RECORD"); path != "" {
-		b, _ := json.Marshal(rec)
-		_ = os.WriteFile(path, b, 0o600)
-	}
+	writeRecord(rec)
 
 	// FAKERDP_OUTPUT is logged to stdout and stderr, the way FreeRDP logs.
 	if s := os.Getenv("FAKERDP_OUTPUT"); s != "" {
 		fmt.Fprintln(os.Stdout, "stdout: "+s)
 		fmt.Fprintln(os.Stderr, "stderr: "+s)
 	}
-	// FAKERDP_ECHO_STDIN plays a client that repeats what it was given.
-	if os.Getenv("FAKERDP_ECHO_STDIN") != "" {
-		fmt.Fprint(os.Stdout, rec.Stdin)
+	// FAKERDP_ECHO_PASSWORD plays a client that repeats the password it
+	// was given.
+	if os.Getenv("FAKERDP_ECHO_PASSWORD") != "" {
+		fmt.Fprintln(os.Stdout, rec.Password)
 	}
 	// FAKERDP_SPAWN starts a helper in the client's process group, the
 	// way a client can leave something running behind it.
@@ -102,6 +139,103 @@ func main() {
 		}
 	}
 	os.Exit(code)
+}
+
+func writeRecord(rec record) {
+	if path := os.Getenv("FAKERDP_RECORD"); path != "" {
+		b, _ := json.Marshal(rec)
+		_ = os.WriteFile(path, b, 0o600)
+	}
+}
+
+// readArgs reads the arguments from fd 3 as FreeRDP does: a line each,
+// until the pipe closes or a line is empty.
+func readArgs(rec *record) {
+	f := os.NewFile(3, "args")
+	if f == nil {
+		os.Exit(exitInvalidArguments)
+	}
+	b, err := io.ReadAll(f)
+	_ = f.Close()
+	if err != nil {
+		os.Exit(exitInvalidArguments)
+	}
+	rec.Argv = []string{os.Args[0]}
+	for line := range strings.SplitSeq(string(b), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			break
+		}
+		rec.ArgsLines = append(rec.ArgsLines, line)
+		if pw, ok := strings.CutPrefix(line, "/p:"); ok {
+			rec.Password, rec.HasPassword = pw, true
+			continue
+		}
+		rec.Argv = append(rec.Argv, line)
+	}
+}
+
+// terminalState says whether stdin is a terminal, and whether this process's
+// group is its foreground group.
+func terminalState() (tty, foreground bool) {
+	group, err := unix.IoctlGetInt(0, unix.TIOCGPGRP)
+	if err != nil {
+		return false, false
+	}
+	return true, group == unix.Getpgrp()
+}
+
+const (
+	exitInvalidArguments = 128
+	exitTLSConnectFailed = 143
+)
+
+// certPrompt plays FreeRDP's check of the server certificate presented, the
+// text FAKERDP_CERT holds, against its store: the file named for the host
+// and port under $XDG_CONFIG_HOME/freerdp/server. A certificate the store
+// already holds is trusted. Any other is asked about on stdin, as FreeRDP's
+// command-line client does: y trusts it and saves it, t trusts it for this
+// run only, and anything else, end of input included, refuses it. A save
+// that fails refuses it too, as FreeRDP does. It reports whether the
+// certificate was trusted.
+func certPrompt(rec *record, presented string) bool {
+	entry := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "freerdp", "server", storeName(rec.Argv))
+	if saved, err := os.ReadFile(entry); err == nil && string(saved) == presented {
+		return true
+	}
+	fmt.Fprintf(os.Stdout, "Certificate details for %s:\n\tFingerprint: %s\n", entry, presented)
+	fmt.Fprint(os.Stdout, "Do you trust the above certificate? (Y/T/N) ")
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	rec.CertAnswer = strings.TrimSpace(line)
+	if rec.CertAnswer == "" {
+		rec.CertAnswer = "EOF"
+	}
+	switch strings.ToLower(rec.CertAnswer) {
+	case "y":
+		if err := os.MkdirAll(filepath.Dir(entry), 0o700); err != nil {
+			return false
+		}
+		return os.WriteFile(entry, []byte(presented), 0o600) == nil
+	case "t":
+		return true
+	}
+	return false
+}
+
+// storeName is FreeRDP's file name for the /v: host's entry: host_port.pem,
+// lowercased, the port 3389 unless the host names one.
+func storeName(argv []string) string {
+	host := ""
+	for _, a := range argv {
+		if v, ok := strings.CutPrefix(a, "/v:"); ok {
+			host = v
+		}
+	}
+	port := "3389"
+	if h, p, ok := strings.Cut(host, ":"); ok {
+		host, port = h, p
+	}
+	return strings.ToLower(host) + "_" + port + ".pem"
 }
 
 func splitEnv(e string) (string, string, bool) {

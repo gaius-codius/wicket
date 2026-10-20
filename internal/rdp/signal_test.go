@@ -66,7 +66,7 @@ func TestStart_ForwardsInterruptToChildGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The child installs its handler after reading stdin; retry until the
+	// The child installs its handler after reading its arguments; retry until the
 	// signal lands rather than racing it once.
 	done := make(chan Outcome, 1)
 	go func() { done <- sess.Wait() }()
@@ -111,16 +111,16 @@ func TestStart_CredentialWriteFailureStopsTheClient(t *testing.T) {
 }
 
 // The password is written before the child is known to be reading, so a client
-// that is slow to read stdin must not stall the launch.
-func TestStart_DoesNotBlockWhenTheClientDelaysReadingStdin(t *testing.T) {
+// that is slow to read its arguments must not stall the launch.
+func TestStart_DoesNotBlockWhenTheClientDelaysReadingArgs(t *testing.T) {
 	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
-	t.Setenv("FAKERDP_DELAY_STDIN", "1s")
+	t.Setenv("FAKERDP_DELAY_ARGS", "1s")
 	t.Setenv("FAKERDP_EXIT", "0")
 
 	l := &Launcher{Stdout: io.Discard, Stderr: io.Discard}
 	started := make(chan *Session, 1)
 	go func() {
-		s, err := l.Start(testPlan(t), lineCred(strings.Repeat("x", 4096)))
+		s, err := l.Start(testPlan(t), lineCred(strings.Repeat("x", 511)))
 		if err != nil {
 			t.Error(err)
 			close(started)

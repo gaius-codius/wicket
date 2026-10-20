@@ -8,15 +8,14 @@ import (
 	"github.com/gaius-codius/wicket/internal/config"
 )
 
-const stdinFlag = "/from-stdin:force"
-
-// Plan is the argv for a FreeRDP client. It cannot carry a password.
+// Plan is the arguments for a FreeRDP client. It cannot carry a password:
+// the launcher adds that as it hands the arguments over (see argsFrom).
 type Plan struct {
 	Client string
 	Args   []string
 }
 
-// BuildPlan builds REQ-016 tokens plus the verified stdin flag. No password, no /cert:ignore.
+// BuildPlan builds REQ-016 tokens. No password, no /cert:ignore.
 func BuildPlan(p config.Profile) (Plan, error) {
 	return BuildCheckedPlan(p, config.CheckedShares{})
 }
@@ -74,7 +73,6 @@ func BuildCheckedPlan(p config.Profile, checked config.CheckedShares) (Plan, err
 		}
 		args = append(args, arg)
 	}
-	args = append(args, stdinFlag)
 	for _, a := range args {
 		if strings.HasPrefix(a, "/p:") || strings.HasPrefix(a, "/p") && (len(a) == 2 || a[2] == ':') {
 			return Plan{}, fmt.Errorf("password must not appear in argv")

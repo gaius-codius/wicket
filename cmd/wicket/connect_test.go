@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/creack/pty"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
@@ -141,10 +143,10 @@ func TestConnect_StoredSecret(t *testing.T) {
 		t.Fatalf("exit %d stderr %q", got.code, got.stderr)
 	}
 	r := testutil.ReadRecord(t, rec)
-	if r.Stdin != "s3cret\n" {
-		t.Fatalf("stdin %q", r.Stdin)
+	if !r.HasPassword || r.Password != "s3cret" {
+		t.Fatalf("password %q (present %v), want s3cret", r.Password, r.HasPassword)
 	}
-	joined := strings.Join(r.Argv, " ")
+	joined := strings.Join(r.RawArgv, " ")
 	if strings.Contains(joined, "s3cret") {
 		t.Fatal("password on argv")
 	}
@@ -395,8 +397,8 @@ func TestConnect_KeyringErrors(t *testing.T) {
 					t.Errorf("client started: %v", err)
 				}
 			} else if tc.tty {
-				if rr := testutil.ReadRecord(t, rec); rr.Stdin != "typed\n" {
-					t.Errorf("client stdin %q, want the typed password", rr.Stdin)
+				if rr := testutil.ReadRecord(t, rec); !rr.HasPassword || rr.Password != "typed" {
+					t.Errorf("client password %q, want the typed password", rr.Password)
 				}
 			}
 		})
@@ -498,8 +500,8 @@ func TestConnect_DismissedUnlock(t *testing.T) {
 			if got.code != 0 {
 				t.Fatalf("exit %d stderr %q", got.code, got.stderr)
 			}
-			if rr := testutil.ReadRecord(t, rec); rr.Stdin != "typed\n" {
-				t.Errorf("client stdin %q, want the typed password", rr.Stdin)
+			if rr := testutil.ReadRecord(t, rec); !rr.HasPassword || rr.Password != "typed" {
+				t.Errorf("client password %q, want the typed password", rr.Password)
 			}
 		})
 	}
@@ -572,5 +574,53 @@ func TestConnect_SaveIntoALockedKeyring(t *testing.T) {
 				t.Fatalf("%d items stored after a refused unlock", n)
 			}
 		})
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"work":      "work",
+		"Work-PC_1": "Work-PC_1",
+		"Work PC":   "'Work PC'",
+		"it's":      `'it'\''s'`,
+		"a;b":       "'a;b'",
+		"":          "''",
+	} {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestWritesTo(t *testing.T) {
+	t.Parallel()
+	_, slave, err := pty.Open()
+	if err != nil {
+		t.Skipf("no pty: %v", err)
+	}
+	defer func() { _ = slave.Close() }()
+	_, other, err := pty.Open()
+	if err != nil {
+		t.Skipf("no pty: %v", err)
+	}
+	defer func() { _ = other.Close() }()
+	file, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	for name, tc := range map[string]struct {
+		w    io.Writer
+		want bool
+	}{
+		"the same terminal": {slave, true},
+		"a buffer":          {&bytes.Buffer{}, false},
+		"another terminal":  {other, false},
+		"a file":            {file, false},
+	} {
+		if got := writesTo(tc.w, slave); got != tc.want {
+			t.Errorf("%s: writesTo = %v, want %v", name, got, tc.want)
+		}
 	}
 }

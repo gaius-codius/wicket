@@ -91,6 +91,9 @@ type Model struct {
 	retry       retryState
 	useOnce     *secret.Password
 	useOnceName string
+	// inTerminal names the profile whose next connect runs with the
+	// terminal handed to the client (see certificate.go); "" for none.
+	inTerminal string
 	// session is the client running now, drawn by the session view. Only
 	// Ctrl+C does anything while it is set.
 	session    *sessionState
@@ -250,6 +253,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleBackground(msg)
 	case sessionEndedMsg:
 		return m.handleSessionEnded(msg)
+	case terminalEndedMsg:
+		return m.handleTerminalEnded(msg)
 	case sessionRecordedMsg:
 		return m.handleSessionRecorded(msg)
 	case sessionTickMsg:
@@ -673,12 +678,15 @@ func (m Model) chrome() (string, []keyHint) {
 	case viewSession:
 		return "session open", m.sessionHints()
 	case viewRetry:
-		return m.listContext(), []keyHint{
-			{"enter", "retry", intentPrimary},
-			{"n", "new password", intentNormal},
-			{"esc", "dismiss", intentNormal},
-			{"?", "help", intentNormal},
+		hs := []keyHint{{"enter", "retry", intentPrimary}}
+		if m.retry.certificate {
+			hs = append(hs, keyHint{"c", "check certificate", intentNormal})
 		}
+		return m.listContext(), append(hs,
+			keyHint{"n", "new password", intentNormal},
+			keyHint{"esc", "dismiss", intentNormal},
+			keyHint{"?", "help", intentNormal},
+		)
 	default:
 		return m.listContext(), m.listHints()
 	}

@@ -28,6 +28,13 @@ type retryState struct {
 	// fullscreenHint.
 	fullscreen    string
 	fullscreenWhy string
+	// certificate marks a FreeRDP client whose TLS connection failed, as it
+	// does when it refuses a server certificate it could not ask about; the
+	// overlay offers a retry in the terminal, where it can.
+	certificate bool
+	// certificateAsked marks the same failure in a client that had the
+	// terminal, which could ask; see handleTerminalEnded.
+	certificateAsked bool
 }
 
 func (m Model) beginConnect() (tea.Model, tea.Cmd) {
@@ -39,6 +46,9 @@ func (m Model) beginConnect() (tea.Model, tea.Cmd) {
 	if m.useOnce != nil && m.useOnceName == p.Name {
 		typed = m.useOnce
 	}
+	// A connect from the list is never the retry in the terminal that c
+	// asked for and did not get to.
+	m.inTerminal = ""
 	return m.connectProfile(p, typed)
 }
 
@@ -92,6 +102,11 @@ const noUserMsg = "add a user to connect"
 // cannot keep the session from being drawn or stopped. checked is what
 // checkShares found for p's shares.
 func (m Model) runConnect(p config.Profile, cred rdp.Credential, keepUseOnce bool, extra string, checked config.CheckedShares) (tea.Model, tea.Cmd) {
+	inTerminal := m.inTerminal == p.Name
+	m.inTerminal = ""
+	if inTerminal {
+		return m.runInTerminal(p, cred, keepUseOnce, extra, checked)
+	}
 	s, err := m.app.Start(p, cred, checked)
 	if err != nil {
 		return m.applyConnect(p, cred, keepUseOnce, extra, startFailed(err))
@@ -150,6 +165,7 @@ func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce b
 			note: clientNote(cr.Output, cred),
 		}
 		m.retry.fullscreen, m.retry.fullscreenWhy = m.app.fullscreenHint(p, cr.Outcome)
+		m.retry.certificate = cr.Class == rdp.ClassFailed && cr.Outcome.MaybeCertificate()
 		m.view = viewRetry
 		// The overlay carries the session's own message; only the other
 		// warnings stay on the status line.
@@ -172,6 +188,8 @@ func (m Model) applyConnect(p config.Profile, cred rdp.Credential, keepUseOnce b
 }
 
 func (m Model) handleRetryKey(key string) (tea.Model, tea.Cmd) {
+	// Only c asks for the terminal, and only for the connect it starts.
+	m.inTerminal = ""
 	switch key {
 	case "?":
 		return m.openHelp()
@@ -203,25 +221,37 @@ func (m Model) handleRetryKey(key string) (tea.Model, tea.Cmd) {
 			}
 			return m.openModal(p, nil, true, checked)
 		})
-	case "enter":
-		p := m.retry.profile
-		held := m.retry.held
-		useOnce := m.retry.useOnce
-		m.retry = retryState{}
-		// Leave the overlay before starting the client. Connecting is
-		// asynchronous in production, so staying here would draw the retry
-		// box with its message already cleared.
-		m.view = viewList
-		if useOnce && held != nil && !held.Empty() {
-			cp := *held
-			m.useOnce = &cp
-			m.useOnceName = p.Name
-			return m.connectProfile(p, &cp)
+	case "c":
+		if !m.retry.certificate {
+			return m, nil
 		}
-		return m.connectProfile(p, nil)
+		m.inTerminal = m.retry.profile.Name
+		return m.retryConnect()
+	case "enter":
+		return m.retryConnect()
 	default:
 		return m, nil
 	}
+}
+
+// retryConnect connects to the retry overlay's profile again, with the
+// password it was given when that was a use-once one.
+func (m Model) retryConnect() (tea.Model, tea.Cmd) {
+	p := m.retry.profile
+	held := m.retry.held
+	useOnce := m.retry.useOnce
+	m.retry = retryState{}
+	// Leave the overlay before starting the client. Connecting is
+	// asynchronous in production, so staying here would draw the retry
+	// box with its message already cleared.
+	m.view = viewList
+	if useOnce && held != nil && !held.Empty() {
+		cp := *held
+		m.useOnce = &cp
+		m.useOnceName = p.Name
+		return m.connectProfile(p, &cp)
+	}
+	return m.connectProfile(p, nil)
 }
 
 // retryHint does not claim the password was wrong: a session also ends
@@ -294,11 +324,17 @@ func (m Model) retryBlocks(lo layout) (msg, fullscreen, detail, why, note, hint 
 	if d := retryDetail(m.retry); d != "" {
 		detail = block(d)
 	}
-	if m.retry.fullscreen != "" {
+	action, actionWhy := m.retry.fullscreen, m.retry.fullscreenWhy
+	if m.retry.certificate {
+		// A certificate refusal ends in exit 143 and the fullscreen
+		// failure in 136, so the two never compete for the slot.
+		action, actionWhy = certificateAction, certificateWhy
+	}
+	if action != "" {
 		// The arrow and the accent are what set this apart from the muted
 		// report around it; the words alone carry it where there is no
 		// colour.
-		wrapped := strings.Split(lipgloss.NewStyle().Width(max(lo.Inner-2, 1)).Render(m.retry.fullscreen), "\n")
+		wrapped := strings.Split(lipgloss.NewStyle().Width(max(lo.Inner-2, 1)).Render(action), "\n")
 		for i, ln := range wrapped {
 			prefix := m.styles.accent.Render("→ ")
 			if i > 0 {
@@ -307,8 +343,11 @@ func (m Model) retryBlocks(lo layout) (msg, fullscreen, detail, why, note, hint 
 			fullscreen = append(fullscreen, prefix+m.styles.primary.Render(strings.TrimRight(ln, " ")))
 		}
 	}
-	if m.retry.fullscreenWhy != "" {
-		why = block(m.retry.fullscreenWhy)
+	if m.retry.certificateAsked {
+		actionWhy = certificateAskedWhy
+	}
+	if actionWhy != "" {
+		why = block(actionWhy)
 	}
 	if m.retry.note != "" {
 		// One line only: a client's log line can be long, and the hint

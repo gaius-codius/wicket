@@ -366,11 +366,11 @@ func TestSession_StoppedIsNotAFailure(t *testing.T) {
 	}
 }
 
-// A client that echoes its stdin would put the password in its output. It
+// A client that echoes the password it was given would put the password in its output. It
 // is captured, never drawn.
 func TestSession_EchoedPasswordNeverDrawn(t *testing.T) {
 	_ = withFakeRDP(t)
-	t.Setenv("FAKERDP_ECHO_STDIN", "1")
+	t.Setenv("FAKERDP_ECHO_PASSWORD", "1")
 	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	m, cmd := startSession(t, h)
 	m = settle(m, cmd)
@@ -389,7 +389,7 @@ func TestSession_EchoedPasswordNeverDrawn(t *testing.T) {
 // already changed.
 func TestSession_EchoedEscapedPasswordNeverDrawn(t *testing.T) {
 	_ = withFakeRDP(t)
-	t.Setenv("FAKERDP_ECHO_STDIN", "1")
+	t.Setenv("FAKERDP_ECHO_PASSWORD", "1")
 	escaped := sentinel[:3] + "\x1b[31m" + sentinel[3:]
 	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	p, _ := h.m.app.Cfg.Profile("work")
@@ -426,7 +426,7 @@ func TestClientNote_DropsEveryFormOfThePassword(t *testing.T) {
 func TestRun_QuitStopsTheSessionAndKeepsItsOutput(t *testing.T) {
 	_, helperPID := trapClient(t)
 	t.Setenv("FAKERDP_OUTPUT", "client-log-line")
-	t.Setenv("FAKERDP_ECHO_STDIN", "1")
+	t.Setenv("FAKERDP_ECHO_PASSWORD", "1")
 	h := newHarness(t, fixtureTOML("work", "h", "u"), secret.NewMemory())
 	p, _ := h.m.app.Cfg.Profile("work")
 	_ = h.store.Upsert(bg, secret.IdentityFor(h.m.app.Cfg.Path(), p), mustPassword(t, sentinel))

@@ -253,6 +253,14 @@ until that window closes, then cleans up the process group. During a session,
 fails, or the session ends within a few seconds, you get the reason and can
 retry or enter a new password. A logoff or disconnect goes back to the list.
 
+FreeRDP asks before it trusts a server certificate it has not seen, or one
+that has changed. The SDL client asks in a window. The X11 client asks in
+the terminal, so it can't ask in a session started from the list: it
+refuses the certificate and the session fails with "TLS connection failed".
+Press `c` there to retry in the terminal: FreeRDP shows the certificate and
+asks, and saves your answer in its own store. `wicket connect` run from a
+terminal lets FreeRDP ask directly.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Security:

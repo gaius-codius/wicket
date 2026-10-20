@@ -34,7 +34,6 @@ func TestBuildPlan_DefaultOrder(t *testing.T) {
 		"/d:CORP",
 		"/size:100%",
 		"+dynamic-resolution",
-		"/from-stdin:force",
 	}
 	if strings.Join(plan.Args, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("args =\n%s\nwant\n%s", strings.Join(plan.Args, "\n"), strings.Join(want, "\n"))
@@ -68,7 +67,6 @@ func TestBuildPlan_Omits(t *testing.T) {
 		"/size:1920x1080",
 		"/f",
 		"/scale:180",
-		"/from-stdin:force",
 	}
 	if strings.Join(plan.Args, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got\n%s", strings.Join(plan.Args, "\n"))

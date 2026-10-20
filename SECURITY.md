@@ -23,22 +23,34 @@ The latest release. There are no backports to earlier tags.
   name). A config file that already contains
   a key named `password`, `pass`, `secret` or `passwd` has it stripped on load,
   reported as a warning, and never written back.
-- **Passwords never reach the process table.** The FreeRDP child is started
-  with `/from-stdin:force` and the password is written to its stdin. Building a
-  command line containing `/p:` is refused outright, so a hand-edited config
-  cannot smuggle one in. `/cert:ignore` is refused for the same reason:
-  certificate trust is FreeRDP's decision to present, not Wicket's to suppress.
+- **Passwords never reach the process table.** The FreeRDP child's command
+  line is `/args-from:fd:3` alone. Its arguments, the password last as `/p:`,
+  are written a line each to a private pipe on its file descriptor 3, which
+  nothing else holds. A profile argument containing `/p:` is refused outright,
+  so a hand-edited config cannot smuggle one in, and so is one containing a
+  line break, which would reach FreeRDP as an extra argument. `/cert:ignore`
+  is refused as well: certificate trust is FreeRDP's decision to present, not
+  Wicket's to suppress.
+- **Certificate trust stays with FreeRDP.** Wicket never reads or writes
+  FreeRDP's certificate store. When FreeRDP has a server certificate it has not
+  been told to trust, new or changed, it shows it and asks on its stdin.
+  `wicket connect` run from a terminal hands the client that terminal. A
+  session started from the TUI has the null device as its stdin, so FreeRDP
+  refuses the certificate. The TUI then offers a retry with the terminal
+  handed to the client, where FreeRDP asks. Only FreeRDP's answer changes its
+  store.
 - **A password that cannot be delivered is an error, not a silent fallback.**
-  If the write to the child's stdin fails, the client is killed and the failure
-  is reported, rather than leaving it sitting at a prompt it can never satisfy.
+  If the write to the child's arguments pipe fails, the client is killed and
+  the failure is reported, rather than leaving it to start without them.
 - **Config and state are written `0600`**, atomically, with the file and its
   directory synced so a crash cannot leave a half-written config behind.
 - **Profile fields reject control characters.** A newline or an escape sequence
   in a hostname would otherwise reach both the terminal and the FreeRDP command
   line.
-- **Password length is bounded** at 511 bytes, the most FreeRDP keeps on
-  every path it reads a password by, so a password is never cut short on its way to the host and a
-  pathological value cannot be used to stall a write to the client. A saved
+- **Password length is bounded** at 511 bytes, the most FreeRDP kept when it
+  read a password from stdin, so a password saved under that rule is never cut
+  short, and, with the arguments bounded too, a pathological value cannot be
+  used to stall a write to the client. A saved
   password over the limit is reported when connecting, not used.
 - **Keyring prompts are completed, not ignored.** A write against a locked
   keyring is not reported as saved until the prompt is answered. On Linux

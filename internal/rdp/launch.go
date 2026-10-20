@@ -38,10 +38,18 @@ var (
 const argsFrom = "/args-from:fd:3"
 
 // maxArgsBytes bounds what is written to the pipe before the client is
-// known to be reading it. It fits in the smallest pipe buffer Wicket runs
-// on, macOS's 16 KiB, so a client that never reads fd 3 cannot hold the
-// launch: the write completes, and the client fails on its own.
-const maxArgsBytes = 15 << 10
+// known to be reading it, the password included. It fits in a single page,
+// the smallest buffer a pipe gets: Linux gives new pipes one or two pages
+// once a user has more pipe buffers than fs.pipe-user-pages-soft allows. A
+// client that never reads fd 3 therefore cannot hold the launch, which runs
+// on the TUI's update loop: the write completes, and the client fails on its
+// own.
+const maxArgsBytes = 4 << 10
+
+// passwordReserve is the room kept in maxArgsBytes for "/p:", the longest
+// password a credential holds (secret.NewPassword's 511 bytes) and its line
+// break.
+const passwordReserve = 3 + 511 + 1
 
 // Credential writes one password line to the pipe the client reads its
 // arguments from, after the "/p:" the launcher has written.
@@ -336,7 +344,19 @@ func (l *Launcher) Start(plan Plan, cred Credential) (*Session, error) {
 		sigs = make(chan os.Signal, 4)
 		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	}
+	if l.Terminal != nil {
+		// The client keeps the terminal's foreground for the whole session,
+		// and Wicket waits only for it to exit. Ctrl+Z there would stop it
+		// with nothing left to resume it: the shell knows only Wicket's job.
+		// It starts with SIGTSTP ignored, which survives exec and which
+		// FreeRDP leaves alone (libfreerdp/utils/signal.c skips a signal
+		// that is ignored), so Ctrl+Z does nothing while it runs.
+		signal.Ignore(syscall.SIGTSTP)
+	}
 	err = cmd.Start()
+	if l.Terminal != nil {
+		signal.Reset(syscall.SIGTSTP)
+	}
 	// The client has its own copy of the read end now, or never will. Ours
 	// would keep the pipe open after the client exits, and a write to a
 	// client that died would block rather than fail.
@@ -398,7 +418,7 @@ func (l *Launcher) Start(plan Plan, cred Credential) (*Session, error) {
 			// session says so, and the caller exits as told.
 			return sess, nil
 		}
-		return nil, fmt.Errorf("could not send the password to %s: %w", plan.Client, err)
+		return nil, fmt.Errorf("could not send the arguments and password to %s: %w", plan.Client, err)
 	}
 	// Closing the pipe ends the arguments: FreeRDP reads until it is closed.
 	_ = argsW.Close()
@@ -420,9 +440,8 @@ func encodeArgs(args []string) (string, error) {
 		b.WriteString(a)
 		b.WriteByte('\n')
 	}
-	// The password, at most a few hundred bytes, is still to come; see
-	// secret.NewPassword.
-	if b.Len() > maxArgsBytes-1024 {
+	// The password is still to come.
+	if b.Len() > maxArgsBytes-passwordReserve {
 		return "", ErrArgsTooLong
 	}
 	return b.String(), nil

@@ -32,6 +32,9 @@ type retryState struct {
 	// does when it refuses a server certificate it could not ask about; the
 	// overlay offers a retry in the terminal, where it can.
 	certificate bool
+	// certificateAsked marks the same failure in a client that had the
+	// terminal, which could ask; see handleTerminalEnded.
+	certificateAsked bool
 }
 
 func (m Model) beginConnect() (tea.Model, tea.Cmd) {
@@ -339,6 +342,9 @@ func (m Model) retryBlocks(lo layout) (msg, fullscreen, detail, why, note, hint 
 			}
 			fullscreen = append(fullscreen, prefix+m.styles.primary.Render(strings.TrimRight(ln, " ")))
 		}
+	}
+	if m.retry.certificateAsked {
+		actionWhy = certificateAskedWhy
 	}
 	if actionWhy != "" {
 		why = block(actionWhy)

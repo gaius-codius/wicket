@@ -120,7 +120,7 @@ func TestStart_DoesNotBlockWhenTheClientDelaysReadingArgs(t *testing.T) {
 	l := &Launcher{Stdout: io.Discard, Stderr: io.Discard}
 	started := make(chan *Session, 1)
 	go func() {
-		s, err := l.Start(testPlan(t), lineCred(strings.Repeat("x", 4096)))
+		s, err := l.Start(testPlan(t), lineCred(strings.Repeat("x", 511)))
 		if err != nil {
 			t.Error(err)
 			close(started)

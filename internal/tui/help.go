@@ -19,17 +19,33 @@ func (m Model) handleHelpKey(key string) (tea.Model, tea.Cmd) {
 	case "g", "home":
 		m.helpTop = 0
 	case "G", "shift+g", "end", "pgdown":
-		m.helpTop = len(helpKeys(m.helpFor))
+		m.helpTop = len(m.helpKeys())
 	case "pgup":
 		m.helpTop = 0
 	}
 	return m, nil
 }
 
+// helpKeys is helpKeys for the view help is open over, less the c of a
+// retry overlay that offers no certificate retry: there c does nothing.
+func (m Model) helpKeys() []hint {
+	keys := helpKeys(m.helpFor)
+	if m.helpFor != viewRetry || m.retry.certificate {
+		return keys
+	}
+	out := keys[:0:0]
+	for _, k := range keys {
+		if k.key != "c" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // helpLines renders the key list one entry per line, truncated to width so a
 // narrow panel does not wrap an entry onto a second row.
 func (m Model) helpLines(width int) []string {
-	keys := helpKeys(m.helpFor)
+	keys := m.helpKeys()
 	w := 0
 	for _, k := range keys {
 		w = max(w, len(k.key))

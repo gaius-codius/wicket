@@ -71,6 +71,9 @@ type App struct {
 	// after Bubble Tea has returned whatever model it last had.
 	mu     sync.Mutex
 	active *Session
+	// inTerminal is set while a client runs with the terminal (see
+	// StartInTerminal), whose launcher passes Wicket's signals on itself.
+	inTerminal bool
 	// majors remembers what each client said when asked its version, so
 	// that opening the form does not run it again every time. A probe that
 	// failed is remembered too: discovery runs in Update, and a client that
@@ -491,6 +494,22 @@ func (a *App) StartInTerminal(p config.Profile, cred rdp.Credential, checked con
 	})
 }
 
+// InTerminal reports whether a client is running with the terminal. A
+// SIGINT sent to Wicket meanwhile has gone to the client already, through
+// its launcher; handled again once Bubble Tea is back, it would quit Wicket
+// too.
+func (a *App) InTerminal() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.inTerminal
+}
+
+func (a *App) setInTerminal(v bool) {
+	a.mu.Lock()
+	a.inTerminal = v
+	a.mu.Unlock()
+}
+
 // start launches the client for p with the launcher set up by setup, and
 // publishes the session. out is where its output is kept, if anywhere.
 func (a *App) start(p config.Profile, cred rdp.Credential, checked config.CheckedShares, out *rdp.Tail, setup func(*rdp.Launcher)) (*Session, error) {
@@ -634,11 +653,13 @@ func clientNote(out []byte, cred rdp.Credential) string {
 }
 
 // terminalNoise reports a line FreeRDP logs about the terminal rather than
-// the connection. Its password reader tries to switch off echo on stdin, and
-// stdin is Wicket's pipe, so every run logs "tcsetattr(TCSANOW) failed with
-// Inappropriate ioctl for device" as an ERROR, once more on the way out,
-// after the real error: picked as the last error, it stood in for why every
-// real connection had failed.
+// the connection. While the password reached it on stdin (/from-stdin), its
+// password reader tried to switch off echo on that pipe, and every run
+// logged "tcsetattr(TCSANOW) failed with Inappropriate ioctl for device" as
+// an ERROR, once more on the way out, after the real error: picked as the
+// last error, it stood in for why every real connection had failed. The
+// password now comes on fd 3 and stdin is the null device, but the filter
+// stays for any path on which FreeRDP still tries the terminal.
 func terminalNoise(line string) bool {
 	return strings.Contains(line, "com.freerdp.utils.passphrase") ||
 		strings.Contains(line, "tcsetattr") || strings.Contains(line, "tcgetattr")

@@ -41,6 +41,11 @@ func runProgram(m Model, opts ...tea.ProgramOption) error {
 		for {
 			select {
 			case sig := <-sigs:
+				if sig == syscall.SIGINT && app.InTerminal() {
+					// The client's launcher has passed it on; see
+					// App.InTerminal.
+					continue
+				}
 				// Send returns at once when the program has finished.
 				p.Send(signalMsg{sig: sig})
 			case <-done:

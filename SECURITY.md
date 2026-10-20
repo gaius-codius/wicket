@@ -33,12 +33,12 @@ The latest release. There are no backports to earlier tags.
   Wicket's to suppress.
 - **Certificate trust stays with FreeRDP.** Wicket never reads or writes
   FreeRDP's certificate store. When FreeRDP has a server certificate it has not
-  been told to trust, new or changed, it shows it and asks on its stdin.
-  `wicket connect` run from a terminal hands the client that terminal. A
-  session started from the TUI has the null device as its stdin, so FreeRDP
-  refuses the certificate. The TUI then offers a retry with the terminal
-  handed to the client, where FreeRDP asks. Only FreeRDP's answer changes its
-  store.
+  been told to trust, new or changed, it shows it and asks: the SDL client in a
+  window of its own, the X11 client on its stdin. `wicket connect` run from a
+  terminal hands the client that terminal. A session started from the TUI has
+  the null device as its stdin, so the X11 client refuses the certificate. The
+  TUI then offers a retry with the terminal handed to the client, where
+  FreeRDP asks. Only FreeRDP's answer changes its store.
 - **A password that cannot be delivered is an error, not a silent fallback.**
   If the write to the child's arguments pipe fails, the client is killed and
   the failure is reported, rather than leaving it to start without them.

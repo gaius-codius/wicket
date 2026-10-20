@@ -25,11 +25,14 @@ type record struct {
 	// Argv is the arguments as FreeRDP would read them: the command line,
 	// or, under /args-from:fd:3, the program name and the lines read from
 	// fd 3, less the /p: line.
-	Argv        []string          `json:"argv"`
-	Password    string            `json:"password"`
-	HasPassword bool              `json:"has_password"`
-	Environ     map[string]string `json:"environ"`
-	Stdin       string            `json:"stdin"`
+	Argv        []string `json:"argv"`
+	Password    string   `json:"password"`
+	HasPassword bool     `json:"has_password"`
+	// ArgsLines is every line read from fd 3, the /p: line included and in
+	// the order they came.
+	ArgsLines []string          `json:"args_lines"`
+	Environ   map[string]string `json:"environ"`
+	Stdin     string            `json:"stdin"`
 	// StdinTTY says stdin was a terminal, and Foreground that the client's
 	// process group was the terminal's foreground group.
 	StdinTTY   bool `json:"stdin_tty"`
@@ -163,6 +166,7 @@ func readArgs(rec *record) {
 		if line == "" {
 			break
 		}
+		rec.ArgsLines = append(rec.ArgsLines, line)
 		if pw, ok := strings.CutPrefix(line, "/p:"); ok {
 			rec.Password, rec.HasPassword = pw, true
 			continue

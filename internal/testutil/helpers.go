@@ -19,12 +19,15 @@ type FakeRecord struct {
 	Argv []string `json:"argv"`
 	// Password is the /p: argument read from fd 3; HasPassword says there
 	// was one.
-	Password    string            `json:"password"`
-	HasPassword bool              `json:"has_password"`
-	Environ     map[string]string `json:"environ"`
-	Stdin       string            `json:"stdin"`
-	StdinTTY    bool              `json:"stdin_tty"`
-	Foreground  bool              `json:"foreground"`
+	Password    string `json:"password"`
+	HasPassword bool   `json:"has_password"`
+	// ArgsLines is every line read from fd 3, the /p: line included and in
+	// the order they came.
+	ArgsLines  []string          `json:"args_lines"`
+	Environ    map[string]string `json:"environ"`
+	Stdin      string            `json:"stdin"`
+	StdinTTY   bool              `json:"stdin_tty"`
+	Foreground bool              `json:"foreground"`
 	// CertAnswer is the answer the client read when it asked about a
 	// certificate (FAKERDP_CERT), "EOF" for none, or "" when it trusted the
 	// certificate without asking.

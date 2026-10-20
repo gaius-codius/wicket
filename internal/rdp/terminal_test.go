@@ -125,13 +125,24 @@ func TestTerminalHelper(t *testing.T) {
 // the client, whether the terminal came back, and whether it was asked.
 func runOnTerminal(t *testing.T, home, answer string) (code int, restored, asked bool) {
 	t.Helper()
+	return runOnTerminalWith(t, home, answer, false, 20*time.Second)
+}
+
+// runOnTerminalWith is runOnTerminal, with ctrlZ sending the terminal's
+// suspend character before the answer, and a limit on the whole run: a
+// client that stopped would otherwise hold the pty open for ever.
+func runOnTerminalWith(t *testing.T, home, answer string, ctrlZ bool, limit time.Duration) (code int, restored, asked bool) {
+	t.Helper()
 	master, slave, err := pty.Open()
 	if err != nil {
 		t.Skipf("no pty: %v", err)
 	}
 	t.Cleanup(func() { _ = master.Close() })
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	t.Cleanup(cancel)
+	// Closing the master ends the read below, and hangs up a client left
+	// stopped on the terminal.
+	go func() { <-ctx.Done(); _ = master.Close() }()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestTerminalHelper$", "-test.count=1")
 	cmd.Env = append(os.Environ(), "WICKET_TEST_TERMINAL_HELPER="+home)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
@@ -156,6 +167,12 @@ func runOnTerminal(t *testing.T, home, answer string) (code int, restored, asked
 		line = append(line, b)
 		if strings.HasSuffix(string(line), trustPrompt) {
 			asked = true
+			if ctrlZ {
+				if _, err := master.Write([]byte{0x1a}); err != nil {
+					t.Fatal(err)
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
 			if _, err := master.Write([]byte(answer + "\n")); err != nil {
 				t.Fatal(err)
 			}
@@ -193,9 +210,15 @@ func TestStart_TerminalCertificatePrompt(t *testing.T) {
 		{name: "changed, cancelled", saved: oldCert, answer: "n", code: 143, after: oldCert},
 		{name: "first seen, accepted", answer: "y", code: 0, after: newCert},
 		{name: "first seen, cancelled", answer: "n", code: 143, after: ""},
+		// The store cases check the fake's FreeRDP contract; what Wicket
+		// owes is the terminal side: the client owns it, the answer reaches
+		// it, and the terminal comes back.
 		{name: "changed, store not writable", saved: oldCert, answer: "y", readOnly: true, code: 143, after: oldCert},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.readOnly && os.Geteuid() == 0 {
+				t.Skip("root ignores file modes")
+			}
 			home, entry := certStore(t)
 			// Another server's entry, which no answer may touch.
 			other := filepath.Join(filepath.Dir(entry), "other_3389.pem")
@@ -278,5 +301,49 @@ func TestOwnsTerminal_NotATerminal(t *testing.T) {
 	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
 	if _, err := l.Start(testPlan(t), lineCred("pw")); err == nil {
 		t.Fatal("started the client on a terminal Wicket cannot hand over")
+	}
+}
+
+// Ctrl+Z at the certificate question does not stop the client: it is started
+// with SIGTSTP ignored, as Wicket is waiting on it and nothing would resume
+// it. The answer after it still reaches the client, which finishes.
+func TestStart_TerminalCtrlZDoesNotStopTheClient(t *testing.T) {
+	testutil.PrependPATH(t, testutil.FakeRDPDir(t))
+	home, entry := certStore(t)
+	writeEntry(t, entry, oldCert)
+	t.Setenv("FAKERDP_CERT", newCert)
+	rec := filepath.Join(t.TempDir(), "rec.json")
+	t.Setenv("FAKERDP_RECORD", rec)
+
+	code, restored, asked := runOnTerminalWith(t, home, "y", true, 10*time.Second)
+	if !asked || code != 0 || !restored {
+		t.Fatalf("asked %v, client exit %d, terminal given back %v: the client did not finish after Ctrl+Z", asked, code, restored)
+	}
+	if got := readEntry(t, entry); got != newCert {
+		t.Fatalf("store entry %q, want %q", got, newCert)
+	}
+}
+
+// Only FreeRDP's X11 clients, which ask on stdin, end with the TLS failure
+// code over a certificate they could not ask about.
+func TestOutcome_MaybeCertificate(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		client string
+		code   int
+		want   bool
+	}{
+		{"xfreerdp3", 143, true},
+		{"xfreerdp", 143, true},
+		{"/usr/bin/xfreerdp3", 143, true},
+		{"sdl-freerdp3", 143, false},
+		{"sdl-freerdp", 143, false},
+		{"myrdp", 143, false},
+		{"xfreerdp3", 131, false},
+		{"xfreerdp3", 0, false},
+	} {
+		if got := (Outcome{Client: tc.client, ExitCode: tc.code}).MaybeCertificate(); got != tc.want {
+			t.Errorf("%s exit %d: MaybeCertificate = %v, want %v", tc.client, tc.code, got, tc.want)
+		}
 	}
 }

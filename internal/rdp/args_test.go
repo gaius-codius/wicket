@@ -77,6 +77,9 @@ func TestStart_ArgumentsTravelOnTheArgsPipe(t *testing.T) {
 	if !r.HasPassword || r.Password != "pw: with spaces, and a colon" {
 		t.Fatalf("password %q (%v)", r.Password, r.HasPassword)
 	}
+	if n := len(r.ArgsLines); n != len(plan.Args)+1 || r.ArgsLines[n-1] != "/p:pw: with spaces, and a colon" {
+		t.Fatalf("lines on fd 3 %q: the password line must come last, after %q", r.ArgsLines, plan.Args)
+	}
 	if r.Stdin != "" || r.StdinTTY {
 		t.Fatalf("stdin %q, tty %v: it is the null device", r.Stdin, r.StdinTTY)
 	}

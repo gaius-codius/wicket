@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
 	"github.com/gaius-codius/wicket/internal/testutil"
 )
@@ -17,7 +18,7 @@ import (
 // exits with code.
 func certHarness(t *testing.T, code string) (*harness, string, secret.Identity) {
 	t.Helper()
-	return certHarnessFor(t, "sdl-freerdp3", code)
+	return certHarnessFor(t, "xfreerdp3", code)
 }
 
 func certHarnessFor(t *testing.T, client, code string) (*harness, string, secret.Identity) {
@@ -98,8 +99,11 @@ func TestCertificate_OfferedOnlyAfterFreeRDPTLSFailure(t *testing.T) {
 		name, client, code string
 		want               bool
 	}{
-		{"freerdp 143", "sdl-freerdp3", "143", true},
-		{"freerdp 131", "sdl-freerdp3", "131", false},
+		{"x11 freerdp 143", "xfreerdp3", "143", true},
+		{"x11 freerdp 131", "xfreerdp3", "131", false},
+		// The SDL client asks in a window of its own, so 143 says nothing
+		// about stdin.
+		{"sdl freerdp 143", "sdl-freerdp3", "143", false},
 		{"other client 143", "myrdp", "143", false},
 	}
 	for _, tc := range tests {
@@ -228,5 +232,131 @@ func TestTerminalConnect_RunNeedsAFileStdin(t *testing.T) {
 	}
 	if c.started {
 		t.Fatal("started set although no client ran")
+	}
+}
+
+// batchMsgs runs cmd and the commands of any batch it returns, and gives the
+// messages they yield.
+func batchMsgs(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if b, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, c := range b {
+			out = append(out, batchMsgs(c)...)
+		}
+		return out
+	}
+	return []tea.Msg{msg}
+}
+
+func endedInTerminal(t *testing.T, h *harness, started bool) (Model, []tea.Msg) {
+	t.Helper()
+	p, _ := h.m.app.Cfg.Profile("work")
+	msg := terminalEndedMsg{
+		started: started, p: p, cred: mustPassword(t, sentinel),
+		cr: ConnectResult{Class: rdp.ClassFailed, Outcome: rdp.Outcome{Client: "xfreerdp3", ExitCode: 143}},
+	}
+	nm, cmd := h.m.Update(msg)
+	return nm.(Model), batchMsgs(cmd)
+}
+
+func recordedMsgs(msgs []tea.Msg) int {
+	n := 0
+	for _, m := range msgs {
+		if _, ok := m.(sessionRecordedMsg); ok {
+			n++
+		}
+	}
+	return n
+}
+
+// A TLS failure after a run in which the client had the terminal is not one
+// it could not ask about: no second retry in the terminal is offered, the
+// overlay says what it can, and the last-used time is recorded.
+func TestCertificate_FailureAfterTerminalRunIsNotOfferedAgain(t *testing.T) {
+	h, _, _ := certHarness(t, "143")
+	connectToOverlay(t, h)
+	m, msgs := endedInTerminal(t, h, true)
+	if m.view != viewRetry {
+		t.Fatalf("view %v, want the retry overlay", m.view)
+	}
+	if m.retry.certificate || !m.retry.certificateAsked {
+		t.Fatalf("certificate %v, asked %v; want false, true", m.retry.certificate, m.retry.certificateAsked)
+	}
+	out := screen(m)
+	// The note wraps inside the panel's border.
+	flat := strings.Join(strings.Fields(strings.NewReplacer("│", " ").Replace(out)), " ")
+	if !strings.Contains(flat, certificateAskedWhy) {
+		t.Fatalf("overlay lacks %q:\n%s", certificateAskedWhy, out)
+	}
+	if strings.Contains(out, "Press c to retry in the terminal") || hasHint(m, "c") {
+		t.Fatalf("c is still offered:\n%s", out)
+	}
+	if n := recordedMsgs(msgs); n != 1 {
+		t.Fatalf("%d last-used records, want 1 (msgs %v)", n, msgs)
+	}
+}
+
+// A run that never started the client records nothing and keeps the
+// retry state as applyConnect set it.
+func TestCertificate_UnstartedTerminalRunRecordsNothing(t *testing.T) {
+	h, _, _ := certHarness(t, "143")
+	connectToOverlay(t, h)
+	m, msgs := endedInTerminal(t, h, false)
+	if n := recordedMsgs(msgs); n != 0 {
+		t.Fatalf("%d last-used records for a client that never ran", n)
+	}
+	if m.retry.certificateAsked {
+		t.Fatal("certificateAsked set although the client never had the terminal")
+	}
+}
+
+// InTerminal is false outside terminalConnect.Run, and a Run that fails
+// before the client starts leaves it so. (A true reading needs a terminal
+// Wicket controls, which a test process has none of.)
+func TestTerminalConnect_InTerminalClearedAfterRun(t *testing.T) {
+	h, _, _ := certHarness(t, "143")
+	if h.m.app.InTerminal() {
+		t.Fatal("InTerminal before any run")
+	}
+	c := &terminalConnect{app: h.m.app}
+	c.SetStdin(strings.NewReader(""))
+	_ = c.Run()
+	if h.m.app.InTerminal() {
+		t.Fatal("InTerminal left set after Run")
+	}
+	h.m.app.setInTerminal(true)
+	if !h.m.app.InTerminal() {
+		t.Fatal("InTerminal not reported while set")
+	}
+	h.m.app.setInTerminal(false)
+}
+
+// Help on a retry overlay lists c only where the overlay offers it.
+func TestHelp_RetryListsCOnlyWithCertificate(t *testing.T) {
+	m := newHarness(t, fixtureTOML("work", "h", "u"), panicStore{}).m
+	has := func(m Model) bool {
+		for _, k := range m.helpKeys() {
+			if k.key == "c" {
+				return true
+			}
+		}
+		return false
+	}
+	m.helpFor = viewRetry
+	if has(m) {
+		t.Fatal("retry help lists c without a certificate failure")
+	}
+	m.retry.certificate = true
+	if !has(m) {
+		t.Fatal("retry help omits c on a certificate failure")
+	}
+	m.helpFor = viewList
+	m.retry.certificate = false
+	if got, want := len(m.helpKeys()), len(helpKeys(viewList)); got != want {
+		t.Fatalf("list help has %d keys, want %d", got, want)
 	}
 }

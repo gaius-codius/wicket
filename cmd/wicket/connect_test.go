@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/creack/pty"
+
 	"github.com/gaius-codius/wicket/internal/config"
 	"github.com/gaius-codius/wicket/internal/rdp"
 	"github.com/gaius-codius/wicket/internal/secret"
@@ -572,5 +574,53 @@ func TestConnect_SaveIntoALockedKeyring(t *testing.T) {
 				t.Fatalf("%d items stored after a refused unlock", n)
 			}
 		})
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"work":      "work",
+		"Work-PC_1": "Work-PC_1",
+		"Work PC":   "'Work PC'",
+		"it's":      `'it'\''s'`,
+		"a;b":       "'a;b'",
+		"":          "''",
+	} {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestWritesTo(t *testing.T) {
+	t.Parallel()
+	_, slave, err := pty.Open()
+	if err != nil {
+		t.Skipf("no pty: %v", err)
+	}
+	defer func() { _ = slave.Close() }()
+	_, other, err := pty.Open()
+	if err != nil {
+		t.Skipf("no pty: %v", err)
+	}
+	defer func() { _ = other.Close() }()
+	file, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	for name, tc := range map[string]struct {
+		w    io.Writer
+		want bool
+	}{
+		"the same terminal": {slave, true},
+		"a buffer":          {&bytes.Buffer{}, false},
+		"another terminal":  {other, false},
+		"a file":            {file, false},
+	} {
+		if got := writesTo(tc.w, slave); got != tc.want {
+			t.Errorf("%s: writesTo = %v, want %v", name, got, tc.want)
+		}
 	}
 }

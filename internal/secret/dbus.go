@@ -398,16 +398,19 @@ func runPrompt(ctx context.Context, conn *dbus.Conn, prompt dbus.ObjectPath) err
 
 	dismiss := func() {
 		// ctx may be over, so the dismissal gets a moment of its own; dial
-		// keeps the connection open that long.
+		// keeps the connection open that long. It goes to the daemon that
+		// showed the dialog: sent to the well-known name after that daemon
+		// has gone, it would start a new one to dismiss a prompt it never
+		// had.
 		dctx, cancel := context.WithTimeout(context.Background(), dismissGrace)
 		defer cancel()
-		_ = conn.Object(ssBus, prompt).CallWithContext(dctx, ssPromptIface+".Dismiss", 0).Err
+		_ = conn.Object(owner, prompt).CallWithContext(dctx, ssPromptIface+".Dismiss", 0).Err
 	}
 	if call := conn.Object(ssBus, prompt).CallWithContext(ctx, ssPromptIface+".Prompt", 0, ""); call.Err != nil {
 		// The service shows the dialog when it receives Prompt, before it
 		// replies, so a caller that gave up while the reply was on its way
 		// leaves the dialog on screen unless it is dismissed here. After a
-		// lost bus or an error reply the dismissal does nothing.
+		// lost bus or a lost daemon the dismissal fails at once.
 		dismiss()
 		return unavailable(ctx, call.Err)
 	}

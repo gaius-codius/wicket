@@ -492,7 +492,7 @@ func TestDBus_CancelledPromptIsDismissed(t *testing.T) {
 	defer cancel()
 	errc := make(chan error, 1)
 	go func() { errc <- NewDBus().Upsert(ctx, id, pw) }()
-	// A cancel before the dialog is up would leave nothing to dismiss.
+	// A cancel before Prompt is sent would leave no dialog to dismiss.
 	waitForPrompt(t, srv)
 	cancel()
 	err = <-errc

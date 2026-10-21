@@ -45,7 +45,8 @@ const (
 	// dialog nobody answers does.
 	PromptStall
 	// PromptHang never replies to the Prompt call itself until the server
-	// shuts down, as a daemon that goes away mid-call does.
+	// shuts down, as a daemon that goes away mid-call does. Until then it is
+	// also a dialog on screen whose reply is still on its way.
 	PromptHang
 )
 

@@ -295,8 +295,9 @@ func writeFailed(ctx context.Context, err error) error {
 // unlock opens paths, through the keyring's prompt when it raises one. A
 // refused, unanswered or failed unlock is ErrLocked, wrapping why. A caller
 // that gave up is told so instead, which is not the same as the user saying
-// no, and so is a lost bus or keyring daemon (an error the bus itself
-// sent), which says nothing about the lock.
+// no, and so is a lost bus or keyring daemon (an error the bus itself sent,
+// or the daemon leaving under the prompt), which says nothing about the
+// lock.
 func unlock(ctx context.Context, conn *dbus.Conn, svc dbus.BusObject, paths []dbus.ObjectPath) error {
 	var opened []dbus.ObjectPath
 	var prompt dbus.ObjectPath
@@ -311,8 +312,8 @@ func unlock(ctx context.Context, conn *dbus.Conn, svc dbus.BusObject, paths []db
 	}
 	// Only the keyring's own answer says the lock held: the prompt refused
 	// or left unanswered, or an error reply from the daemon. Anything else
-	// is the transport (the bus dropped mid-call, or under the prompt), and
-	// says nothing about the lock.
+	// is the transport (the bus dropped mid-call, or under the prompt, or
+	// the daemon left under it), and says nothing about the lock.
 	if ctx.Err() == nil && (errors.Is(err, ErrPromptDismissed) || errors.Is(err, ErrPromptTimeout) || isKeyringReply(err)) {
 		return fmt.Errorf("%w (%w)", ErrLocked, err)
 	}

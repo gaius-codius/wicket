@@ -137,6 +137,101 @@ func (s *Server) Disconnect() {
 	_ = s.conn.Close()
 }
 
+// WatchReply returns a channel that is closed once the bus has passed on the
+// fake's reply to the next call of method, so a test can act after the client
+// has its answer: Disconnect then loses a daemon that has replied, rather
+// than racing the reply and getting the bus's NoReply in its place. It
+// watches through a bus monitor, which sees each message as the bus routes
+// it, and must be called before the client makes the call.
+func (s *Server) WatchReply(t *testing.T, method string) <-chan struct{} {
+	t.Helper()
+	mon, err := dbus.ConnectSessionBus()
+	if err != nil {
+		t.Fatalf("connect monitor: %v", err)
+	}
+	t.Cleanup(func() { _ = mon.Close() })
+	// A monitor may not send anything once it is one, and godbus would
+	// answer a method call it sees. Eavesdropping hands every message to
+	// msgs instead, the BecomeMonitor reply too, so the call is sent
+	// without waiting on it. The buffer is generous because godbus drops
+	// what does not fit.
+	msgs := make(chan *dbus.Message, 256)
+	mon.Eavesdrop(msgs)
+	rules := []string{
+		"type='method_call',member='" + method + "'",
+		"type='method_return',sender='" + s.conn.Names()[0] + "'",
+	}
+	mon.BusObject().Go("org.freedesktop.DBus.Monitoring.BecomeMonitor", 0, nil, rules, uint32(0))
+	for monitoring := false; !monitoring; {
+		select {
+		case msg := <-msgs:
+			if msg.Type == dbus.TypeError {
+				t.Fatalf("become a monitor: %v", msg.Body)
+			}
+			monitoring = msg.Type == dbus.TypeMethodReply && header[string](msg, dbus.FieldSender) == "org.freedesktop.DBus"
+		case <-time.After(5 * time.Second):
+			t.Fatal("the bus never made the monitor one")
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		var caller string
+		var serial uint32
+		for msg := range msgs {
+			switch {
+			case msg.Type == dbus.TypeMethodCall && caller == "" && header[string](msg, dbus.FieldMember) == method:
+				caller, serial = header[string](msg, dbus.FieldSender), msg.Serial()
+			case msg.Type == dbus.TypeMethodReply && caller != "" &&
+				header[string](msg, dbus.FieldDestination) == caller && header[uint32](msg, dbus.FieldReplySerial) == serial:
+				close(done)
+				return
+			}
+		}
+	}()
+	return done
+}
+
+// header returns one of msg's header fields, or T's zero value.
+func header[T any](msg *dbus.Message, f dbus.HeaderField) T {
+	v, _ := msg.Headers[f].Value().(T)
+	return v
+}
+
+// AcceptPrompt answers a prompt PromptStall left open, as a user who deals
+// with the dialog late does: the deferred work is applied and Completed sent.
+func (s *Server) AcceptPrompt() {
+	s.mu.Lock()
+	apply := s.pending
+	s.pending = nil
+	if apply != nil {
+		apply()
+	}
+	s.mu.Unlock()
+	s.emitCompleted(false)
+}
+
+// TakeName has the fake daemon own one more bus name.
+func (s *Server) TakeName(name string) error {
+	reply, err := s.conn.RequestName(name, dbus.NameFlagDoNotQueue)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", name, err)
+	}
+	if reply != dbus.RequestNameReplyPrimaryOwner {
+		return fmt.Errorf("request %s: reply %v", name, reply)
+	}
+	return nil
+}
+
+// DropName gives up a bus name and leaves the fake connected, as a keyring
+// daemon replaced by another one does. Dropping the Secret Service's own name
+// leaves the fake able to answer calls made to it directly, such as Dismiss.
+func (s *Server) DropName(name string) error {
+	if _, err := s.conn.ReleaseName(name); err != nil {
+		return fmt.Errorf("release %s: %w", name, err)
+	}
+	return nil
+}
+
 // FailUnlock makes Unlock answer with an error reply of the given name, as a
 // keyring that refuses the unlock outright does.
 func (s *Server) FailUnlock(name string) {

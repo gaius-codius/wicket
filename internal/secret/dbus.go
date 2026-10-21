@@ -23,6 +23,8 @@ const (
 	ssItemLabel       = "org.freedesktop.Secret.Item.Label"
 	ssPromptIface     = "org.freedesktop.Secret.Prompt"
 	ssErrIsLocked     = "org.freedesktop.Secret.Error.IsLocked"
+	busName           = "org.freedesktop.DBus"
+	busPath           = "/org/freedesktop/DBus"
 )
 
 // promptTimeout bounds the wait for the user to answer a keyring prompt.
@@ -63,6 +65,10 @@ var (
 	// errBusLost means the session bus connection closed under a prompt. It
 	// is the bus that failed, not the unlock, so it is never ErrLocked.
 	errBusLost = errors.New("lost the session bus connection")
+	// errDaemonLost means the keyring daemon that showed a prompt left the
+	// bus before the prompt completed. Like errBusLost it says nothing about
+	// the lock.
+	errDaemonLost = errors.New("the keyring daemon left the session bus")
 )
 
 type ssSecret struct {
@@ -289,8 +295,9 @@ func writeFailed(ctx context.Context, err error) error {
 // unlock opens paths, through the keyring's prompt when it raises one. A
 // refused, unanswered or failed unlock is ErrLocked, wrapping why. A caller
 // that gave up is told so instead, which is not the same as the user saying
-// no, and so is a lost bus or keyring daemon (an error the bus itself
-// sent), which says nothing about the lock.
+// no, and so is a lost bus or keyring daemon (an error the bus itself sent,
+// or the daemon leaving under the prompt), which says nothing about the
+// lock.
 func unlock(ctx context.Context, conn *dbus.Conn, svc dbus.BusObject, paths []dbus.ObjectPath) error {
 	var opened []dbus.ObjectPath
 	var prompt dbus.ObjectPath
@@ -305,8 +312,8 @@ func unlock(ctx context.Context, conn *dbus.Conn, svc dbus.BusObject, paths []db
 	}
 	// Only the keyring's own answer says the lock held: the prompt refused
 	// or left unanswered, or an error reply from the daemon. Anything else
-	// is the transport (the bus dropped mid-call, or under the prompt), and
-	// says nothing about the lock.
+	// is the transport (the bus dropped mid-call, or under the prompt, or
+	// the daemon left under it), and says nothing about the lock.
 	if ctx.Err() == nil && (errors.Is(err, ErrPromptDismissed) || errors.Is(err, ErrPromptTimeout) || isKeyringReply(err)) {
 		return fmt.Errorf("%w (%w)", ErrLocked, err)
 	}
@@ -385,22 +392,40 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 // path whenever it needs the user before it will do the work; a caller that
 // ignores it reports success for an operation that never happened. A prompt
 // nobody answers, or one the caller stops waiting for, is dismissed so no
-// dialog is left behind.
+// dialog is left behind. A lost bus, or a keyring daemon that leaves it
+// under the dialog, ends the wait at once as unavailable: nobody is left to
+// answer.
 func runPrompt(ctx context.Context, conn *dbus.Conn, prompt dbus.ObjectPath) error {
 	if prompt == "" || prompt == "/" {
 		return nil
 	}
+	sigs := make(chan *dbus.Signal, 4)
+	conn.Signal(sigs)
+	defer conn.RemoveSignal(sigs)
+	// A daemon that dies after it has shown the dialog never sends
+	// Completed, and with the bus still up nothing else ends the wait: the
+	// user would be told nobody answered and the keyring is locked, two
+	// minutes later. The bus says when the name loses its owner. Watching
+	// before asking who the owner is leaves no gap for a loss to fall in.
+	lost := []dbus.MatchOption{
+		dbus.WithMatchSender(busName),
+		dbus.WithMatchObjectPath(busPath),
+		dbus.WithMatchInterface(busName),
+		dbus.WithMatchMember("NameOwnerChanged"),
+		dbus.WithMatchArg(0, ssBus),
+	}
+	if err := conn.AddMatchSignalContext(ctx, lost...); err != nil {
+		return unavailable(ctx, err)
+	}
+	defer func() { _ = conn.RemoveMatchSignal(lost...) }()
 	// Completed decides whether a write went through, so only the keyring
 	// may send it: any process of the same user can emit a signal on any
 	// path. The bus delivers a signal addressed to us whatever our match
 	// rules say, so the sender is checked here as well as in the rule.
 	var owner string
-	if err := conn.BusObject().CallWithContext(ctx, "org.freedesktop.DBus.GetNameOwner", 0, ssBus).Store(&owner); err != nil {
+	if err := conn.BusObject().CallWithContext(ctx, busName+".GetNameOwner", 0, ssBus).Store(&owner); err != nil {
 		return unavailable(ctx, err)
 	}
-	sigs := make(chan *dbus.Signal, 4)
-	conn.Signal(sigs)
-	defer conn.RemoveSignal(sigs)
 	match := []dbus.MatchOption{
 		dbus.WithMatchSender(ssBus),
 		dbus.WithMatchObjectPath(prompt),
@@ -441,6 +466,12 @@ func runPrompt(ctx context.Context, conn *dbus.Conn, prompt dbus.ObjectPath) err
 				// and then be blamed on the user.
 				return unavailable(ctx, errBusLost)
 			}
+			if ownerLost(sig, owner) {
+				// A daemon that only gave up the name is still there to
+				// take the dialog down; one that is gone fails at once.
+				dismiss()
+				return unavailable(ctx, errDaemonLost)
+			}
 			if sig.Sender != owner || sig.Path != prompt || sig.Name != ssPromptIface+".Completed" {
 				continue
 			}
@@ -458,6 +489,19 @@ func runPrompt(ctx context.Context, conn *dbus.Conn, prompt dbus.ObjectPath) err
 			return fmt.Errorf("%w: %w", ErrUnavailable, ctx.Err())
 		}
 	}
+}
+
+// ownerLost reports whether sig is the bus saying that owner no longer holds
+// the Secret Service name. Only the bus itself may say so: like Completed,
+// a NameOwnerChanged addressed to us arrives whatever our match rules say,
+// from any sender.
+func ownerLost(sig *dbus.Signal, owner string) bool {
+	if sig.Sender != busName || sig.Path != busPath || sig.Name != busName+".NameOwnerChanged" || len(sig.Body) != 3 {
+		return false
+	}
+	name, _ := sig.Body[0].(string)
+	old, _ := sig.Body[1].(string)
+	return name == ssBus && old == owner
 }
 
 func openSession(ctx context.Context, svc dbus.BusObject) (dbus.ObjectPath, error) {

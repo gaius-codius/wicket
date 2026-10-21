@@ -768,6 +768,192 @@ func TestDBus_UnlockErrorReplyIsLockedUnlessTheBusSentIt(t *testing.T) {
 	}
 }
 
+// A keyring daemon replies to Prompt as soon as its dialog is up. One that
+// dies after that, or hands the name to another daemon, never sends
+// Completed, and Wicket used to wait out the prompt timeout and report the
+// keyring locked (issue #149). It is unavailable, said at once. The fake
+// goes only once the bus has passed its reply on, so the client is always
+// past the Prompt call; the timeout stays long, so waiting it out fails.
+func TestDBus_DaemonLostUnderAnOpenPromptIsUnavailable(t *testing.T) {
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops := []struct {
+		name  string
+		setup func(*fakesecret.Server)
+		op    func(*DBus) error
+	}{
+		// Lookup's prompt is the unlock's, whose timeout was ErrLocked.
+		{"lookup", func(srv *fakesecret.Server) {
+			srv.Seed(id.Attrs(), "s3cret", 100)
+			srv.SetLocked(true)
+		}, func(d *DBus) error { _, err := d.Lookup(bg, id); return err }},
+		{"upsert", func(*fakesecret.Server) {}, func(d *DBus) error { return d.Upsert(bg, id, pw) }},
+		{"delete", func(srv *fakesecret.Server) {
+			srv.Seed(id.Attrs(), "s3cret", 100)
+		}, func(d *DBus) error { return d.Delete(bg, id) }},
+	}
+	losses := []struct {
+		name string
+		lose func(*fakesecret.Server) error
+		// dismissed is whether the daemon is still there to take its
+		// dialog down.
+		dismissed int
+	}{
+		{"disconnect", func(srv *fakesecret.Server) error { srv.Disconnect(); return nil }, 0},
+		{"dropname", func(srv *fakesecret.Server) error { return srv.DropName(ssBus) }, 1},
+	}
+	for _, tc := range ops {
+		for _, loss := range losses {
+			t.Run(tc.name+"/"+loss.name, func(t *testing.T) {
+				_, srv, cleanup := fakesecret.Start(t)
+				defer cleanup()
+				tc.setup(srv)
+				srv.SetPrompt(fakesecret.PromptStall)
+				replied := srv.WatchReply(t, "Prompt")
+
+				errc := make(chan error, 1)
+				go func() { errc <- tc.op(NewDBus()) }()
+				select {
+				case <-replied:
+				case <-time.After(5 * time.Second):
+					t.Fatalf("the fake never replied to Prompt; calls: %v", srv.Calls())
+				}
+				if err := loss.lose(srv); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case err = <-errc:
+				case <-time.After(5 * time.Second):
+					t.Fatal("still waiting after the keyring daemon went away")
+				}
+				if !errors.Is(err, errDaemonLost) {
+					t.Fatalf("err = %v, want the daemon's loss under the prompt", err)
+				}
+				if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) || errors.Is(err, ErrPromptTimeout) {
+					t.Fatalf("err = %v, want ErrUnavailable, not a lock or a timeout", err)
+				}
+				if n := srv.Dismissed(); n != loss.dismissed {
+					t.Fatalf("dismissed %d times, want %d", n, loss.dismissed)
+				}
+			})
+		}
+	}
+}
+
+// Only the bus can say the keyring has gone, and only about the keyring's
+// name. A NameOwnerChanged forged by another process, sent straight to the
+// client, or a real one about another name the daemon held, must not end
+// the wait: the prompt is still open, and its answer still counts.
+func TestDBus_PromptIgnoresANameOwnerChangedFromAnotherSenderOrName(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.TakeName("org.freedesktop.secrets.other"); err != nil {
+		t.Fatal(err)
+	}
+	srv.SetPrompt(fakesecret.PromptStall)
+	errc := make(chan error, 1)
+	go func() { errc <- NewDBus().Upsert(bg, id, pw) }()
+	waitForPrompt(t, srv)
+
+	forger, err := dbus.ConnectSessionBus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = forger.Close() }()
+	var names []string
+	if err := forger.BusObject().Call("org.freedesktop.DBus.ListNames", 0).Store(&names); err != nil {
+		t.Fatal(err)
+	}
+	var keyring string
+	if err := forger.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, ssBus).Store(&keyring); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if !strings.HasPrefix(name, ":") || name == keyring || name == forger.Names()[0] {
+			continue
+		}
+		if err := forger.Send(forgedNameOwnerChanged(name, keyring), nil).Err; err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The bus handles one connection's messages in order, so once this
+	// reply is back the forgeries are on their way to the client, ahead of
+	// anything the fake sends from here on.
+	if err := forger.BusObject().Call("org.freedesktop.DBus.GetId", 0).Err; err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.DropName("org.freedesktop.secrets.other"); err != nil {
+		t.Fatal(err)
+	}
+	srv.AcceptPrompt()
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("err = %v, want the write to go through when the prompt is answered", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("still waiting after the prompt was answered")
+	}
+	if n := srv.Stored(); n != 1 {
+		t.Fatalf("%d items stored, want the accepted write", n)
+	}
+}
+
+// The watch starts before runPrompt asks who owns the name, so it can catch
+// a change from before then: the name passing to the daemon now holding it.
+// That is not the daemon leaving. The bus cannot be timed to send one into
+// that gap, so ownerLost is checked directly, along with the rest of what
+// marks the bus's own signal.
+func TestOwnerLost(t *testing.T) {
+	const owner = ":1.7"
+	sig := func(sender, path, name string, body ...any) *dbus.Signal {
+		return &dbus.Signal{Sender: sender, Path: dbus.ObjectPath(path), Name: name, Body: body}
+	}
+	for _, tc := range []struct {
+		name string
+		sig  *dbus.Signal
+		want bool
+	}{
+		{"owner gone", sig(busName, busPath, busName+".NameOwnerChanged", ssBus, owner, ""), true},
+		{"name passed on", sig(busName, busPath, busName+".NameOwnerChanged", ssBus, owner, ":1.9"), true},
+		{"name passed to owner", sig(busName, busPath, busName+".NameOwnerChanged", ssBus, ":1.3", owner), false},
+		{"another name", sig(busName, busPath, busName+".NameOwnerChanged", "org.example.other", owner, ""), false},
+		{"another sender", sig(":1.8", busPath, busName+".NameOwnerChanged", ssBus, owner, ""), false},
+		{"another path", sig(busName, "/", busName+".NameOwnerChanged", ssBus, owner, ""), false},
+		{"another signal", sig(busName, busPath, busName+".NameLost", ssBus), false},
+		{"short body", sig(busName, busPath, busName+".NameOwnerChanged", ssBus, owner), false},
+	} {
+		if got := ownerLost(tc.sig, owner); got != tc.want {
+			t.Errorf("%s: ownerLost = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// forgedNameOwnerChanged is the bus's signal that owner has lost the Secret
+// Service's name, addressed to dest alone and sent by whoever sends it.
+func forgedNameOwnerChanged(dest, owner string) *dbus.Message {
+	body := []any{ssBus, owner, ""}
+	return &dbus.Message{
+		Type: dbus.TypeSignal,
+		Headers: map[dbus.HeaderField]dbus.Variant{
+			dbus.FieldPath:        dbus.MakeVariant(dbus.ObjectPath("/org/freedesktop/DBus")),
+			dbus.FieldInterface:   dbus.MakeVariant("org.freedesktop.DBus"),
+			dbus.FieldMember:      dbus.MakeVariant("NameOwnerChanged"),
+			dbus.FieldDestination: dbus.MakeVariant(dest),
+			dbus.FieldSignature:   dbus.MakeVariant(dbus.SignatureOf(body...)),
+		},
+		Body: body,
+	}
+}
+
 // Completed decides whether a write went through, and any process of the
 // same user can emit one on the prompt's path. Only the keyring's counts.
 func TestDBus_PromptIgnoresACompletedFromAnotherSender(t *testing.T) {

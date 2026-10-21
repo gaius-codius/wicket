@@ -89,6 +89,8 @@ type Server struct {
 	calls     []string
 	stall     bool
 	stallAll  bool
+	held      map[string]bool
+	unlockErr string
 	stop      chan struct{}
 }
 
@@ -119,12 +121,36 @@ func (s *Server) StallEverything() {
 	s.stallAll = true
 }
 
-// record logs a call and, when StallEverything is on, holds it until the
-// server shuts down.
+// Hold makes calls to one Secret Service method hang until the server shuts
+// down, so a test can act while a call is in flight, such as Disconnect the
+// daemon under it.
+func (s *Server) Hold(method string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.held[method] = true
+}
+
+// Disconnect drops the fake daemon's connection and leaves the bus running,
+// as a keyring daemon that dies does. The bus answers a call still waiting
+// on the daemon with NoReply.
+func (s *Server) Disconnect() {
+	_ = s.conn.Close()
+}
+
+// FailUnlock makes Unlock answer with an error reply of the given name, as a
+// keyring that refuses the unlock outright does.
+func (s *Server) FailUnlock(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unlockErr = name
+}
+
+// record logs a call and, when StallEverything or Hold covers it, holds it
+// until the server shuts down.
 func (s *Server) record(method string) {
 	s.mu.Lock()
 	s.calls = append(s.calls, method)
-	stall := s.stallAll
+	stall := s.stallAll || s.held[method]
 	s.mu.Unlock()
 	if stall {
 		<-s.stop
@@ -274,6 +300,7 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 		conn:    conn,
 		items:   map[dbus.ObjectPath]*item{},
 		session: "/org/freedesktop/secrets/session/s1",
+		held:    map[string]bool{},
 		stop:    make(chan struct{}),
 	}
 	svc := &serviceObj{s: srv}
@@ -422,6 +449,9 @@ func (s *Server) SearchItems(attributes map[string]string) ([]dbus.ObjectPath, [
 func (s *Server) Unlock(paths []dbus.ObjectPath) ([]dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.unlockErr != "" {
+		return nil, "/", dbus.NewError(s.unlockErr, []any{"unlock refused"})
+	}
 	if s.prompt != PromptNone {
 		s.pending = func() { s.unlock(paths) }
 		return nil, promptPath, nil

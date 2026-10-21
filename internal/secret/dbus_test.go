@@ -514,14 +514,20 @@ func TestDBus_CancelledPromptIsDismissed(t *testing.T) {
 // the client is in the middle of an operation, a prompt on screen.
 func waitForPrompt(t *testing.T, srv *fakesecret.Server) {
 	t.Helper()
+	waitForCall(t, srv, "Prompt")
+}
+
+// waitForCall waits until the client has called method on the fake.
+func waitForCall(t *testing.T, srv *fakesecret.Server, method string) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if slices.Contains(srv.Calls(), "Prompt") {
+		if slices.Contains(srv.Calls(), method) {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("the client never called Prompt; calls: %v", srv.Calls())
+	t.Fatalf("the client never called %s; calls: %v", method, srv.Calls())
 }
 
 // gnome-keyring does not prompt for a write to a locked collection or a
@@ -668,6 +674,81 @@ func TestDBus_LostBusDuringAPromptIsUnavailable(t *testing.T) {
 				t.Fatal("still waiting a second after the bus went away")
 			}
 		})
+	}
+}
+
+// A keyring daemon that dies while an unlock's Unlock or Prompt call waits
+// on it, with the session bus still up, gets the call answered by the bus:
+// NoReply. That error is the transport's, not the keyring refusing, so it is
+// unavailable and never ErrLocked (issue #147). The fake holds the call and
+// drops its connection under it, so the bus always gets its NoReply out.
+func TestDBus_DaemonLostDuringAnUnlockIsUnavailable(t *testing.T) {
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	pw, err := NewPassword("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops := []struct {
+		name  string
+		setup func(*fakesecret.Server)
+		op    func(*DBus) error
+	}{
+		{"lookup", func(srv *fakesecret.Server) {
+			srv.Seed(id.Attrs(), "s3cret", 100)
+		}, func(d *DBus) error { _, err := d.Lookup(bg, id); return err }},
+		{"upsert", func(srv *fakesecret.Server) {
+			srv.RefuseLockedWrites()
+		}, func(d *DBus) error { return d.Upsert(bg, id, pw) }},
+		{"delete", func(srv *fakesecret.Server) {
+			srv.Seed(id.Attrs(), "s3cret", 100)
+			srv.RefuseLockedWrites()
+		}, func(d *DBus) error { return d.Delete(bg, id) }},
+	}
+	for _, tc := range ops {
+		for _, held := range []string{"Unlock", "Prompt"} {
+			t.Run(tc.name+"/"+held, func(t *testing.T) {
+				_, srv, cleanup := fakesecret.Start(t)
+				defer cleanup()
+				tc.setup(srv)
+				srv.SetLocked(true)
+				srv.SetPrompt(fakesecret.PromptStall)
+				srv.Hold(held)
+
+				errc := make(chan error, 1)
+				go func() { errc <- tc.op(NewDBus()) }()
+				waitForCall(t, srv, held)
+				srv.Disconnect()
+				var err error
+				select {
+				case err = <-errc:
+				case <-time.After(5 * time.Second):
+					t.Fatal("still waiting after the daemon went away")
+				}
+				var reply dbus.Error
+				if !errors.As(err, &reply) || reply.Name != "org.freedesktop.DBus.Error.NoReply" {
+					t.Fatalf("err = %v, want the bus's NoReply", err)
+				}
+				if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) {
+					t.Fatalf("err = %v, want ErrUnavailable, not ErrLocked", err)
+				}
+			})
+		}
+	}
+}
+
+// An error reply from the keyring to Unlock is its own answer: the lock held.
+func TestDBus_UnlockRefusedByTheKeyringIsLocked(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	srv.Seed(id.Attrs(), "s3cret", 100)
+	srv.SetLocked(true)
+	srv.FailUnlock(ssErrIsLocked)
+
+	_, err := NewDBus().Lookup(bg, id)
+	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrLocked wrapping the keyring's reply", err)
 	}
 }
 

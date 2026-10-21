@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -288,7 +289,8 @@ func writeFailed(ctx context.Context, err error) error {
 // unlock opens paths, through the keyring's prompt when it raises one. A
 // refused, unanswered or failed unlock is ErrLocked, wrapping why. A caller
 // that gave up is told so instead, which is not the same as the user saying
-// no, and so is a lost bus, which says nothing about the lock.
+// no, and so is a lost bus or keyring daemon (an error the bus itself
+// sent), which says nothing about the lock.
 func unlock(ctx context.Context, conn *dbus.Conn, svc dbus.BusObject, paths []dbus.ObjectPath) error {
 	var opened []dbus.ObjectPath
 	var prompt dbus.ObjectPath
@@ -305,11 +307,25 @@ func unlock(ctx context.Context, conn *dbus.Conn, svc dbus.BusObject, paths []db
 	// or left unanswered, or an error reply from the daemon. Anything else
 	// is the transport (the bus dropped mid-call, or under the prompt), and
 	// says nothing about the lock.
-	var reply dbus.Error
-	if ctx.Err() == nil && (errors.Is(err, ErrPromptDismissed) || errors.Is(err, ErrPromptTimeout) || errors.As(err, &reply)) {
+	if ctx.Err() == nil && (errors.Is(err, ErrPromptDismissed) || errors.Is(err, ErrPromptTimeout) || isKeyringReply(err)) {
 		return fmt.Errorf("%w (%w)", ErrLocked, err)
 	}
 	return err
+}
+
+// busErrPrefix names the errors of D-Bus itself. The bus sends them in the
+// keyring's place: NoReply when the daemon disconnects under a call,
+// ServiceUnknown or NameHasNoOwner when it is gone.
+const busErrPrefix = "org.freedesktop.DBus.Error."
+
+// isKeyringReply reports whether err is an error reply from the keyring
+// rather than one the bus generated. godbus does not say who sent a reply,
+// so the name decides. A keyring can send a D-Bus name too (godbus answers
+// Failed for a handler's plain error, UnknownObject for a path a restarted
+// daemon never had), but none of them says the user kept it locked.
+func isKeyringReply(err error) bool {
+	var reply dbus.Error
+	return errors.As(err, &reply) && !strings.HasPrefix(reply.Name, busErrPrefix)
 }
 
 func (d *DBus) Delete(ctx context.Context, id Identity) error {

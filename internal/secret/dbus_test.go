@@ -736,19 +736,35 @@ func TestDBus_DaemonLostDuringAnUnlockIsUnavailable(t *testing.T) {
 	}
 }
 
-// An error reply from the keyring to Unlock is its own answer: the lock held.
-func TestDBus_UnlockRefusedByTheKeyringIsLocked(t *testing.T) {
-	_, srv, cleanup := fakesecret.Start(t)
-	defer cleanup()
-
+// An error reply to Unlock is the keyring's own answer, so the lock held,
+// unless it is one the bus sends in the keyring's place, as it does when the
+// daemon has gone: that is unavailable.
+func TestDBus_UnlockErrorReplyIsLockedUnlessTheBusSentIt(t *testing.T) {
 	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
-	srv.Seed(id.Attrs(), "s3cret", 100)
-	srv.SetLocked(true)
-	srv.FailUnlock(ssErrIsLocked)
+	for _, tc := range []struct {
+		name   string
+		locked bool
+	}{
+		{ssErrIsLocked, true},
+		{"org.freedesktop.DBus.Error.ServiceUnknown", false},
+		{"org.freedesktop.DBus.Error.NameHasNoOwner", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, srv, cleanup := fakesecret.Start(t)
+			defer cleanup()
+			srv.Seed(id.Attrs(), "s3cret", 100)
+			srv.SetLocked(true)
+			srv.FailUnlock(tc.name)
 
-	_, err := NewDBus().Lookup(bg, id)
-	if !errors.Is(err, ErrLocked) || !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("err = %v, want ErrLocked wrapping the keyring's reply", err)
+			_, err := NewDBus().Lookup(bg, id)
+			var reply dbus.Error
+			if !errors.As(err, &reply) || reply.Name != tc.name {
+				t.Fatalf("err = %v, want the %s reply", err, tc.name)
+			}
+			if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) != tc.locked {
+				t.Fatalf("err = %v, want ErrUnavailable, and ErrLocked %v", err, tc.locked)
+			}
+		})
 	}
 }
 

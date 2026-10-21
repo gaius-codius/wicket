@@ -289,7 +289,8 @@ func writeFailed(ctx context.Context, err error) error {
 // unlock opens paths, through the keyring's prompt when it raises one. A
 // refused, unanswered or failed unlock is ErrLocked, wrapping why. A caller
 // that gave up is told so instead, which is not the same as the user saying
-// no, and so is a lost bus, which says nothing about the lock.
+// no, and so is a lost bus or keyring daemon (an error the bus itself
+// sent), which says nothing about the lock.
 func unlock(ctx context.Context, conn *dbus.Conn, svc dbus.BusObject, paths []dbus.ObjectPath) error {
 	var opened []dbus.ObjectPath
 	var prompt dbus.ObjectPath

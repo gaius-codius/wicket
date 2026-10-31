@@ -72,7 +72,7 @@ jobs:
           cache: true
 
       - name: Install golangci-lint (mise.toml)
-        uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
+        uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
         with:
           # Only the linter: the rest of mise.toml is for Linux CI and editors.
           install_args: golangci-lint

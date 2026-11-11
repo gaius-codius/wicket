@@ -146,7 +146,12 @@ func TestConnect_SignalStopsTheClientGroup(t *testing.T) {
 				t.Fatal(err)
 			}
 			select {
-			case <-exited:
+			case err := <-exited:
+				if err != nil {
+					if _, ok := errors.AsType[*exec.ExitError](err); !ok {
+						t.Fatalf("wait: %v", err)
+					}
+				}
 			case <-time.After(15 * time.Second):
 				t.Fatalf("wicket connect still running after %v", tc.sig)
 			}

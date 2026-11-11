@@ -1186,8 +1186,8 @@ func (in *installer) signalDuring(t *testing.T, ready <-chan struct{}, s signal)
 		t.Fatalf("install.sh exited early: %v\n%s", err, out)
 	case <-time.After(10 * time.Second):
 		cancel()
-		<-done
-		t.Fatalf("install.sh never reached the point to signal it:\n%s", out)
+		err := <-done
+		t.Fatalf("install.sh never reached the point to signal it: %v\n%s", err, out)
 	}
 	pid := cmd.Process.Pid
 	if s.group {
@@ -1204,7 +1204,7 @@ func (in *installer) signalDuring(t *testing.T, ready <-chan struct{}, s signal)
 		}
 	case <-time.After(within):
 		cancel()
-		<-done
-		t.Errorf("install.sh still running %v after %v\n%s", within, s.sig, out)
+		err := <-done
+		t.Errorf("install.sh still running %v after %v: %v\n%s", within, s.sig, err, out)
 	}
 }

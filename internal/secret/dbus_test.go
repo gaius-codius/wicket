@@ -1224,24 +1224,44 @@ func TestDBus_DeleteStopsWhenTheDaemonIsLost(t *testing.T) {
 	}
 }
 
-// An error reply from a live daemon for one match, such as UnknownObject for
-// an item another client removed first, is not the keyring out of reach: the
-// delete goes on to the other matches.
-func TestDBus_DeleteGoesOnAfterAnItemErrorReply(t *testing.T) {
-	_, srv, cleanup := fakesecret.Start(t)
-	defer cleanup()
+// An error reply for one match's Item.Delete decides whether the delete
+// goes on. One a live daemon sends, such as UnknownObject for an item another
+// client removed first, is not the keyring out of reach: the other matches
+// are still deleted. One the bus sends in the daemon's place means the daemon
+// has gone, and the delete stops there (issue #152). The fake sends both
+// kinds itself, so no call ever goes to a name nobody owns.
+func TestDBus_DeleteAfterAnItemErrorReply(t *testing.T) {
 	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
-	for i := range 2 {
-		srv.Seed(id.Attrs(), "s3cret", int64(100+i))
-	}
-	srv.FailDeletes("org.freedesktop.DBus.Error.UnknownObject")
+	for _, tc := range []struct {
+		name    string
+		deletes int
+	}{
+		{"org.freedesktop.DBus.Error.UnknownObject", 2},
+		{"org.freedesktop.DBus.Error.Failed", 2},
+		{"org.freedesktop.DBus.Error.NoReply", 1},
+		{"org.freedesktop.DBus.Error.ServiceUnknown", 1},
+		{"org.freedesktop.DBus.Error.NameHasNoOwner", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, srv, cleanup := fakesecret.Start(t)
+			defer cleanup()
+			for i := range 2 {
+				srv.Seed(id.Attrs(), "s3cret", int64(100+i))
+			}
+			srv.FailDeletes(tc.name)
 
-	err := NewDBus().Delete(bg, id)
-	if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) {
-		t.Fatalf("err = %v, want ErrUnavailable, not ErrLocked", err)
-	}
-	if n := countCalls(srv, "Delete"); n != 2 {
-		t.Fatalf("Item.Delete called %d times, want once per match", n)
+			err := NewDBus().Delete(bg, id)
+			var reply dbus.Error
+			if !errors.As(err, &reply) || reply.Name != tc.name {
+				t.Fatalf("err = %v, want the %s reply", err, tc.name)
+			}
+			if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) {
+				t.Fatalf("err = %v, want ErrUnavailable, not ErrLocked", err)
+			}
+			if n := countCalls(srv, "Delete"); n != tc.deletes {
+				t.Fatalf("Item.Delete called %d times, want %d", n, tc.deletes)
+			}
+		})
 	}
 }
 

@@ -310,14 +310,20 @@ func unlock(ctx context.Context, conn *dbus.Conn, svc dbus.BusObject, paths []db
 	if err == nil {
 		return nil
 	}
-	// Only the keyring's own answer says the lock held: the prompt refused
-	// or left unanswered, or an error reply from the daemon. Anything else
-	// is the transport (the bus dropped mid-call, or under the prompt, or
-	// the daemon left under it), and says nothing about the lock.
-	if ctx.Err() == nil && (errors.Is(err, ErrPromptDismissed) || errors.Is(err, ErrPromptTimeout) || isKeyringReply(err)) {
+	// Only the keyring's own answer says the lock held.
+	if keyringAnswered(ctx, err) {
 		return fmt.Errorf("%w (%w)", ErrLocked, err)
 	}
 	return err
+}
+
+// keyringAnswered reports whether err is the keyring's own answer: a prompt
+// refused or left unanswered, or an error reply from the daemon. Anything
+// else is the keyring out of reach -- the bus dropped mid-call or under the
+// prompt, the daemon left under it, or the caller gave up -- and says
+// nothing about the lock.
+func keyringAnswered(ctx context.Context, err error) bool {
+	return ctx.Err() == nil && (errors.Is(err, ErrPromptDismissed) || errors.Is(err, ErrPromptTimeout) || isKeyringReply(err))
 }
 
 // busErrPrefix names the errors of D-Bus itself. The bus sends them in the
@@ -371,6 +377,8 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 			if err := unlock(ctx, conn, svc, []dbus.ObjectPath{p}); err != nil {
 				if errors.Is(err, ErrLocked) {
 					refused = err
+				} else if !keyringAnswered(ctx, err) {
+					return err
 				}
 				last = err
 				continue
@@ -378,10 +386,20 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 			prompt, err = del()
 		}
 		if err != nil {
+			if !keyringAnswered(ctx, err) {
+				return unavailable(ctx, err)
+			}
 			last = writeFailed(ctx, err)
 			continue
 		}
 		if err := runPrompt(ctx, conn, prompt); err != nil {
+			// A keyring out of reach for one match is out of reach for the
+			// rest. The next call would go to the well-known name, which a
+			// desktop can answer by starting a new daemon and raising a
+			// second dialog for the same delete (issue #152).
+			if !keyringAnswered(ctx, err) {
+				return err
+			}
 			last = err
 		}
 	}

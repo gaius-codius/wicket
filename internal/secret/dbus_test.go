@@ -1153,3 +1153,72 @@ func TestDBus_DeleteAsksToUnlockOnce(t *testing.T) {
 		t.Fatalf("%d items stored, want all 3 left", n)
 	}
 }
+
+// A delete over several matches whose keyring daemon goes away under the
+// first one's prompt stops there (issue #152). It used to go on to the next
+// match by the well-known name, which a desktop can answer by starting a new
+// daemon, so one delete could raise a second dialog. Here the fake takes the
+// name back while the client is still dismissing the first prompt, so any
+// call after the loss reaches it and is counted.
+func TestDBus_DeleteStopsWhenTheDaemonIsLost(t *testing.T) {
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	for _, tc := range []struct {
+		name  string
+		setup func(*fakesecret.Server)
+	}{
+		// The delete's own prompt.
+		{"delete-prompt", func(*fakesecret.Server) {}},
+		// gnome-keyring's unlock prompt, raised for a locked item.
+		{"unlock-prompt", func(srv *fakesecret.Server) {
+			srv.RefuseLockedWrites()
+			srv.SetLocked(true)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, srv, cleanup := fakesecret.Start(t)
+			defer cleanup()
+			for i := range 2 {
+				srv.Seed(id.Attrs(), "s3cret", int64(100+i))
+			}
+			tc.setup(srv)
+			srv.SetPrompt(fakesecret.PromptStall)
+			srv.Hold("Dismiss")
+			replied := srv.WatchReply(t, "Prompt")
+
+			errc := make(chan error, 1)
+			go func() { errc <- NewDBus().Delete(bg, id) }()
+			select {
+			case <-replied:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("the fake never replied to Prompt; calls: %v", srv.Calls())
+			}
+			if err := srv.DropName(ssBus); err != nil {
+				t.Fatal(err)
+			}
+			// The client dismisses the prompt on the daemon that showed it;
+			// holding that call keeps it from going on until the name is
+			// back.
+			waitForCall(t, srv, "Dismiss")
+			if err := srv.TakeName(ssBus); err != nil {
+				t.Fatal(err)
+			}
+			atLoss := srv.Calls()
+
+			var err error
+			select {
+			case err = <-errc:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("still deleting after the keyring daemon went away; calls: %v", srv.Calls())
+			}
+			if !errors.Is(err, errDaemonLost) || !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) {
+				t.Fatalf("err = %v, want ErrUnavailable wrapping the daemon's loss, not ErrLocked", err)
+			}
+			if calls := srv.Calls(); len(calls) != len(atLoss) {
+				t.Fatalf("keyring calls after the loss: %v", calls[len(atLoss):])
+			}
+			if n := srv.Stored(); n != 2 {
+				t.Fatalf("%d items stored, want both left", n)
+			}
+		})
+	}
+}

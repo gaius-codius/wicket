@@ -1,6 +1,7 @@
 package fakesecret
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/xml"
@@ -404,7 +405,15 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 	if err := os.WriteFile(conf, []byte(fmt.Sprintf(busConfig, listen.String())), 0o600); err != nil {
 		t.Fatalf("write bus config: %v", err)
 	}
-	cmd := exec.CommandContext(context.Background(), "dbus-daemon", "--config-file="+conf, "--nofork", "--nopidfile")
+	// The daemon prints its address on fd 3 once it is listening. The socket
+	// file appears earlier, at bind, and a client that connects in between is
+	// refused.
+	ready, readyW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("dbus-daemon ready pipe: %v", err)
+	}
+	cmd := exec.CommandContext(context.Background(), "dbus-daemon", "--config-file="+conf, "--nofork", "--nopidfile", "--print-address=3")
+	cmd.ExtraFiles = []*os.File{readyW}
 	// A bus that will not start says why on stderr, which is read only once
 	// it has exited.
 	var stderr bytes.Buffer
@@ -412,13 +421,8 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("dbus-daemon: %v", err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(sock); err == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	_ = readyW.Close()
+	waitListening(t, cmd, ready, &stderr)
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", addr)
 	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == userAddr && userAddr != "" {
 		t.Fatal("isolated bus address equals user session bus")
@@ -752,4 +756,30 @@ func match(have, want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// waitListening waits for the bus daemon to print its address on ready, which
+// it does once it accepts connections, and fails the test if it exits or stays
+// silent first.
+func waitListening(t *testing.T, cmd *exec.Cmd, ready *os.File, stderr *bytes.Buffer) {
+	t.Helper()
+	defer func() { _ = ready.Close() }()
+	line := make(chan error, 1)
+	go func() {
+		_, err := bufio.NewReader(ready).ReadString('\n')
+		line <- err
+	}()
+	select {
+	case err := <-line:
+		if err == nil {
+			return
+		}
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("dbus-daemon exited before listening: %v; it said: %q", err, stderr.String())
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("dbus-daemon not listening after 5s; it said: %q", stderr.String())
+	}
 }

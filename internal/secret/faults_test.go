@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -14,16 +13,25 @@ import (
 	"github.com/gaius-codius/wicket/internal/testutil/fakesecret"
 )
 
-// kind is the answer an operation gives, in the four ways a caller tells
-// apart (plus success): the keyring was locked, it was out of reach, the
-// password is not there, or it worked.
+// kind is the answer an operation gives, as finely as a caller tells answers
+// apart: the TUI and the CLI word a dismissed prompt, an unanswered one and a
+// keyring out of reach differently, inside ErrLocked and outside it.
 type kind string
 
 const (
-	kSuccess     kind = "success"
-	kLocked      kind = "ErrLocked"
-	kUnavailable kind = "ErrUnavailable only"
-	kNotFound    kind = "ErrNotFound"
+	kSuccess  kind = "success"
+	kNotFound kind = "ErrNotFound"
+	// kLost is ErrUnavailable with no prompt answer in it: the bus, the
+	// daemon or the caller went away.
+	kLost             kind = "ErrUnavailable, keyring out of reach"
+	kDismissed        kind = "ErrUnavailable, prompt dismissed"
+	kUnanswered       kind = "ErrUnavailable, prompt unanswered"
+	kLocked           kind = "ErrLocked"
+	kLockedDismissed  kind = "ErrLocked, unlock dismissed"
+	kLockedUnanswered kind = "ErrLocked, unlock unanswered"
+	// kNotReached marks an operation that never makes the call a fault
+	// needs, so the fault cannot happen to it. Its subtest is skipped.
+	kNotReached kind = "not reached"
 )
 
 // kindOf classifies err. A result that is more than one kind at once, or
@@ -32,19 +40,33 @@ func kindOf(err error) kind {
 	locked := errors.Is(err, ErrLocked)
 	notFound := errors.Is(err, ErrNotFound)
 	unavailable := errors.Is(err, ErrUnavailable)
+	dismissed := errors.Is(err, ErrPromptDismissed)
+	unanswered := errors.Is(err, ErrPromptTimeout)
 	switch {
 	case err == nil:
 		return kSuccess
-	case locked && notFound:
-		return "ErrLocked and ErrNotFound"
-	case locked:
-		return kLocked
-	case notFound && unavailable:
-		return "ErrNotFound and ErrUnavailable"
+	case notFound && (locked || unavailable):
+		return "ErrNotFound with another kind"
 	case notFound:
 		return kNotFound
+	case dismissed && unanswered:
+		return "both dismissed and unanswered"
+	case locked && !unavailable:
+		// ErrLocked always wraps why the unlock failed, which is
+		// ErrUnavailable.
+		return "ErrLocked without ErrUnavailable"
+	case locked && dismissed:
+		return kLockedDismissed
+	case locked && unanswered:
+		return kLockedUnanswered
+	case locked:
+		return kLocked
+	case unavailable && dismissed:
+		return kDismissed
+	case unavailable && unanswered:
+		return kUnanswered
 	case unavailable:
-		return kUnavailable
+		return kLost
 	}
 	return "none of the kinds"
 }
@@ -66,10 +88,8 @@ const (
 
 // env is what a fault's steps can act on.
 type env struct {
-	srv *fakesecret.Server
-	// stopBus takes the whole session bus down.
-	stopBus func()
-	cancel  context.CancelFunc
+	srv    *fakesecret.Server
+	cancel context.CancelFunc
 	// replied closes once the bus has passed on the fake's reply to Prompt.
 	// It is set only for a fault with watchPrompt set.
 	replied <-chan struct{}
@@ -80,16 +100,21 @@ type env struct {
 type fault struct {
 	name  string
 	style style
-	// empty leaves nothing stored; otherwise a password is.
+	// empty leaves nothing stored; otherwise one password is.
 	empty  bool
 	prompt fakesecret.PromptMode
 	// hold is a method the fake never answers.
 	hold string
 	// failUnlock is the error name Unlock answers with.
 	failUnlock string
+	// prepare sets up a fault of the stored item itself.
+	prepare func(srv *fakesecret.Server, item dbus.ObjectPath)
 	// promptTimeout shortens the wait for an answer, for a fault that is
 	// that wait running out.
 	promptTimeout time.Duration
+	// deadline gives the caller a deadline, for a fault that is the caller
+	// running out of time.
+	deadline time.Duration
 	// watchPrompt has the sweep watch for the bus passing on Prompt's reply,
 	// so under can act on a dialog that is certainly on screen.
 	watchPrompt bool
@@ -103,8 +128,16 @@ type fault struct {
 	calls []string
 	// silent means the fake must have seen no call at all.
 	silent bool
+	// cause is an error the answer must also wrap, where the kind alone
+	// does not show the fault was the one reached.
+	cause error
 
 	lookup, upsert, delete kind
+	// known names an operation, by its sweep name, whose answer is wrong in
+	// the code and not yet fixed, with what is wrong. Its subtest is skipped,
+	// and fails once the answer matches the row, so the entry cannot outlive
+	// its fix.
+	known map[string]string
 }
 
 func (f fault) want(op string) kind {
@@ -113,8 +146,10 @@ func (f fault) want(op string) kind {
 		return f.lookup
 	case "upsert":
 		return f.upsert
+	case "delete":
+		return f.delete
 	}
-	return f.delete
+	return "unknown operation " + kind(op)
 }
 
 // waitReplied waits until the bus has passed on the fake's reply to Prompt.
@@ -151,22 +186,13 @@ func waitNameGone(t *testing.T) {
 	t.Fatal("the bus still has an owner for the Secret Service name")
 }
 
-// loseAfterReply is a fault's step for a daemon that goes once its dialog is
-// up: it waits for the reply to Prompt and then runs lose.
-func loseAfterReply(lose func(*testing.T, *env)) func(*testing.T, *env) {
+// afterReply is a fault's step for a dialog that is certainly on screen: it
+// waits for the reply to Prompt and then runs act.
+func afterReply(act func(*testing.T, *env)) func(*testing.T, *env) {
 	return func(t *testing.T, e *env) {
 		t.Helper()
 		waitReplied(t, e)
-		lose(t, e)
-	}
-}
-
-func disconnect(_ *testing.T, e *env) { e.srv.Disconnect() }
-
-func dropName(t *testing.T, e *env) {
-	t.Helper()
-	if err := e.srv.DropName(ssBus); err != nil {
-		t.Fatal(err)
+		act(t, e)
 	}
 }
 
@@ -180,8 +206,16 @@ func waitCall(method string, act func(*testing.T, *env)) func(*testing.T, *env) 
 	}
 }
 
-func stopBus(_ *testing.T, e *env)      { e.stopBus() }
+func disconnect(_ *testing.T, e *env)   { e.srv.Disconnect() }
+func killBus(_ *testing.T, e *env)      { e.srv.KillBus() }
 func cancelCaller(_ *testing.T, e *env) { e.cancel() }
+
+func dropName(t *testing.T, e *env) {
+	t.Helper()
+	if err := e.srv.DropName(ssBus); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // disconnectAndWait loses the daemon and waits until the bus knows it is gone.
 func disconnectAndWait(t *testing.T, e *env) {
@@ -190,22 +224,26 @@ func disconnectAndWait(t *testing.T, e *env) {
 	waitNameGone(t)
 }
 
-// cancelAfterReply gives up on a dialog that is certainly on screen.
-func cancelAfterReply(t *testing.T, e *env) {
-	t.Helper()
-	waitReplied(t, e)
-	e.cancel()
+// lostDuring is a row for the daemon going while method, which the fake
+// holds, is in flight, with what each operation answers; one that
+// never calls method is kNotReached.
+func lostDuring(name, method string, lookup, upsert, del kind) fault {
+	return fault{
+		name: name, hold: method, under: waitCall(method, disconnect), calls: []string{method},
+		lookup: lookup, upsert: upsert, delete: del,
+	}
 }
 
-// faultTable is the contract: for every fault the fake Secret Service can
-// produce, what each operation must answer. TestDBus_FaultSweep runs every
-// row against Lookup, Upsert and Delete and fails on any other kind.
+// faultTable is the contract: for every way the fake Secret Service can make
+// the keyring behind one stored password go wrong, what each operation must
+// answer. TestDBus_FaultSweep runs every row against Lookup, Upsert and
+// Delete and fails on any other kind.
 //
 // Two lost keyrings were once reported as a locked one, each found by
 // reading the code. A fault the fake learns to produce must get a row here,
 // so that every operation is checked against it, not only the one a test was
 // written for. An answer that looks wrong is not a reason to change the row
-// to match: fix the code, or mark the row known (see knownFailures).
+// to match: fix the code, or name the operation in the row's known.
 //
 // The prompt rows come in pairs, because a keyring that prompts for a write
 // (stylePrompts) and one that makes the client unlock first (styleRefuses)
@@ -224,87 +262,117 @@ var faultTable = []fault{
 		lookup: kSuccess, upsert: kSuccess, delete: kSuccess,
 	},
 
-	// The session bus is lost.
+	// The session bus is lost. Killing it leaves a held call held, so the
+	// loss is certainly during the call.
 	{
-		name: "bus-lost-before-call", silent: true, before: stopBus,
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		name: "bus-lost-before-call", silent: true, before: killBus,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 	{
-		name: "bus-lost-under-prompt", style: stylePrompts, prompt: fakesecret.PromptStall,
-		under: waitCall("Prompt", stopBus), calls: []string{"Prompt"},
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		name: "bus-lost-under-prompt", style: stylePrompts, prompt: fakesecret.PromptStall, watchPrompt: true,
+		under: afterReply(killBus), calls: []string{"Prompt"},
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 	{
 		name: "bus-lost-during-prompt-call", style: stylePrompts, prompt: fakesecret.PromptHang,
-		under: waitCall("Prompt", stopBus), calls: []string{"Prompt"},
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		under: waitCall("Prompt", killBus), calls: []string{"Prompt"},
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 	{
-		name: "bus-lost-under-unlock-prompt", style: styleRefuses, prompt: fakesecret.PromptStall,
-		under: waitCall("Prompt", stopBus), calls: []string{"Unlock", "Prompt"},
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		name: "bus-lost-under-unlock-prompt", style: styleRefuses, prompt: fakesecret.PromptStall, watchPrompt: true,
+		under: afterReply(killBus), calls: []string{"Unlock", "Prompt"},
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 
 	// The keyring daemon is lost while the bus stays up.
 	{
 		name: "daemon-lost-before-call", silent: true,
 		before: disconnectAndWait,
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
+	lostDuring("daemon-lost-during-search", "SearchItems", kLost, kNotReached, kLost),
+	lostDuring("daemon-lost-during-open-session", "OpenSession", kLost, kLost, kNotReached),
+	lostDuring("daemon-lost-during-get-secrets", "GetSecrets", kLost, kNotReached, kNotReached),
+	lostDuring("daemon-lost-during-create-item", "CreateItem", kNotReached, kLost, kNotReached),
+	lostDuring("daemon-lost-during-item-delete", "Delete", kNotReached, kNotReached, kLost),
 	{
 		name: "daemon-lost-during-unlock", style: styleRefuses, prompt: fakesecret.PromptStall, hold: "Unlock",
 		under: waitCall("Unlock", disconnect), calls: []string{"Unlock"},
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 	{
 		name: "daemon-lost-during-prompt-call", style: stylePrompts, prompt: fakesecret.PromptStall, hold: "Prompt",
 		under: waitCall("Prompt", disconnect), calls: []string{"Prompt"},
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 	{
 		name: "daemon-lost-during-unlock-prompt-call", style: styleRefuses, prompt: fakesecret.PromptStall, hold: "Prompt",
 		under: waitCall("Prompt", disconnect), calls: []string{"Unlock", "Prompt"},
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 	{
 		name: "daemon-lost-after-prompt-reply", style: stylePrompts, prompt: fakesecret.PromptStall, watchPrompt: true,
-		under:  loseAfterReply(disconnect),
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		under: afterReply(disconnect), cause: errDaemonLost,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 	{
 		name: "daemon-lost-after-unlock-prompt-reply", style: styleRefuses, prompt: fakesecret.PromptStall, watchPrompt: true,
-		under: loseAfterReply(disconnect), calls: []string{"Unlock"},
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		under: afterReply(disconnect), calls: []string{"Unlock"}, cause: errDaemonLost,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 	{
 		name: "daemon-replaced-after-prompt-reply", style: stylePrompts, prompt: fakesecret.PromptStall, watchPrompt: true,
-		under:  loseAfterReply(dropName),
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		under: afterReply(dropName), cause: errDaemonLost,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 	{
 		name: "daemon-replaced-after-unlock-prompt-reply", style: styleRefuses, prompt: fakesecret.PromptStall, watchPrompt: true,
-		under: loseAfterReply(dropName), calls: []string{"Unlock"},
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		under: afterReply(dropName), calls: []string{"Unlock"}, cause: errDaemonLost,
+		lookup: kLost, upsert: kLost, delete: kLost,
+	},
+	{
+		// A daemon that never answers anything, against a caller with a
+		// deadline: the deadline is the fault, so its length cannot change
+		// the answer.
+		name: "daemon-wedged-past-deadline", deadline: 100 * time.Millisecond, cause: context.DeadlineExceeded,
+		prepare: func(srv *fakesecret.Server, _ dbus.ObjectPath) { srv.StallEverything() },
+		lookup:  kLost, upsert: kLost, delete: kLost,
 	},
 
 	// The user refuses the prompt, or nobody answers it.
 	{
 		name: "prompt-dismissed", style: stylePrompts, prompt: fakesecret.PromptDismiss, calls: []string{"Prompt"},
-		lookup: kLocked, upsert: kUnavailable, delete: kUnavailable,
+		lookup: kLockedDismissed, upsert: kDismissed, delete: kDismissed,
 	},
 	{
 		name: "unlock-prompt-dismissed", style: styleRefuses, prompt: fakesecret.PromptDismiss, calls: []string{"Unlock", "Prompt"},
-		lookup: kLocked, upsert: kLocked, delete: kLocked,
+		lookup: kLockedDismissed, upsert: kLockedDismissed, delete: kLockedDismissed,
 	},
 	{
 		name: "prompt-unanswered", style: stylePrompts, prompt: fakesecret.PromptStall, promptTimeout: 150 * time.Millisecond,
 		calls:  []string{"Prompt", "Dismiss"},
-		lookup: kLocked, upsert: kUnavailable, delete: kUnavailable,
+		lookup: kLockedUnanswered, upsert: kUnanswered, delete: kUnanswered,
 	},
 	{
 		name: "unlock-prompt-unanswered", style: styleRefuses, prompt: fakesecret.PromptStall, promptTimeout: 150 * time.Millisecond,
 		calls:  []string{"Unlock", "Prompt", "Dismiss"},
-		lookup: kLocked, upsert: kLocked, delete: kLocked,
+		lookup: kLockedUnanswered, upsert: kLockedUnanswered, delete: kLockedUnanswered,
+	},
+
+	// The keyring keeps the item locked when it should not.
+	{
+		// An accepted unlock that leaves the item locked. The fake's
+		// collection lock, which a write checks, is not the item's, so a
+		// write never meets it.
+		name: "lock-kept-after-unlock", style: styleRefuses, prompt: fakesecret.PromptAccept, calls: []string{"Unlock"},
+		prepare: func(srv *fakesecret.Server, item dbus.ObjectPath) { srv.KeepLocked(item) },
+		lookup:  kLocked, upsert: kNotReached, delete: kLocked,
+	},
+	{
+		// Locked again by another program between the search and the read.
+		name: "relocked-before-read", calls: []string{"GetSecrets"},
+		prepare: func(srv *fakesecret.Server, item dbus.ObjectPath) { srv.RelockBeforeRead(item) },
+		lookup:  kLocked, upsert: kNotReached, delete: kNotReached,
 	},
 
 	// The keyring answers Unlock with an error reply: its own is the lock
@@ -315,42 +383,42 @@ var faultTable = []fault{
 	},
 	{
 		name: "unlock-error-reply-from-bus", style: styleRefuses, failUnlock: "org.freedesktop.DBus.Error.ServiceUnknown", calls: []string{"Unlock"},
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 
 	// The caller gives up.
 	{
-		name: "caller-cancelled-before-call", before: func(_ *testing.T, e *env) { e.cancel() },
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		name: "caller-cancelled-before-call", before: cancelCaller, cause: context.Canceled,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 	{
 		name: "caller-cancelled-under-prompt", style: stylePrompts, prompt: fakesecret.PromptStall, watchPrompt: true,
-		under:  cancelAfterReply,
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		under: afterReply(cancelCaller), cause: context.Canceled,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 	{
 		name: "caller-cancelled-before-prompt-reply", style: stylePrompts, prompt: fakesecret.PromptHang,
-		under: waitCall("Prompt", cancelCaller), calls: []string{"Prompt", "Dismiss"},
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		under: waitCall("Prompt", cancelCaller), calls: []string{"Prompt", "Dismiss"}, cause: context.Canceled,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 	{
 		name: "caller-cancelled-under-unlock-prompt", style: styleRefuses, prompt: fakesecret.PromptStall, watchPrompt: true,
-		under: cancelAfterReply, calls: []string{"Unlock"},
-		lookup: kUnavailable, upsert: kUnavailable, delete: kUnavailable,
+		under: afterReply(cancelCaller), calls: []string{"Unlock"}, cause: context.Canceled,
+		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 }
 
-// knownFailures names a row and operation, as "fault/op", whose answer is
-// wrong in the code and not yet fixed, with what is wrong, so the sweep
-// skips it and says why instead of failing. A row must not stay here after
-// its fix. There are none now.
-var knownFailures = map[string]string{}
+// sweepOp is one of the operations the sweep runs against each fault.
+type sweepOp struct {
+	name string
+	run  func(context.Context, *DBus) error
+}
 
-// TestDBus_FaultSweep runs Lookup, Upsert and Delete against every fault
-// the fake keyring can produce and checks the kind of each answer against
-// faultTable. No step waits on the clock: each waits on the fake, whether
-// for a call to arrive or for the bus to pass on a reply, and the one fault
-// that is a wait running out has its timeout shortened.
+// TestDBus_FaultSweep runs Lookup, Upsert and Delete against every fault in
+// faultTable and checks the kind of each answer. No step waits on the clock
+// to line a fault up: each waits on the fake, whether for a call to arrive
+// or for the bus to pass on a reply. The faults that are a wait running out
+// shorten that wait.
 func TestDBus_FaultSweep(t *testing.T) {
 	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
 	pw, err := NewPassword("s3cret")
@@ -362,36 +430,48 @@ func TestDBus_FaultSweep(t *testing.T) {
 		{"upsert", func(ctx context.Context, d *DBus) error { return d.Upsert(ctx, id, pw) }},
 		{"delete", func(ctx context.Context, d *DBus) error { return d.Delete(ctx, id) }},
 	}
+	for _, f := range faultTable {
+		for op := range f.known {
+			if !slices.ContainsFunc(ops, func(o sweepOp) bool { return o.name == op }) {
+				t.Errorf("%s: known names %q, which is no operation", f.name, op)
+			}
+		}
+	}
 	for _, op := range ops {
 		for _, f := range faultTable {
-			name := op.name + "/" + f.name
-			t.Run(name, func(t *testing.T) {
-				if why, ok := knownFailures[name]; ok {
-					t.Skipf("known failure: %s", why)
+			t.Run(op.name+"/"+f.name, func(t *testing.T) {
+				want := f.want(op.name)
+				if want == kNotReached {
+					t.Skip("this operation never makes the call the fault needs")
 				}
-				runFault(t, id, op, f)
+				got, err := runFault(t, id, op, f)
+				why, known := f.known[op.name]
+				switch {
+				case known && got == want:
+					t.Fatalf("listed as a known failure (%s), but now gives %s: remove it from known", why, want)
+				case known:
+					t.Skipf("known failure: %s (gave %s, err = %v)", why, got, err)
+				case got != want:
+					t.Fatalf("%s gave %s (err = %v), the table says %s", op.name, got, err, want)
+				}
 			})
 		}
 	}
 }
 
-// sweepOp is one of the operations the sweep runs against each fault.
-type sweepOp struct {
-	name string
-	run  func(context.Context, *DBus) error
-}
-
-// runFault brings about f on a fake of its own, runs op through it, and
-// checks the fault was reached and the answer is the table's.
-func runFault(t *testing.T, id Identity, op sweepOp, f fault) {
+// runFault brings about f on a fake of its own, runs op through it, checks
+// the fault was reached, and returns the kind of the answer.
+func runFault(t *testing.T, id Identity, op sweepOp, f fault) (kind, error) {
 	t.Helper()
 	_, srv, stop := fakesecret.Start(t)
-	stopOnce := sync.OnceFunc(stop)
-	defer stopOnce()
+	defer stop()
 	setUpFault(t, srv, id, f)
 	ctx, cancel := context.WithCancel(bg)
+	if f.deadline > 0 {
+		ctx, cancel = context.WithTimeout(bg, f.deadline)
+	}
 	defer cancel()
-	e := &env{srv: srv, stopBus: stopOnce, cancel: cancel}
+	e := &env{srv: srv, cancel: cancel}
 	if f.watchPrompt {
 		e.replied = srv.WatchReply(t, "Prompt")
 	}
@@ -420,9 +500,10 @@ func runFault(t *testing.T, id Identity, op sweepOp, f fault) {
 			t.Fatalf("the fake never saw %s, so the fault was not reached; calls: %v", c, calls)
 		}
 	}
-	if got, want := kindOf(err), f.want(op.name); got != want {
-		t.Fatalf("%s gave %s (err = %v), the table says %s", op.name, got, err, want)
+	if f.cause != nil && !errors.Is(err, f.cause) {
+		t.Fatalf("err = %v, want it to wrap %v, the fault the row brings about", err, f.cause)
 	}
+	return kindOf(err), err
 }
 
 // setUpFault puts the fake in the state f starts from.
@@ -433,8 +514,9 @@ func setUpFault(t *testing.T, srv *fakesecret.Server, id Identity, f fault) {
 		promptTimeout = f.promptTimeout
 		t.Cleanup(func() { promptTimeout = old })
 	}
+	var item dbus.ObjectPath
 	if !f.empty {
-		srv.Seed(id.Attrs(), "s3cret", 100)
+		item = srv.Seed(id.Attrs(), "s3cret", 100)
 	}
 	if f.style != styleOpen {
 		srv.SetLocked(true)
@@ -448,5 +530,8 @@ func setUpFault(t *testing.T, srv *fakesecret.Server, id Identity, f fault) {
 	}
 	if f.failUnlock != "" {
 		srv.FailUnlock(f.failUnlock)
+	}
+	if f.prepare != nil {
+		f.prepare(srv, item)
 	}
 }

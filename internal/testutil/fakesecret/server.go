@@ -30,6 +30,22 @@ const (
 	maxItems = 64
 )
 
+// busConfig is a session bus that activates no services and lets any client
+// own a name or monitor the bus, which the tests need. %s is its address.
+const busConfig = `<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>%s</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+`
+
 // PromptMode controls whether writes need the user to answer a prompt first,
 // which is what a locked keyring does.
 type PromptMode int
@@ -364,7 +380,15 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "bus")
 	addr = "unix:path=" + sock
-	cmd := exec.CommandContext(context.Background(), "dbus-daemon", "--session", "--nofork", "--nopidfile", "--address="+addr)
+	// The stock session config lets the bus start whatever service file the
+	// machine has for a name nobody owns, which here is the real keyring
+	// daemon. This one starts nothing: a name that has lost its owner answers
+	// ServiceUnknown, as it does when no keyring is installed.
+	conf := filepath.Join(dir, "bus.conf")
+	if err := os.WriteFile(conf, []byte(fmt.Sprintf(busConfig, addr)), 0o600); err != nil {
+		t.Fatalf("write bus config: %v", err)
+	}
+	cmd := exec.CommandContext(context.Background(), "dbus-daemon", "--config-file="+conf, "--nofork", "--nopidfile")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("dbus-daemon: %v", err)
 	}

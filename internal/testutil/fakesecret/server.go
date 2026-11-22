@@ -1,6 +1,7 @@
 package fakesecret
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -404,6 +405,10 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 		t.Fatalf("write bus config: %v", err)
 	}
 	cmd := exec.CommandContext(context.Background(), "dbus-daemon", "--config-file="+conf, "--nofork", "--nopidfile")
+	// A bus that will not start says why on stderr, which is read only once
+	// it has exited.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("dbus-daemon: %v", err)
 	}
@@ -422,7 +427,8 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
 		_ = cmd.Process.Kill()
-		t.Fatalf("connect fake bus: %v", err)
+		_ = cmd.Wait()
+		t.Fatalf("connect fake bus: %v; dbus-daemon said: %q", err, stderr.String())
 	}
 	reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
 	if err != nil || reply != dbus.RequestNameReplyPrimaryOwner {

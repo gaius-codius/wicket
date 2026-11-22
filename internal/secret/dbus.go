@@ -319,11 +319,43 @@ func unlock(ctx context.Context, conn *dbus.Conn, svc dbus.BusObject, paths []db
 
 // keyringAnswered reports whether err is the keyring's own answer: a prompt
 // refused or left unanswered, or an error reply from the daemon. Anything
-// else is the keyring out of reach -- the bus dropped mid-call or under the
-// prompt, the daemon left under it, or the caller gave up -- and says
-// nothing about the lock.
+// else is the transport -- the bus dropped mid-call or under the prompt, the
+// daemon left under it, or the caller gave up -- and says nothing about the
+// lock.
 func keyringAnswered(ctx context.Context, err error) bool {
 	return ctx.Err() == nil && (errors.Is(err, ErrPromptDismissed) || errors.Is(err, ErrPromptTimeout) || isKeyringReply(err))
+}
+
+// lostBusErrs are the errors the bus sends in the keyring's place when the
+// daemon has gone or the connection to it has: no reply, no owner for the
+// name, or the connection to the bus going away.
+var lostBusErrs = []string{
+	busErrPrefix + "NoReply",
+	busErrPrefix + "ServiceUnknown",
+	busErrPrefix + "NameHasNoOwner",
+	"org.freedesktop.DBus.Local.Disconnected",
+}
+
+// keyringLost reports whether err shows the keyring out of reach, so that a
+// call for another item would fail too, or reach a daemon that was not there
+// when the operation began: the caller gave up, the bus or the daemon went
+// under a prompt, the connection closed, or the bus answered in the daemon's
+// place. An error reply with another D-Bus name is narrower than that: a
+// live daemon also sends UnknownObject for an item another client removed
+// first, and godbus answers Failed for a handler's plain error.
+func keyringLost(ctx context.Context, err error) bool {
+	if ctx.Err() != nil || errors.Is(err, errBusLost) || errors.Is(err, errDaemonLost) {
+		return true
+	}
+	if errors.Is(err, ErrPromptDismissed) || errors.Is(err, ErrPromptTimeout) {
+		return false
+	}
+	var reply dbus.Error
+	if !errors.As(err, &reply) {
+		// Not a reply at all: the connection failed under the call.
+		return true
+	}
+	return slices.Contains(lostBusErrs, reply.Name)
 }
 
 // busErrPrefix names the errors of D-Bus itself. The bus sends them in the
@@ -377,7 +409,7 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 			if err := unlock(ctx, conn, svc, []dbus.ObjectPath{p}); err != nil {
 				if errors.Is(err, ErrLocked) {
 					refused = err
-				} else if !keyringAnswered(ctx, err) {
+				} else if keyringLost(ctx, err) {
 					return err
 				}
 				last = err
@@ -385,19 +417,19 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 			}
 			prompt, err = del()
 		}
+		// A keyring out of reach for one match is out of reach for the rest.
+		// The next call would go to the well-known name, which a desktop can
+		// answer by starting a new daemon and raising a second dialog for the
+		// same delete (issue #152).
 		if err != nil {
-			if !keyringAnswered(ctx, err) {
-				return unavailable(ctx, err)
-			}
 			last = writeFailed(ctx, err)
+			if keyringLost(ctx, err) {
+				return last
+			}
 			continue
 		}
 		if err := runPrompt(ctx, conn, prompt); err != nil {
-			// A keyring out of reach for one match is out of reach for the
-			// rest. The next call would go to the well-known name, which a
-			// desktop can answer by starting a new daemon and raising a
-			// second dialog for the same delete (issue #152).
-			if !keyringAnswered(ctx, err) {
+			if keyringLost(ctx, err) {
 				return err
 			}
 			last = err

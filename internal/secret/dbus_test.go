@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -1220,5 +1221,57 @@ func TestDBus_DeleteStopsWhenTheDaemonIsLost(t *testing.T) {
 				t.Fatalf("%d items stored, want both left", n)
 			}
 		})
+	}
+}
+
+// An error reply from a live daemon for one match, such as UnknownObject for
+// an item another client removed first, is not the keyring out of reach: the
+// delete goes on to the other matches.
+func TestDBus_DeleteGoesOnAfterAnItemErrorReply(t *testing.T) {
+	_, srv, cleanup := fakesecret.Start(t)
+	defer cleanup()
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	for i := range 2 {
+		srv.Seed(id.Attrs(), "s3cret", int64(100+i))
+	}
+	srv.FailDeletes("org.freedesktop.DBus.Error.UnknownObject")
+
+	err := NewDBus().Delete(bg, id)
+	if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) {
+		t.Fatalf("err = %v, want ErrUnavailable, not ErrLocked", err)
+	}
+	if n := countCalls(srv, "Delete"); n != 2 {
+		t.Fatalf("Item.Delete called %d times, want once per match", n)
+	}
+}
+
+func TestKeyringLost(t *testing.T) {
+	cancelled, cancel := context.WithCancel(bg)
+	cancel()
+	reply := func(name string) error { return dbus.Error{Name: name} }
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		err  error
+		lost bool
+	}{
+		{"bus lost under a prompt", bg, unavailable(bg, errBusLost), true},
+		{"daemon lost under a prompt", bg, unavailable(bg, errDaemonLost), true},
+		{"caller gave up", cancelled, unavailable(cancelled, context.Canceled), true},
+		{"connection closed", bg, unavailable(bg, dbus.ErrClosed), true},
+		{"NoReply", bg, reply("org.freedesktop.DBus.Error.NoReply"), true},
+		{"ServiceUnknown", bg, reply("org.freedesktop.DBus.Error.ServiceUnknown"), true},
+		{"NameHasNoOwner", bg, reply("org.freedesktop.DBus.Error.NameHasNoOwner"), true},
+		{"local Disconnected", bg, reply("org.freedesktop.DBus.Local.Disconnected"), true},
+		{"prompt dismissed", bg, fmt.Errorf("%w: %w", ErrUnavailable, ErrPromptDismissed), false},
+		{"prompt unanswered", bg, fmt.Errorf("%w: %w", ErrUnavailable, ErrPromptTimeout), false},
+		{"refused unlock", bg, fmt.Errorf("%w (%w: %w)", ErrLocked, ErrUnavailable, ErrPromptDismissed), false},
+		{"IsLocked", bg, reply(ssErrIsLocked), false},
+		{"UnknownObject", bg, reply("org.freedesktop.DBus.Error.UnknownObject"), false},
+		{"Failed", bg, reply("org.freedesktop.DBus.Error.Failed"), false},
+	} {
+		if got := keyringLost(tc.ctx, tc.err); got != tc.lost {
+			t.Errorf("%s: keyringLost = %v, want %v", tc.name, got, tc.lost)
+		}
 	}
 }

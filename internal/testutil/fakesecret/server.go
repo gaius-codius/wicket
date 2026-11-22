@@ -2,10 +2,12 @@ package fakesecret
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -108,6 +110,8 @@ type Server struct {
 	held      map[string]bool
 	unlockErr string
 	stop      chan struct{}
+	// killBus kills the private bus's daemon.
+	killBus func()
 }
 
 // Calls lists the Secret Service methods clients have invoked, in order, so a
@@ -144,6 +148,13 @@ func (s *Server) Hold(method string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.held[method] = true
+}
+
+// KillBus kills the private session bus and leaves held calls held, so a
+// test can lose the bus while a call is still in flight. Every client's
+// connection drops at once.
+func (s *Server) KillBus() {
+	s.killBus()
 }
 
 // Disconnect drops the fake daemon's connection and leaves the bus running,
@@ -385,7 +396,11 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 	// daemon. This one starts nothing: a name that has lost its owner answers
 	// ServiceUnknown, as it does when no keyring is installed.
 	conf := filepath.Join(dir, "bus.conf")
-	if err := os.WriteFile(conf, []byte(fmt.Sprintf(busConfig, addr)), 0o600); err != nil {
+	var listen strings.Builder
+	if err := xml.EscapeText(&listen, []byte(addr)); err != nil {
+		t.Fatalf("escape bus address: %v", err)
+	}
+	if err := os.WriteFile(conf, []byte(fmt.Sprintf(busConfig, listen.String())), 0o600); err != nil {
 		t.Fatalf("write bus config: %v", err)
 	}
 	cmd := exec.CommandContext(context.Background(), "dbus-daemon", "--config-file="+conf, "--nofork", "--nopidfile")
@@ -421,6 +436,7 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 		session: "/org/freedesktop/secrets/session/s1",
 		held:    map[string]bool{},
 		stop:    make(chan struct{}),
+		killBus: func() { _ = cmd.Process.Kill() },
 	}
 	svc := &serviceObj{s: srv}
 	coll := &collectionObj{s: srv}

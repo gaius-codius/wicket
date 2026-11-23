@@ -111,6 +111,7 @@ type Server struct {
 	stallAll  bool
 	held      map[string]bool
 	unlockErr string
+	deleteErr string
 	stop      chan struct{}
 	// killBus kills the private bus's daemon.
 	killBus func()
@@ -267,6 +268,14 @@ func (s *Server) FailUnlock(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.unlockErr = name
+}
+
+// FailDeletes makes every Item.Delete answer with an error reply of the
+// given name, as a daemon does for an item another client removed first.
+func (s *Server) FailDeletes(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteErr = name
 }
 
 // record logs a call and, when StallEverything or Hold covers it, holds it
@@ -733,6 +742,9 @@ func (o *itemObj) Delete() (dbus.ObjectPath, *dbus.Error) {
 	o.s.record("Delete")
 	o.s.mu.Lock()
 	defer o.s.mu.Unlock()
+	if o.s.deleteErr != "" {
+		return "/", dbus.NewError(o.s.deleteErr, []any{"no such item"})
+	}
 	if o.s.refuse {
 		if it, ok := o.s.items[o.path]; ok && o.s.isLocked(it) {
 			return "/", dbus.NewError(isLockedErr, []any{"Cannot delete a locked item"})

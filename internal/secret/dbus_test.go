@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -1151,5 +1152,146 @@ func TestDBus_DeleteAsksToUnlockOnce(t *testing.T) {
 	}
 	if n := srv.Stored(); n != 3 {
 		t.Fatalf("%d items stored, want all 3 left", n)
+	}
+}
+
+// A delete over several matches whose keyring daemon goes away under the
+// first one's prompt stops there (issue #152). It used to go on to the next
+// match by the well-known name, which a desktop can answer by starting a new
+// daemon, so one delete could raise a second dialog. Here the fake takes the
+// name back while the client is still dismissing the first prompt, so any
+// call after the loss reaches it and is counted.
+func TestDBus_DeleteStopsWhenTheDaemonIsLost(t *testing.T) {
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	for _, tc := range []struct {
+		name  string
+		setup func(*fakesecret.Server)
+	}{
+		// The delete's own prompt.
+		{"delete-prompt", func(*fakesecret.Server) {}},
+		// gnome-keyring's unlock prompt, raised for a locked item.
+		{"unlock-prompt", func(srv *fakesecret.Server) {
+			srv.RefuseLockedWrites()
+			srv.SetLocked(true)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, srv, cleanup := fakesecret.Start(t)
+			defer cleanup()
+			for i := range 2 {
+				srv.Seed(id.Attrs(), "s3cret", int64(100+i))
+			}
+			tc.setup(srv)
+			srv.SetPrompt(fakesecret.PromptStall)
+			srv.Hold("Dismiss")
+			replied := srv.WatchReply(t, "Prompt")
+
+			errc := make(chan error, 1)
+			go func() { errc <- NewDBus().Delete(bg, id) }()
+			select {
+			case <-replied:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("the fake never replied to Prompt; calls: %v", srv.Calls())
+			}
+			if err := srv.DropName(ssBus); err != nil {
+				t.Fatal(err)
+			}
+			// The client dismisses the prompt on the daemon that showed it;
+			// holding that call keeps it from going on until the name is
+			// back.
+			waitForCall(t, srv, "Dismiss")
+			if err := srv.TakeName(ssBus); err != nil {
+				t.Fatal(err)
+			}
+			atLoss := srv.Calls()
+
+			var err error
+			select {
+			case err = <-errc:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("still deleting after the keyring daemon went away; calls: %v", srv.Calls())
+			}
+			if !errors.Is(err, errDaemonLost) || !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) {
+				t.Fatalf("err = %v, want ErrUnavailable wrapping the daemon's loss, not ErrLocked", err)
+			}
+			if calls := srv.Calls(); len(calls) != len(atLoss) {
+				t.Fatalf("keyring calls after the loss: %v", calls[len(atLoss):])
+			}
+			if n := srv.Stored(); n != 2 {
+				t.Fatalf("%d items stored, want both left", n)
+			}
+		})
+	}
+}
+
+// An error reply for one match's Item.Delete decides whether the delete
+// goes on. One a live daemon sends, such as UnknownObject for an item another
+// client removed first, is not the keyring out of reach: the other matches
+// are still deleted. One the bus sends in the daemon's place means the daemon
+// has gone, and the delete stops there (issue #152). The fake sends both
+// kinds itself, so no call ever goes to a name nobody owns.
+func TestDBus_DeleteAfterAnItemErrorReply(t *testing.T) {
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	for _, tc := range []struct {
+		name    string
+		deletes int
+	}{
+		{"org.freedesktop.DBus.Error.UnknownObject", 2},
+		{"org.freedesktop.DBus.Error.Failed", 2},
+		{"org.freedesktop.DBus.Error.NoReply", 1},
+		{"org.freedesktop.DBus.Error.ServiceUnknown", 1},
+		{"org.freedesktop.DBus.Error.NameHasNoOwner", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, srv, cleanup := fakesecret.Start(t)
+			defer cleanup()
+			for i := range 2 {
+				srv.Seed(id.Attrs(), "s3cret", int64(100+i))
+			}
+			srv.FailDeletes(tc.name)
+
+			err := NewDBus().Delete(bg, id)
+			var reply dbus.Error
+			if !errors.As(err, &reply) || reply.Name != tc.name {
+				t.Fatalf("err = %v, want the %s reply", err, tc.name)
+			}
+			if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrLocked) {
+				t.Fatalf("err = %v, want ErrUnavailable, not ErrLocked", err)
+			}
+			if n := countCalls(srv, "Delete"); n != tc.deletes {
+				t.Fatalf("Item.Delete called %d times, want %d", n, tc.deletes)
+			}
+		})
+	}
+}
+
+func TestKeyringLost(t *testing.T) {
+	cancelled, cancel := context.WithCancel(bg)
+	cancel()
+	reply := func(name string) error { return dbus.Error{Name: name} }
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		err  error
+		lost bool
+	}{
+		{"bus lost under a prompt", bg, unavailable(bg, errBusLost), true},
+		{"daemon lost under a prompt", bg, unavailable(bg, errDaemonLost), true},
+		{"caller gave up", cancelled, unavailable(cancelled, context.Canceled), true},
+		{"connection closed", bg, unavailable(bg, dbus.ErrClosed), true},
+		{"NoReply", bg, reply("org.freedesktop.DBus.Error.NoReply"), true},
+		{"ServiceUnknown", bg, reply("org.freedesktop.DBus.Error.ServiceUnknown"), true},
+		{"NameHasNoOwner", bg, reply("org.freedesktop.DBus.Error.NameHasNoOwner"), true},
+		{"local Disconnected", bg, reply("org.freedesktop.DBus.Local.Disconnected"), true},
+		{"prompt dismissed", bg, fmt.Errorf("%w: %w", ErrUnavailable, ErrPromptDismissed), false},
+		{"prompt unanswered", bg, fmt.Errorf("%w: %w", ErrUnavailable, ErrPromptTimeout), false},
+		{"refused unlock", bg, fmt.Errorf("%w (%w: %w)", ErrLocked, ErrUnavailable, ErrPromptDismissed), false},
+		{"IsLocked", bg, reply(ssErrIsLocked), false},
+		{"UnknownObject", bg, reply("org.freedesktop.DBus.Error.UnknownObject"), false},
+		{"Failed", bg, reply("org.freedesktop.DBus.Error.Failed"), false},
+	} {
+		if got := keyringLost(tc.ctx, tc.err); got != tc.lost {
+			t.Errorf("%s: keyringLost = %v, want %v", tc.name, got, tc.lost)
+		}
 	}
 }

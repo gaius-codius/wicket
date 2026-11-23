@@ -1,11 +1,15 @@
 package fakesecret
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,6 +33,22 @@ const (
 	// godbus mutates its handler map without a lock.
 	maxItems = 64
 )
+
+// busConfig is a session bus that activates no services and lets any client
+// own a name or monitor the bus, which the tests need. %s is its address.
+const busConfig = `<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>%s</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+`
 
 // PromptMode controls whether writes need the user to answer a prompt first,
 // which is what a locked keyring does.
@@ -91,7 +111,10 @@ type Server struct {
 	stallAll  bool
 	held      map[string]bool
 	unlockErr string
+	deleteErr string
 	stop      chan struct{}
+	// killBus kills the private bus's daemon.
+	killBus func()
 }
 
 // Calls lists the Secret Service methods clients have invoked, in order, so a
@@ -128,6 +151,13 @@ func (s *Server) Hold(method string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.held[method] = true
+}
+
+// KillBus kills the private session bus and leaves held calls held, so a
+// test can lose the bus while a call is still in flight. Every client's
+// connection drops at once.
+func (s *Server) KillBus() {
+	s.killBus()
 }
 
 // Disconnect drops the fake daemon's connection and leaves the bus running,
@@ -238,6 +268,14 @@ func (s *Server) FailUnlock(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.unlockErr = name
+}
+
+// FailDeletes makes every Item.Delete answer with an error reply of the
+// given name, as a daemon does for an item another client removed first.
+func (s *Server) FailDeletes(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteErr = name
 }
 
 // record logs a call and, when StallEverything or Hold covers it, holds it
@@ -364,17 +402,36 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "bus")
 	addr = "unix:path=" + sock
-	cmd := exec.CommandContext(context.Background(), "dbus-daemon", "--session", "--nofork", "--nopidfile", "--address="+addr)
+	// The stock session config lets the bus start whatever service file the
+	// machine has for a name nobody owns, which here is the real keyring
+	// daemon. This one starts nothing: a name that has lost its owner answers
+	// ServiceUnknown, as it does when no keyring is installed.
+	conf := filepath.Join(dir, "bus.conf")
+	var listen strings.Builder
+	if err := xml.EscapeText(&listen, []byte(addr)); err != nil {
+		t.Fatalf("escape bus address: %v", err)
+	}
+	if err := os.WriteFile(conf, []byte(fmt.Sprintf(busConfig, listen.String())), 0o600); err != nil {
+		t.Fatalf("write bus config: %v", err)
+	}
+	// The daemon prints its address on fd 3 once it is listening. The socket
+	// file appears earlier, at bind, and a client that connects in between is
+	// refused.
+	ready, readyW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("dbus-daemon ready pipe: %v", err)
+	}
+	cmd := exec.CommandContext(context.Background(), "dbus-daemon", "--config-file="+conf, "--nofork", "--nopidfile", "--print-address=3")
+	cmd.ExtraFiles = []*os.File{readyW}
+	// A bus that will not start says why on stderr, which is read only once
+	// it has exited.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("dbus-daemon: %v", err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(sock); err == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	_ = readyW.Close()
+	waitListening(t, cmd, ready, &stderr)
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", addr)
 	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == userAddr && userAddr != "" {
 		t.Fatal("isolated bus address equals user session bus")
@@ -383,7 +440,8 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
 		_ = cmd.Process.Kill()
-		t.Fatalf("connect fake bus: %v", err)
+		_ = cmd.Wait()
+		t.Fatalf("connect fake bus: %v; dbus-daemon said: %q", err, stderr.String())
 	}
 	reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
 	if err != nil || reply != dbus.RequestNameReplyPrimaryOwner {
@@ -397,6 +455,7 @@ func Start(t *testing.T) (addr string, srv *Server, cleanup func()) {
 		session: "/org/freedesktop/secrets/session/s1",
 		held:    map[string]bool{},
 		stop:    make(chan struct{}),
+		killBus: func() { _ = cmd.Process.Kill() },
 	}
 	svc := &serviceObj{s: srv}
 	coll := &collectionObj{s: srv}
@@ -683,6 +742,9 @@ func (o *itemObj) Delete() (dbus.ObjectPath, *dbus.Error) {
 	o.s.record("Delete")
 	o.s.mu.Lock()
 	defer o.s.mu.Unlock()
+	if o.s.deleteErr != "" {
+		return "/", dbus.NewError(o.s.deleteErr, []any{"no such item"})
+	}
 	if o.s.refuse {
 		if it, ok := o.s.items[o.path]; ok && o.s.isLocked(it) {
 			return "/", dbus.NewError(isLockedErr, []any{"Cannot delete a locked item"})
@@ -706,4 +768,30 @@ func match(have, want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// waitListening waits for the bus daemon to print its address on ready, which
+// it does once it accepts connections, and fails the test if it exits or stays
+// silent first.
+func waitListening(t *testing.T, cmd *exec.Cmd, ready *os.File, stderr *bytes.Buffer) {
+	t.Helper()
+	defer func() { _ = ready.Close() }()
+	line := make(chan error, 1)
+	go func() {
+		_, err := bufio.NewReader(ready).ReadString('\n')
+		line <- err
+	}()
+	select {
+	case err := <-line:
+		if err == nil {
+			return
+		}
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("dbus-daemon exited before listening: %v; it said: %q", err, stderr.String())
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("dbus-daemon not listening after 5s; it said: %q", stderr.String())
+	}
 }

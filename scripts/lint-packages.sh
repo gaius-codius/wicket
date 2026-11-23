@@ -7,10 +7,15 @@
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+root="$(pwd -P)"
 
+# Paths relative to the repository root, as lefthook passes them. No realpath:
+# macOS's BSD realpath has no --relative-to.
 files=()
 for f in "$@"; do
-  [[ $f == *.go && -f $f ]] && files+=("$(realpath --relative-to=. "$f")")
+  f="${f#"$root"/}"
+  while [[ $f == ./* ]]; do f="${f#./}"; done
+  [[ $f == *.go && -f $f ]] && files+=("$f")
 done
 ((${#files[@]})) || exit 0
 

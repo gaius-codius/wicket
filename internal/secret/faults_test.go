@@ -386,6 +386,22 @@ var faultTable = []fault{
 		lookup: kLost, upsert: kLost, delete: kLost,
 	},
 
+	// The keyring answers Item.Delete with an error reply. Either way the
+	// delete fails as unavailable; only how many duplicates it tries
+	// differs, which TestDBus_DeleteAfterAnItemErrorReply checks.
+	{
+		name: "item-delete-error-reply-from-keyring", calls: []string{"Delete"},
+		prepare: func(srv *fakesecret.Server, _ dbus.ObjectPath) { srv.FailDeletes("org.freedesktop.DBus.Error.Failed") },
+		lookup:  kNotReached, upsert: kNotReached, delete: kLost,
+	},
+	{
+		name: "item-delete-error-reply-from-bus", calls: []string{"Delete"},
+		prepare: func(srv *fakesecret.Server, _ dbus.ObjectPath) {
+			srv.FailDeletes("org.freedesktop.DBus.Error.ServiceUnknown")
+		},
+		lookup: kNotReached, upsert: kNotReached, delete: kLost,
+	},
+
 	// The caller gives up.
 	{
 		name: "caller-cancelled-before-call", before: cancelCaller, cause: context.Canceled,

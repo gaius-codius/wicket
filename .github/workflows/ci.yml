@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   verify:
-    uses: gaius-codius/go-ci/.github/workflows/go.yml@eb06f324ed1766793c7deaa0b5d4340d7e7a8e00 # v2.1.0
+    uses: gaius-codius/go-ci/.github/workflows/go.yml@c2d8f3db725801cb8a6cf73ddedaf949bd5bdca7 # v2.1.1
     with:
       runs-on: '["ubuntu-latest"]'
       mise-cache: true
@@ -92,6 +92,18 @@ jobs:
 
       - name: Run golangci-lint
         run: golangci-lint run ./...
+
+      - name: Run the pre-commit lint script with macOS's realpath
+        # The hook must not need GNU coreutils: BSD realpath has no
+        # --relative-to. Fails if the realpath on PATH is GNU's.
+        run: |
+          export PATH="/bin:/usr/bin:$PATH"
+          if realpath --relative-to=. . >/dev/null 2>&1; then
+            echo "realpath on PATH is GNU's; this step would prove nothing"
+            exit 1
+          fi
+          ./scripts/lint-packages.sh ./cmd/wicket/main.go internal/secret/store_darwin.go
+          git diff --exit-code
 
       - name: Run tests
         env:

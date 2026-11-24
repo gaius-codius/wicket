@@ -429,7 +429,11 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 			continue
 		}
 		if err := runPrompt(ctx, conn, prompt); err != nil {
-			if keyringLost(ctx, err) {
+			// A user who said no to the delete's own dialog, or left it
+			// unanswered, has answered for every copy (issue #164). Going on
+			// would show the dialog again for each one, and a match the
+			// keyring deletes without asking would go against that answer.
+			if keyringLost(ctx, err) || errors.Is(err, ErrPromptDismissed) || errors.Is(err, ErrPromptTimeout) {
 				return err
 			}
 			last = err

@@ -1155,6 +1155,56 @@ func TestDBus_DeleteAsksToUnlockOnce(t *testing.T) {
 	}
 }
 
+// A keyring that prompts for the delete itself, as KeePassXC does, asks once
+// for a delete over several matches (issue #164). A user who said no, or did
+// not answer, has answered for every copy: the delete stops there, and the
+// error says why the passwords were kept.
+func TestDBus_DeletePromptsOnce(t *testing.T) {
+	id := IdentityFor("/tmp/a.toml", config.Profile{ID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", Name: "work", Host: "h", User: "u"})
+	for _, tc := range []struct {
+		name string
+		mode fakesecret.PromptMode
+		want error
+		// dismissals counts the prompts the client took down: for an
+		// unanswered dialog, the one it gave up on.
+		dismissals int
+	}{
+		{"dismissed", fakesecret.PromptDismiss, ErrPromptDismissed, 0},
+		{"unanswered", fakesecret.PromptStall, ErrPromptTimeout, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, srv, cleanup := fakesecret.Start(t)
+			defer cleanup()
+			old := promptTimeout
+			promptTimeout = 150 * time.Millisecond
+			t.Cleanup(func() { promptTimeout = old })
+			srv.SetPrompt(tc.mode)
+			for i := range 3 {
+				srv.Seed(id.Attrs(), "s3cret", int64(100+i))
+			}
+
+			err := NewDBus().Delete(bg, id)
+			if !errors.Is(err, ErrUnavailable) || !errors.Is(err, tc.want) || errors.Is(err, ErrLocked) {
+				t.Fatalf("err = %v, want ErrUnavailable wrapping %v, not ErrLocked", err, tc.want)
+			}
+			// The answer holds for every copy: the delete stops there, so
+			// no other copy is deleted against it either.
+			if n := countCalls(srv, "Delete"); n != 1 {
+				t.Fatalf("Item.Delete called %d times, want 1; calls: %v", n, srv.Calls())
+			}
+			if n := countCalls(srv, "Prompt"); n != 1 {
+				t.Fatalf("%d delete prompts shown, want 1; calls: %v", n, srv.Calls())
+			}
+			if n := srv.Stored(); n != 3 {
+				t.Fatalf("%d items stored, want all 3 left", n)
+			}
+			if n := srv.Dismissed(); n != tc.dismissals {
+				t.Fatalf("%d prompts dismissed, want %d; calls: %v", n, tc.dismissals, srv.Calls())
+			}
+		})
+	}
+}
+
 // A delete over several matches whose keyring daemon goes away under the
 // first one's prompt stops there (issue #152). It used to go on to the next
 // match by the well-known name, which a desktop can answer by starting a new

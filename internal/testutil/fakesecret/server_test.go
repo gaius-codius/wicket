@@ -78,7 +78,7 @@ func TestStartActivatesNoService(t *testing.T) {
 // before the connection, and a message read in between was sent on the
 // closed channel. Clients keep calling the watched method here, so messages
 // arrive throughout every cleanup; once all of them are done, no watcher's
-// goroutine is left reading.
+// goroutine is left reading, the one still waiting for its reply included.
 func TestWatchReplyCleanupWhileMessagesArrive(t *testing.T) {
 	addr, srv, cleanup := Start(t)
 	defer cleanup()
@@ -110,6 +110,9 @@ func TestWatchReplyCleanupWhileMessagesArrive(t *testing.T) {
 			}
 		})
 	}
+	// One that never sees its call, while messages still arrive, is ended
+	// by its cleanup alone.
+	t.Run("unanswered", func(t *testing.T) { _ = srv.WatchReply(t, "Unlock") })
 	close(stop)
 	callers.Wait()
 	ended := make(chan struct{})

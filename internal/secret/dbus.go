@@ -390,7 +390,10 @@ func (d *DBus) Delete(ctx context.Context, id Identity) error {
 	}
 	// Every match must go. One left behind -- its unlock refused while
 	// another was open -- is still a stored password, and reporting success
-	// would have the TUI say it was forgotten.
+	// would have the TUI say it was forgotten. Each copy is its own
+	// Item.Delete, and on a keyring that confirms deletes, such as KeePassXC,
+	// its own dialog: the Secret Service API has no call that deletes several
+	// items under one prompt (issue #169).
 	var last, refused error
 	for _, p := range items {
 		del := func() (prompt dbus.ObjectPath, err error) {

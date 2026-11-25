@@ -113,6 +113,8 @@ type Server struct {
 	unlockErr string
 	deleteErr string
 	stop      chan struct{}
+	// watchers counts WatchReply's goroutines that are still reading.
+	watchers sync.WaitGroup
 	// killBus kills the private bus's daemon.
 	killBus func()
 }
@@ -179,7 +181,17 @@ func (s *Server) WatchReply(t *testing.T, method string) <-chan struct{} {
 	if err != nil {
 		t.Fatalf("connect monitor: %v", err)
 	}
-	t.Cleanup(func() { _ = mon.Close() })
+	// godbus's Close closes the eavesdrop channel but goes on handing it
+	// what it reads until the connection is down, and a send on the closed
+	// channel panics the test binary (issue #170). Eavesdrop(nil) takes the
+	// lock those sends hold, so once it returns nothing is sent to msgs and
+	// Close leaves it open; quit ends the reader instead.
+	quit := make(chan struct{})
+	t.Cleanup(func() {
+		mon.Eavesdrop(nil)
+		close(quit)
+		_ = mon.Close()
+	})
 	// A monitor may not send anything once it is one, and godbus would
 	// answer a method call it sees. Eavesdropping hands every message to
 	// msgs instead, the BecomeMonitor reply too, so the call is sent
@@ -194,7 +206,10 @@ func (s *Server) WatchReply(t *testing.T, method string) <-chan struct{} {
 	mon.BusObject().Go("org.freedesktop.DBus.Monitoring.BecomeMonitor", 0, nil, rules, uint32(0))
 	for monitoring := false; !monitoring; {
 		select {
-		case msg := <-msgs:
+		case msg, ok := <-msgs:
+			if !ok {
+				t.Fatal("lost the bus before becoming a monitor")
+			}
 			if msg.Type == dbus.TypeError {
 				t.Fatalf("become a monitor: %v", msg.Body)
 			}
@@ -204,10 +219,21 @@ func (s *Server) WatchReply(t *testing.T, method string) <-chan struct{} {
 		}
 	}
 	done := make(chan struct{})
-	go func() {
+	s.watchers.Go(func() {
 		var caller string
 		var serial uint32
-		for msg := range msgs {
+		for {
+			var msg *dbus.Message
+			select {
+			case m, ok := <-msgs:
+				// godbus closes msgs itself when it loses the bus.
+				if !ok {
+					return
+				}
+				msg = m
+			case <-quit:
+				return
+			}
 			switch {
 			case msg.Type == dbus.TypeMethodCall && caller == "" && header[string](msg, dbus.FieldMember) == method:
 				caller, serial = header[string](msg, dbus.FieldSender), msg.Serial()
@@ -217,7 +243,7 @@ func (s *Server) WatchReply(t *testing.T, method string) <-chan struct{} {
 				return
 			}
 		}
-	}()
+	})
 	return done
 }
 

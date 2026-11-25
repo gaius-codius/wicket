@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,5 +70,56 @@ func TestStartActivatesNoService(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("the bus started the planted keyring service")
+	}
+}
+
+// A monitor closed while the bus still routes messages to it must not panic
+// the test binary (issue #170). godbus's Close closes the eavesdrop channel
+// before the connection, and a message read in between was sent on the
+// closed channel. Clients keep calling the watched method here, so messages
+// arrive throughout every cleanup; once all of them are done, no watcher's
+// goroutine is left reading, the one still waiting for its reply included.
+func TestWatchReplyCleanupWhileMessagesArrive(t *testing.T) {
+	addr, srv, cleanup := Start(t)
+	defer cleanup()
+	stop := make(chan struct{})
+	var callers sync.WaitGroup
+	for range 4 {
+		client, err := dbus.Connect(addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = client.Close() }()
+		callers.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				client.Object(busName, servicePath).Call(serviceIface+".ReadAlias", 0, "default")
+			}
+		})
+	}
+	for range 100 {
+		t.Run("watch", func(t *testing.T) {
+			select {
+			case <-srv.WatchReply(t, "ReadAlias"):
+			case <-time.After(5 * time.Second):
+				t.Fatal("no reply seen")
+			}
+		})
+	}
+	// One that never sees its call, while messages still arrive, is ended
+	// by its cleanup alone.
+	t.Run("unanswered", func(t *testing.T) { _ = srv.WatchReply(t, "Unlock") })
+	close(stop)
+	callers.Wait()
+	ended := make(chan struct{})
+	go func() { srv.watchers.Wait(); close(ended) }()
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a WatchReply goroutine is still reading after its cleanup")
 	}
 }
